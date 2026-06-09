@@ -1,0 +1,31 @@
+Typeset Acknowledgements
+
+Typeset is made by Twarge LLC.
+hello@twarge.com
+
+Typeset source code is licensed under the Apache License 2.0.
+
+Typeset includes and acknowledges the following open-source projects:
+
+Typst
+Markup-based typesetting system and compiler.
+https://github.com/typst/typst
+License: Apache License 2.0
+
+Tinymist
+Integrated language service for Typst.
+https://github.com/Myriad-Dreamin/tinymist
+License: Apache License 2.0
+
+Tinymist cmark-writer
+Markdown writer crate used by Tinymist.
+https://github.com/Myriad-Dreamin/tinymist/tree/main/crates/cmark-writer
+License: MIT License
+
+Fira Code
+Monospaced font with programming ligatures.
+https://github.com/tonsky/FiraCode
+Bundled release: 6.2
+License: SIL Open Font License 1.1
+
+The full license texts and notices follow.

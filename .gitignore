@@ -1,0 +1,15 @@
+.DS_Store
+.build/
+.swiftpm/
+.claude/
+.codex/
+build/
+dist/
+DerivedData/
+Vendor/Build/
+Vendor/TypesetTinymist.xcframework/**/TypesetTinymist.framework/TypesetTinymist
+Vendor/typeset-tinymist-ffi/target/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/

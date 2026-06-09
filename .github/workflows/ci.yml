@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test (SwiftPM)
+    runs-on: macos-26
+    steps:
+      # The Vendor/typst and Vendor/tinymist submodules are intentionally not
+      # checked out: the SwiftPM targets build without them. They are only
+      # needed for the Xcode app target, which bundles the Typst CLI and the
+      # TypesetTinymist xcframework.
+      - uses: actions/checkout@v5
+
+      - name: Show toolchain
+        run: swift --version
+
+      - name: Build
+        run: swift build
+
+      - name: Test
+        run: swift test
