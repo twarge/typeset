@@ -278,19 +278,30 @@ sign_path() {
 sign_nested_code() {
 	local app_dir="$1"
 	local main_executable="$app_dir/Contents/MacOS/$APP_NAME"
+	local bundled_typst="$app_dir/Contents/Resources/typst"
 
 	while IFS= read -r path; do
 		[[ "$path" == "$main_executable" ]] && continue
 		if file "$path" | grep -q "Mach-O"; then
-			sign_path "$path"
+			if [[ "$path" == "$bundled_typst" ]]; then
+				# The sandboxed app spawns this helper; it needs the inherit
+				# entitlement to join the app's sandbox and keep its grants.
+				sign_path "$path" --entitlements "$ROOT_DIR/Config/TypstCLI.entitlements"
+			else
+				sign_path "$path"
+			fi
 		fi
 	done < <(find "$app_dir/Contents" -type f -perm -111 -print | sort)
 
 	while IFS= read -r path; do
-		sign_path "$path"
+		if [[ "$path" == *.appex ]]; then
+			sign_path "$path" --entitlements "$ROOT_DIR/Config/TypesetQuickLook.entitlements"
+		else
+			sign_path "$path"
+		fi
 	done < <(find "$app_dir/Contents" -type d \( -name "*.framework" -o -name "*.appex" -o -name "*.xpc" \) -print | sort -r)
 
-	sign_path "$app_dir"
+	sign_path "$app_dir" --entitlements "$ROOT_DIR/Config/Typeset.entitlements"
 }
 
 notarize_submission() {

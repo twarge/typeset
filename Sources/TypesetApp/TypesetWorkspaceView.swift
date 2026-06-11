@@ -946,6 +946,38 @@ struct TypesetWorkspaceView: View {
             return
         }
 
+        #if os(macOS)
+        // The sandbox grant for a bare .typ document covers only the file
+        // itself; reading and editing its siblings needs a folder grant.
+        let directoryURL = fileURL.deletingLastPathComponent()
+        guard FolderAccessStore.hasAccess(to: directoryURL, requiresWrite: true) else {
+            // The open panel is modal; run it outside the view-update cycle.
+            Task { @MainActor in
+                guard FolderAccessStore.ensureAccess(
+                    to: directoryURL,
+                    requiresWrite: true,
+                    message: "Typeset edits and previews every file in the folder that contains “\(fileURL.lastPathComponent)”. Grant access to “\(directoryURL.lastPathComponent)” to open it."
+                ) else {
+                    recordLog(
+                        "Folder access needed",
+                        message: "Typeset can't open \(directoryURL.path) without permission. Reopen the file to grant access to its folder.",
+                        level: .error,
+                        present: true
+                    )
+                    return
+                }
+                loadTypstDirectory(openedFileURL: fileURL)
+            }
+            return
+        }
+        #endif
+
+        loadTypstDirectory(openedFileURL: fileURL)
+    }
+
+    private func loadTypstDirectory(openedFileURL fileURL: URL) {
+        guard loadedTypstDirectoryFileURL != fileURL else { return }
+
         do {
             let didAccess = fileURL.startAccessingSecurityScopedResource()
             defer {
@@ -2169,12 +2201,41 @@ struct TypesetWorkspaceView: View {
             return
         }
 
+        #if os(macOS)
+        // The default location is the folder beside the document, which the
+        // sandbox grant for the document itself does not cover.
+        let exportFolder = outputURL.deletingLastPathComponent()
+        guard FolderAccessStore.ensureAccess(
+            to: exportFolder,
+            requiresWrite: true,
+            message: "Typeset saves “\(outputURL.lastPathComponent)” next to your document. Grant access to “\(exportFolder.lastPathComponent)” to export there."
+        ) else {
+            recordLog(
+                "PDF export failed",
+                message: "Typeset doesn't have permission to write into \(exportFolder.path).",
+                level: .error,
+                present: true
+            )
+            return
+        }
+        #endif
+
         exportPDFDirectly(to: outputURL, presentErrors: true)
     }
 
     private func exportPDFOnCloseIfNeeded() {
         guard canExportPDFToDefaultLocation, autoExportPDFOnClose, !didAutoExportPDFOnDisappear else { return }
         guard let outputURL = defaultPDFExportURL else { return }
+
+        #if os(macOS)
+        // Closing is no moment for a permission prompt; export only when a
+        // stored grant already covers the destination folder.
+        let exportFolder = outputURL.deletingLastPathComponent()
+        guard FolderAccessStore.hasAccess(to: exportFolder, requiresWrite: true) else {
+            print("Typeset PDF export on close skipped: no folder permission for \(exportFolder.path)")
+            return
+        }
+        #endif
 
         didAutoExportPDFOnDisappear = true
         let package = packageSnapshotForExport()
@@ -5793,16 +5854,28 @@ struct PackageDropDelegate: DropDelegate {
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        let hasActivePackageDrag = MainActor.assumeIsolated {
-            ActivePackageDrag.isFresh
-        }
-        if info.hasItemsConforming(to: Self.packageDragTypes) || hasActivePackageDrag {
+        if Self.isPackageDrop(info: info) {
             return MainActor.assumeIsolated {
                 DropProposal(operation: .move)
             }
         }
         return MainActor.assumeIsolated {
             DropProposal(operation: .copy)
+        }
+    }
+
+    /// A drop is an internal package move when it carries the app's own drag
+    /// types. The `ActivePackageDrag` marker recovers internal drags whose
+    /// custom types were stripped in transit, but it can outlive a row drag
+    /// that ended outside the app — so it never overrides a drop whose
+    /// providers carry external content such as Finder files or images.
+    static func isPackageDrop(info: DropInfo) -> Bool {
+        if info.hasItemsConforming(to: Self.packageDragTypes) {
+            return true
+        }
+        let providers = info.itemProviders(for: Self.supportedTypes)
+        return MainActor.assumeIsolated {
+            ActivePackageDrag.isFresh && !PackageDropLoader.hasExternalContent(in: providers)
         }
     }
 
@@ -5823,11 +5896,7 @@ struct PackageDropDelegate: DropDelegate {
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        let packageProviders = info.itemProviders(for: Self.packageDragTypes)
-        let hasActivePackageDrag = MainActor.assumeIsolated {
-            ActivePackageDrag.isFresh
-        }
-        let isPackageDrop = !packageProviders.isEmpty || hasActivePackageDrag
+        let isPackageDrop = Self.isPackageDrop(info: info)
         let providers = info.itemProviders(for: Self.supportedTypes)
         typesetDropDebug("perform destination=\(destinationDescription) providers=\(providers.count) packageDrop=\(isPackageDrop)")
 
@@ -5899,6 +5968,15 @@ enum PackageDropLoader {
         }
     }
 
+    /// True when any provider carries droppable external content — a file
+    /// URL or image data — as opposed to the app's internal drag types.
+    static func hasExternalContent(in providers: [NSItemProvider]) -> Bool {
+        providers.contains { provider in
+            provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+                || imageTypeIdentifier(for: provider) != nil
+        }
+    }
+
     static func load(
         from providers: [NSItemProvider],
         packageFilePaths: Set<String>,
@@ -5938,7 +6016,18 @@ enum PackageDropLoader {
 
             if allowsExternalFiles,
                provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier),
-               let url = try await loadFileURL(from: provider) {
+               let url = try await loadFileURL(from: provider),
+               FileManager.default.isReadableFile(atPath: url.path) {
+                payload.externalFileURLs.append(url)
+                continue
+            }
+
+            // The sandbox can leave the pasteboard URL unreadable (or omit
+            // the file-url representation entirely); ask the provider to
+            // materialize a copy instead — the system performs that read
+            // with the drag's own access grant.
+            if allowsExternalFiles,
+               let url = try await loadFileCopy(from: provider) {
                 payload.externalFileURLs.append(url)
                 continue
             }
@@ -6005,6 +6094,61 @@ enum PackageDropLoader {
                     continuation.resume(throwing: error)
                 } else {
                     continuation.resume(returning: data)
+                }
+            }
+        }
+    }
+
+    /// Materializes a dropped item as a readable file inside the app
+    /// container, preferring representations the system can deliver with
+    /// the drag's sandbox grant.
+    private static func loadFileCopy(from provider: NSItemProvider) async throws -> URL? {
+        let skipped: Set<String> = [
+            UTType.typesetPackageFileDrag.identifier,
+            UTType.typesetPackageFolderDrag.identifier,
+            UTType.fileURL.identifier,
+            UTType.plainText.identifier,
+        ]
+        for identifier in provider.registeredTypeIdentifiers where !skipped.contains(identifier) {
+            guard provider.hasRepresentationConforming(toTypeIdentifier: identifier, fileOptions: []) else {
+                continue
+            }
+            if let url = await fileRepresentationCopy(from: provider, typeIdentifier: identifier) {
+                return url
+            }
+        }
+        return nil
+    }
+
+    private static func fileRepresentationCopy(
+        from provider: NSItemProvider,
+        typeIdentifier: String
+    ) async -> URL? {
+        await withCheckedContinuation { continuation in
+            provider.loadInPlaceFileRepresentation(forTypeIdentifier: typeIdentifier) { url, _, _ in
+                // The URL is only valid (and, for in-place files, only
+                // readable) inside this handler; copy it into our own
+                // temporary directory before returning.
+                guard let url else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let didAccess = url.startAccessingSecurityScopedResource()
+                defer {
+                    if didAccess {
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                }
+                let directory = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("TypesetDroppedFiles", isDirectory: true)
+                    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+                let destination = directory.appendingPathComponent(url.lastPathComponent)
+                do {
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    try FileManager.default.copyItem(at: url, to: destination)
+                    continuation.resume(returning: destination)
+                } catch {
+                    continuation.resume(returning: nil)
                 }
             }
         }
