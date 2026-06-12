@@ -34,10 +34,37 @@ import Testing
     ])
 
     try package.setCompileTarget(path: "chapters/one.typ")
-    let roundTripped = try DocumentPackage(fileWrapper: package.fileWrapper())
+    let wrapper = package.fileWrapper()
+    let roundTripped = try DocumentPackage(fileWrapper: wrapper)
 
     #expect(roundTripped.compileTargetPath == "chapters/one.typ")
     #expect(roundTripped.files.map(\.path) == ["chapters/one.typ", "main.typ"])
+    // The compile target lives in the state file; the legacy standalone
+    // `.typeset` metadata file is no longer written.
+    #expect(wrapper.fileWrappers?[".typeset"] == nil)
+    let stateText = String(data: wrapper.fileWrappers?[".typesetstate"]?.regularFileContents ?? Data(), encoding: .utf8) ?? ""
+    #expect(stateText.contains("compile_target = \"chapters/one.typ\""))
+}
+
+@Test func packageIgnoresAndDropsLegacyMetadataFile() throws {
+    let root = FileWrapper(directoryWithFileWrappers: [:])
+    let main = FileWrapper(regularFileWithContents: Data("= Main".utf8))
+    main.preferredFilename = "main.typ"
+    root.addFileWrapper(main)
+    let other = FileWrapper(regularFileWithContents: Data("= Other".utf8))
+    other.preferredFilename = "other.typ"
+    root.addFileWrapper(other)
+    let legacy = FileWrapper(regularFileWithContents: Data("other.typ\n".utf8))
+    legacy.preferredFilename = ".typeset"
+    root.addFileWrapper(legacy)
+
+    let package = try DocumentPackage(fileWrapper: root)
+
+    // The obsolete `.typeset` metadata file is never read: it neither sets
+    // the compile target nor appears as a package file, and a save drops it.
+    #expect(package.compileTargetPath == "main.typ")
+    #expect(package.files.map(\.path) == ["main.typ", "other.typ"])
+    #expect(package.fileWrapper().fileWrappers?[".typeset"] == nil)
 }
 
 @Test func packagePersistsEditorStateAsToml() throws {

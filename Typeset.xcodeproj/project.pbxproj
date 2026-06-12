@@ -33,8 +33,6 @@
 		10000000000000000000002A /* Resources/Acknowledgements/FiraCode-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000012A /* Resources/Acknowledgements/FiraCode-LICENSE.txt */; };
 		10000000000000000000002B /* Resources/Acknowledgements/Tinymist-cmark-writer-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000012B /* Resources/Acknowledgements/Tinymist-cmark-writer-LICENSE.txt */; };
 		10000000000000000000002C /* PDFPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000010F /* PDFPreviewView.swift */; };
-		1000000000000000000000D1 /* DirectoryWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001D1 /* DirectoryWatcher.swift */; };
-		1000000000000000000000DA /* FolderAccessStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001DA /* FolderAccessStore.swift */; };
 		10000000000000000000002D /* Resources/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000012C /* Resources/Assets.xcassets */; };
 		10000000000000000000002E /* Resources/DocumentIcons/TypesetPackageIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000012D /* Resources/DocumentIcons/TypesetPackageIcon.icns */; };
 		10000000000000000000002F /* Resources/DocumentIcons/TypstSourceIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000012E /* Resources/DocumentIcons/TypstSourceIcon.icns */; };
@@ -44,6 +42,8 @@
 		100000000000000000000033 /* Resources/DocumentIcons/TypstSourceIcon-64.png in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000132 /* Resources/DocumentIcons/TypstSourceIcon-64.png */; };
 		100000000000000000000034 /* Resources/DocumentIcons/TypstSourceIcon-320.png in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000133 /* Resources/DocumentIcons/TypstSourceIcon-320.png */; };
 		100000000000000000000035 /* Resources/DocumentIcons/TypstSourceIcon-1024.png in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000134 /* Resources/DocumentIcons/TypstSourceIcon-1024.png */; };
+		1000000000000000000000D1 /* DirectoryWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001D1 /* DirectoryWatcher.swift */; };
+		1000000000000000000000DA /* FolderAccessStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001DA /* FolderAccessStore.swift */; };
 		300000000000000000000001 /* PreviewViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000101 /* PreviewViewController.swift */; };
 		300000000000000000000002 /* TypesetCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; };
 		300000000000000000000003 /* TypesetQuickLook.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 300000000000000000000201 /* TypesetQuickLook.appex */; platformFilters = (macos, ); settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -118,8 +118,6 @@
 		10000000000000000000010D /* TinymistWorkspaceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TinymistWorkspaceStore.swift; sourceTree = "<group>"; };
 		10000000000000000000010E /* Vendor/TypesetTinymist.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Vendor/TypesetTinymist.xcframework; sourceTree = SOURCE_ROOT; };
 		10000000000000000000010F /* PDFPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFPreviewView.swift; sourceTree = "<group>"; };
-		1000000000000000000001D1 /* DirectoryWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectoryWatcher.swift; sourceTree = "<group>"; };
-		1000000000000000000001DA /* FolderAccessStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderAccessStore.swift; sourceTree = "<group>"; };
 		100000000000000000000120 /* Resources/Fonts/FiraCode/FiraCode-Light.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Resources/Fonts/FiraCode/FiraCode-Light.ttf"; sourceTree = SOURCE_ROOT; };
 		100000000000000000000121 /* Resources/Fonts/FiraCode/FiraCode-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Resources/Fonts/FiraCode/FiraCode-Regular.ttf"; sourceTree = SOURCE_ROOT; };
 		100000000000000000000122 /* Resources/Fonts/FiraCode/FiraCode-Retina.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Resources/Fonts/FiraCode/FiraCode-Retina.ttf"; sourceTree = SOURCE_ROOT; };
@@ -141,6 +139,8 @@
 		100000000000000000000132 /* Resources/DocumentIcons/TypstSourceIcon-64.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/DocumentIcons/TypstSourceIcon-64.png"; sourceTree = SOURCE_ROOT; };
 		100000000000000000000133 /* Resources/DocumentIcons/TypstSourceIcon-320.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/DocumentIcons/TypstSourceIcon-320.png"; sourceTree = SOURCE_ROOT; };
 		100000000000000000000134 /* Resources/DocumentIcons/TypstSourceIcon-1024.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/DocumentIcons/TypstSourceIcon-1024.png"; sourceTree = SOURCE_ROOT; };
+		1000000000000000000001D1 /* DirectoryWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectoryWatcher.swift; sourceTree = "<group>"; };
+		1000000000000000000001DA /* FolderAccessStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderAccessStore.swift; sourceTree = "<group>"; };
 		100000000000000000000201 /* TypesetCore.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = TypesetCore.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		100000000000000000000202 /* Typeset.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Typeset.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		100000000000000000000203 /* TypesetCoreTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TypesetCoreTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -569,7 +569,9 @@
 		};
 		300000000000000000000304 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			platformFilters = (macos, );
+			platformFilters = (
+				macos,
+			);
 			target = 300000000000000000000801 /* TypesetQuickLook */;
 			targetProxy = 300000000000000000000302 /* PBXContainerItemProxy */;
 		};
@@ -716,6 +718,7 @@
 				ENABLE_MODULE_VERIFIER = YES;
 				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
 				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.typeset.core;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -740,6 +743,7 @@
 				ENABLE_MODULE_VERIFIER = YES;
 				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
 				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.typeset.core;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -757,16 +761,20 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/Typeset.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 6MFC6VKTVX;
 				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
 				INFOPLIST_FILE = "Config/Typeset-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Typeset;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 					"@loader_path/Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.typeset;
 				PRODUCT_NAME = Typeset;
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -785,16 +793,20 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/Typeset.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 6MFC6VKTVX;
 				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
 				INFOPLIST_FILE = "Config/Typeset-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Typeset;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 					"@loader_path/Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.typeset;
 				PRODUCT_NAME = Typeset;
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -819,6 +831,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.typeset.core.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -841,6 +854,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.typeset.core.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -856,6 +870,7 @@
 				CODE_SIGN_ENTITLEMENTS = Config/TypesetQuickLook.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 6MFC6VKTVX;
 				EXCLUDED_ARCHS = x86_64;
@@ -865,7 +880,8 @@
 					"@executable_path/../Frameworks",
 					"@executable_path/../../../../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.typeset.quicklook;
 				PRODUCT_NAME = TypesetQuickLook;
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -884,6 +900,7 @@
 				CODE_SIGN_ENTITLEMENTS = Config/TypesetQuickLook.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 6MFC6VKTVX;
 				EXCLUDED_ARCHS = x86_64;
@@ -893,7 +910,8 @@
 					"@executable_path/../Frameworks",
 					"@executable_path/../../../../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.typeset.quicklook;
 				PRODUCT_NAME = TypesetQuickLook;
 				PROVISIONING_PROFILE_SPECIFIER = "";

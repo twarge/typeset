@@ -742,6 +742,9 @@ struct PlatformTextView: NSViewRepresentable {
         textView.onCompletionKey = { [weak coordinator = context.coordinator] event in
             coordinator?.handleCompletionKey(event) == true
         }
+        textView.onUserInteraction = { [weak coordinator = context.coordinator] in
+            coordinator?.clearScrollAnchor()
+        }
         context.coordinator.configureDropHandling(for: textView)
         context.coordinator.applyHighlighting(to: textView, text: text)
 
@@ -807,7 +810,9 @@ struct PlatformTextView: NSViewRepresentable {
 
         if let selectedRange, textView.selectedRange() != selectedRange {
             textView.setSelectedRange(selectedRange)
-            textView.scrollRangeToVisible(selectedRange)
+            // Navigation (preview seek, outline, diagnostics) anchors the
+            // target range so late layout can't drift it off-screen.
+            context.coordinator.anchorScroll(to: selectedRange)
             DispatchQueue.main.async {
                 self.selectedRange = nil
             }
@@ -851,6 +856,101 @@ struct PlatformTextView: NSViewRepresentable {
         var onScrollFractionChange: ((Double) -> Void)?
         private var lastScrollRestoreToken = 0
         private var isRestoringScroll = false
+
+        /// The scroll anchor: while set, the editor keeps this range visible
+        /// (centered), recomputing its position from current layout whenever
+        /// anything disturbs the view — late layout growth, pane resizes, and
+        /// AppKit's own re-centering (animated or not) all self-correct
+        /// toward the anchor instead of being fought pixel-by-pixel. Cleared
+        /// the moment the user takes over (wheel, click, typing).
+        private var scrollAnchorRange: NSRange?
+        private var scrollAnchorFraction: Double?
+        private var isEnforcingScrollAnchor = false
+
+        /// Glues the view to `range` until the user interacts.
+        func anchorScroll(to range: NSRange) {
+            scrollAnchorRange = range
+            scrollAnchorFraction = nil
+            isRestoringScroll = true
+            enforceScrollAnchor()
+        }
+
+        /// Glues the view to a saved vertical fraction until the user interacts.
+        func anchorScroll(toFraction fraction: Double) {
+            scrollAnchorRange = nil
+            scrollAnchorFraction = min(1, max(0, fraction.isFinite ? fraction : 0))
+            isRestoringScroll = true
+            enforceScrollAnchor()
+        }
+
+        /// Hands scroll control to the user: the anchor stops tracking.
+        func clearScrollAnchor() {
+            scrollAnchorRange = nil
+            scrollAnchorFraction = nil
+            isRestoringScroll = false
+        }
+
+        @objc private func scrollViewWillStartLiveScroll(_ notification: Notification) {
+            // Programmatic animated scrolls (AppKit's deferred text-view
+            // re-centering among them) also post live-scroll notifications.
+            // Only treat this as the user when there is *fresh* input
+            // evidence: a held mouse button (scroller drag) or a wheel or
+            // gesture event younger than half a second — `NSApp.currentEvent`
+            // is merely the last processed event and can be arbitrarily old.
+            let event = NSApp.currentEvent
+            let eventAge = event.map { ProcessInfo.processInfo.systemUptime - $0.timestamp } ?? .infinity
+            let eventType = event?.type
+            let isFreshScrollEvent = eventAge < 0.5
+                && (eventType == .scrollWheel || eventType == .magnify || eventType == .beginGesture)
+            let isUserDriven = NSEvent.pressedMouseButtons != 0 || isFreshScrollEvent
+            guard isUserDriven else { return }
+            clearScrollAnchor()
+        }
+
+        /// Scrolls so the anchor range is centered (or at the top for an
+        /// anchor at the document start), based on the *current* layout.
+        private func enforceScrollAnchor() {
+            guard !isEnforcingScrollAnchor, let scrollView else { return }
+
+            if let anchor = scrollAnchorRange {
+                guard let textView,
+                      let layoutManager = textView.layoutManager,
+                      let textContainer = textView.textContainer else { return }
+                layoutManager.ensureLayout(for: textContainer)
+                let length = (textView.string as NSString).length
+                let location = min(max(0, anchor.location), length)
+                let len = min(anchor.length, max(0, length - location))
+                let range = NSRange(location: location, length: len)
+                let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+                var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+                rect.origin.y += textView.textContainerOrigin.y
+                let documentFrame = scrollView.documentView?.frame ?? .zero
+                let viewport = scrollView.contentView.bounds.height
+                let maxScroll = max(0, documentFrame.height - viewport)
+                let visibleY = min(maxScroll, max(0, rect.midY - viewport / 2))
+                let target = documentFrame.minY + visibleY
+                let current = scrollView.contentView.bounds.origin.y
+                guard abs(current - target) > 2 else { return }
+                isEnforcingScrollAnchor = true
+                scrollView.contentView.scroll(to: CGPoint(x: 0, y: target))
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+                isEnforcingScrollAnchor = false
+                return
+            }
+
+            guard let fraction = scrollAnchorFraction,
+                  let documentView = scrollView.documentView else { return }
+            let documentFrame = documentView.frame
+            let viewport = scrollView.contentView.bounds.height
+            let maxScroll = max(0, documentFrame.height - viewport)
+            let target = documentFrame.minY + maxScroll * CGFloat(min(1, max(0, fraction)))
+            let current = scrollView.contentView.bounds.origin.y
+            guard abs(current - target) > 2 else { return }
+            isEnforcingScrollAnchor = true
+            scrollView.contentView.scroll(to: CGPoint(x: 0, y: target))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            isEnforcingScrollAnchor = false
+        }
         var insertableImagePaths: Set<String>
         var insertableTypstPaths: Set<String>
         var imageInsertTemplate: String
@@ -953,6 +1053,25 @@ struct PlatformTextView: NSViewRepresentable {
                 name: NSView.boundsDidChangeNotification,
                 object: scrollView.contentView,
             )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(scrollViewWillStartLiveScroll(_:)),
+                name: NSScrollView.willStartLiveScrollNotification,
+                object: scrollView,
+            )
+            // Track document-view frame changes too: layout growth moves the
+            // anchor's position without necessarily changing clip bounds.
+            scrollView.documentView?.postsFrameChangedNotifications = true
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(documentViewFrameDidChange(_:)),
+                name: NSView.frameDidChangeNotification,
+                object: scrollView.documentView,
+            )
+        }
+
+        @objc private func documentViewFrameDidChange(_ notification: Notification) {
+            enforceScrollAnchor()
         }
 
         /// Vertical scroll position as a fraction (0...1) of the scrollable
@@ -960,117 +1079,46 @@ struct PlatformTextView: NSViewRepresentable {
         private func currentScrollFraction() -> Double? {
             guard let scrollView, let documentView = scrollView.documentView else { return nil }
             let viewport = scrollView.contentView.bounds.height
-            let maxScroll = max(0, documentView.frame.height - viewport)
+            let documentFrame = documentView.frame
+            let maxScroll = max(0, documentFrame.height - viewport)
             guard maxScroll > 0 else { return 0 }
-            let y = scrollView.contentView.bounds.origin.y
-            return Double(min(1, max(0, y / maxScroll)))
+            let visibleY = scrollView.contentView.bounds.origin.y - documentFrame.minY
+            return Double(min(1, max(0, visibleY / maxScroll)))
         }
 
         func restoreScrollIfNeeded(_ request: SourceEditorScrollRestore?) {
             guard let request, request.token != lastScrollRestoreToken else { return }
             lastScrollRestoreToken = request.token
-            isRestoringScroll = true
-            if request.revealSelection {
-                // Jump-to-match: scroll the selection into view (centered),
-                // ignoring the saved fraction. Same token as a normal restore,
-                // so the two can never race.
-                revealSelection(request.selection ?? NSRange(location: 0, length: 0))
-            } else {
-                // Apply the caret once, immediately on the first deferred pass,
-                // then re-apply the scroll across a few passes as layout settles.
-                applyRestoreScroll(fraction: min(1, max(0, request.fraction)), selection: request.selection, attemptsRemaining: 4, previousMaxScroll: -1)
-            }
-        }
-
-        /// Restores the vertical scroll to `fraction` of the *settled* scrollable
-        /// range. A freshly opened document lays out asynchronously, so the
-        /// document height read on the first runloop turn is often an estimate
-        /// that's larger than the final height — multiplying a saved fraction by
-        /// that inflated height overshoots past the real content and leaves the
-        /// viewport blank with all the text scrolled above it. To avoid that we
-        /// force layout, clamp the target to the measured `maxScroll`, and
-        /// re-measure on subsequent passes until the height stabilizes.
-        private func applyRestoreScroll(
-            fraction: Double,
-            selection: NSRange?,
-            attemptsRemaining: Int,
-            previousMaxScroll: CGFloat
-        ) {
+            let requestedSelection = request.selection
+            let fraction = min(1, max(0, request.fraction.isFinite ? request.fraction : 0))
             DispatchQueue.main.async { [weak self] in
-                guard let self, let scrollView = self.scrollView,
-                      let documentView = scrollView.documentView else { return }
-                // Force glyph layout so the document frame height is final, not
-                // an estimate, before we measure the scrollable range.
-                if let textView = self.textView,
-                   let layoutManager = textView.layoutManager,
-                   let textContainer = textView.textContainer {
-                    layoutManager.ensureLayout(for: textContainer)
-                }
-                if let selection, let textView = self.textView {
-                    let length = (textView.string as NSString).length
-                    let location = min(max(0, selection.location), length)
-                    let len = min(selection.length, max(0, length - location))
-                    textView.setSelectedRange(NSRange(location: location, length: len))
-                }
-                let viewport = scrollView.contentView.bounds.height
-                let maxScroll = max(0, documentView.frame.height - viewport)
-                let target = min(maxScroll, max(0, maxScroll * CGFloat(fraction)))
-                scrollView.contentView.scroll(to: CGPoint(x: 0, y: target))
-                scrollView.reflectScrolledClipView(scrollView.contentView)
-                // Re-apply while the measured height is still changing (layout
-                // settling). Apply the caret only on the first pass.
-                if attemptsRemaining > 0, abs(maxScroll - previousMaxScroll) > 0.5 {
-                    self.applyRestoreScroll(
-                        fraction: fraction,
-                        selection: nil,
-                        attemptsRemaining: attemptsRemaining - 1,
-                        previousMaxScroll: maxScroll
-                    )
-                } else {
-                    DispatchQueue.main.async { self.isRestoringScroll = false }
-                }
-            }
-        }
-
-        /// Selects `requestedRange` and scrolls it into view (centered), used for
-        /// "jump to match" navigation. Like `applyRestoreScroll`, it re-applies
-        /// across passes until the document height stabilizes — on a cross-file
-        /// jump the editor is freshly mounted and the first-pass geometry is an
-        /// estimate, so a single pass can land at the top with the match
-        /// off-screen. Clears `isRestoringScroll` on the final pass.
-        private func revealSelection(_ requestedRange: NSRange) {
-            applyReveal(requestedRange, attemptsRemaining: 4, previousMaxScroll: -1)
-        }
-
-        private func applyReveal(_ requestedRange: NSRange, attemptsRemaining: Int, previousMaxScroll: CGFloat) {
-            DispatchQueue.main.async { [weak self] in
-                guard let self, let textView = self.textView, let scrollView = self.scrollView else { return }
-                if let layoutManager = textView.layoutManager, let textContainer = textView.textContainer {
-                    layoutManager.ensureLayout(for: textContainer)
-                }
+                guard let self, let textView = self.textView else { return }
+                guard self.lastScrollRestoreToken == request.token else { return }
                 let length = (textView.string as NSString).length
-                let location = min(max(0, requestedRange.location), length)
-                let len = min(requestedRange.length, max(0, length - location))
-                let range = NSRange(location: location, length: len)
-                textView.setSelectedRange(range)
-                textView.scrollRangeToVisible(range)
-                let viewport = scrollView.contentView.bounds.height
-                let maxScroll = max(0, (scrollView.documentView?.frame.height ?? 0) - viewport)
-                // Center the match in the viewport when possible.
-                if let layoutManager = textView.layoutManager, let textContainer = textView.textContainer {
-                    let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-                    var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
-                    rect.origin.y += textView.textContainerOrigin.y
-                    let centered = min(maxScroll, max(0, rect.midY - viewport / 2))
-                    scrollView.contentView.scroll(to: CGPoint(x: 0, y: centered))
-                    scrollView.reflectScrolledClipView(scrollView.contentView)
+                let selection: NSRange? = requestedSelection.map { range in
+                    let location = min(max(0, range.location), length)
+                    let len = min(range.length, max(0, length - location))
+                    return NSRange(location: location, length: len)
                 }
-                self.updateLanguageOverlayAnchor(in: textView, selectedRange: range)
-                if attemptsRemaining > 0, abs(maxScroll - previousMaxScroll) > 0.5 {
-                    self.applyReveal(range, attemptsRemaining: attemptsRemaining - 1, previousMaxScroll: maxScroll)
+                if request.revealSelection {
+                    if let selection {
+                        textView.setSelectedRange(selection)
+                    }
+                    self.anchorScroll(to: selection ?? NSRange(location: 0, length: 0))
                 } else {
-                    textView.window?.makeFirstResponder(textView)
-                    DispatchQueue.main.async { self.isRestoringScroll = false }
+                    // Turn on the fraction anchor before applying the saved
+                    // caret. AppKit may scroll to reveal the caret while the
+                    // text view is still resizing; with the anchor active,
+                    // those layout-driven jumps are immediately corrected.
+                    self.anchorScroll(toFraction: fraction)
+                    if let selection {
+                        textView.setSelectedRange(selection)
+                    }
+                }
+                self.updateLanguageOverlayAnchor(in: textView, selectedRange: textView.selectedRange())
+                textView.window?.makeFirstResponder(textView)
+                if !request.revealSelection {
+                    self.enforceScrollAnchor()
                 }
             }
         }
@@ -1134,6 +1182,7 @@ struct PlatformTextView: NSViewRepresentable {
 
         @objc private func scrollViewBoundsDidChange(_ notification: Notification) {
             guard let textView else { return }
+            enforceScrollAnchor()
             updateLanguageOverlayAnchor(in: textView, selectedRange: textView.selectedRange())
             if !isRestoringScroll, let fraction = currentScrollFraction() {
                 onScrollFractionChange?(fraction)
@@ -1143,6 +1192,9 @@ struct PlatformTextView: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard !isApplyingHighlighting else { return }
             guard let textView = notification.object as? NSTextView else { return }
+            // Edits autoscroll to the caret (typing, paste via menu); the
+            // user has taken over.
+            clearScrollAnchor()
             let nextText = textView.string
             repaintSyntaxOnly(in: textView)
             let range = textView.selectedRange()
@@ -1394,9 +1446,47 @@ struct PlatformTextView: NSViewRepresentable {
         var onDropPackagePath: ((String, NSPoint) -> Bool)?
         var onDropExternalFile: ((URL, NSPoint) -> Bool)?
         var onPasteExternalFile: ((URL) -> String?)?
+        /// Reports user input that should release the post-open sticky scroll
+        /// anchor (see `Coordinator.clearScrollAnchor`).
+        var onUserInteraction: (() -> Void)?
         private var selectionBeforePackageDrag: NSRange?
 
+        override func scrollWheel(with event: NSEvent) {
+            onUserInteraction?()
+            super.scrollWheel(with: event)
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            onUserInteraction?()
+            super.mouseDown(with: event)
+        }
+
+        /// `NSTextView` auto-scrolls during `setFrameSize:` (via the private
+        /// `_setFrameSize:forceScroll:` → `_centeredScrollRectToVisible:`) to
+        /// re-center the previous visual position whenever its frame changes.
+        /// While a freshly opened document lays out, the frame grows in steps
+        /// and that re-centering ratchets the view to the bottom, overriding
+        /// the workspace's scroll restore. Preserve the scroll position across
+        /// frame changes instead; intentional scrolling (user input,
+        /// `scrollRangeToVisible`, the restore passes) is unaffected.
+        override func setFrameSize(_ newSize: NSSize) {
+            guard let clipView = superview as? NSClipView else {
+                super.setFrameSize(newSize)
+                return
+            }
+            let savedOrigin = clipView.bounds.origin
+            super.setFrameSize(newSize)
+            if clipView.bounds.origin != savedOrigin {
+                let constrained = clipView.constrainBoundsRect(
+                    NSRect(origin: savedOrigin, size: clipView.bounds.size)
+                ).origin
+                clipView.scroll(to: constrained)
+                enclosingScrollView?.reflectScrolledClipView(clipView)
+            }
+        }
+
         override func keyDown(with event: NSEvent) {
+            onUserInteraction?()
             if onCompletionKey?(event) == true {
                 return
             }

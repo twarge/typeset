@@ -1025,30 +1025,37 @@ struct TypesetWorkspaceView: View {
                     sourceProseRanges[path] = prose
                 }
             }
+            // Restore only from state that was actually loaded from a
+            // persisted state file; live `state` may already carry cursor
+            // positions from this session's editor activity. Packages without
+            // a state file always open at the top.
+            let persistedState = document.package.persistedState
             let restoredRange = NSRange(
-                location: document.package.state.cursorLocation,
-                length: document.package.state.cursorLength
+                location: persistedState?.cursorLocation ?? 0,
+                length: persistedState?.cursorLength ?? 0
             )
             // Clear the live navigation selection; the restored caret (if any)
             // is applied through the post-layout restore path below so it lands
             // reliably even on a just-opened document.
             selectedRange = nil
-            let restoredSelection: NSRange? = (
-                restoringEditorState &&
-                document.package.state.selectedFile == path &&
-                (restoredRange.location > 0 || restoredRange.length > 0)
-            ) ? clampedRange(restoredRange, in: sourceText) : nil
-            // Restore the saved scroll position and caret when reopening; a
-            // normal file switch resets `scrollFraction` to 0 (and has no saved
-            // caret), so the new file opens at the top. When `revealing` is set
-            // (jump to a Find match), scroll that range into view instead.
+            let shouldRestoreEditorState = restoringEditorState && persistedState?.selectedFile == path
+            let restoredSelection: NSRange? = shouldRestoreEditorState
+                ? clampedRange(restoredRange, in: sourceText)
+                : nil
+            // When `revealing` is set (jump to a Find match), scroll that
+            // range into view. Reopening is different: restore the persisted
+            // caret without revealing it, then restore the saved viewport
+            // fraction independently so a caret near the end does not pull the
+            // editor to the bottom.
             if let revealing {
                 requestEditorReveal(clampedRange(revealing, in: sourceText))
-            } else {
+            } else if shouldRestoreEditorState, let persistedState {
                 requestEditorScrollRestore(
-                    document.package.state.scrollFraction,
+                    persistedState.scrollFraction,
                     selection: restoredSelection
                 )
+            } else {
+                requestEditorScrollRestore(0, selection: NSRange(location: 0, length: 0))
             }
             clearCompletions()
             hoverInfo = nil
@@ -1162,7 +1169,10 @@ struct TypesetWorkspaceView: View {
     }
 
     private var restoredPreviewViewport: PreviewViewport? {
-        let state = document.package.state
+        // Restore only from state loaded from disk; live state starts taking
+        // viewport updates from the preview itself well before the first
+        // compile finishes, which would clobber the saved spot.
+        guard let state = document.package.persistedState else { return nil }
         let viewport = PreviewViewport(
             scale: state.previewScale,
             page: state.previewPage,
@@ -4394,9 +4404,10 @@ struct WorkspaceSearchView: View {
                     .monospacedDigit()
                     .foregroundStyle(.tertiary)
                     .frame(minWidth: 24, alignment: .trailing)
-                (Text(match.linePrefix).foregroundColor(.secondary)
-                    + Text(match.matchText).foregroundColor(.primary).bold()
-                    + Text(match.lineSuffix).foregroundColor(.secondary))
+                let linePrefix = Text(match.linePrefix).foregroundColor(.secondary)
+                let highlightedMatch = Text(match.matchText).foregroundColor(.primary).bold()
+                let lineSuffix = Text(match.lineSuffix).foregroundColor(.secondary)
+                Text("\(linePrefix)\(highlightedMatch)\(lineSuffix)")
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 0)

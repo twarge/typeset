@@ -71,6 +71,10 @@ public struct DocumentPackageState: Equatable, Sendable {
     /// Raw value of the selected sidebar tab (files/outline/figures/references).
     /// Empty means "no stored preference".
     public var sidebarTab: String
+    /// Package-relative path of the compile target as stored in the state
+    /// file. `nil` means "not stored" — the package falls back to the legacy
+    /// `.typeset` metadata file and then to the main Typst source.
+    public var compileTarget: String?
 
     public init(
         selectedFile: String = "",
@@ -84,7 +88,8 @@ public struct DocumentPackageState: Equatable, Sendable {
         previewPointX: Double = 0,
         previewPointY: Double = 0,
         viewMode: String = "",
-        sidebarTab: String = ""
+        sidebarTab: String = "",
+        compileTarget: String? = nil
     ) {
         self.selectedFile = selectedFile
         self.cursorLocation = max(0, cursorLocation)
@@ -100,6 +105,7 @@ public struct DocumentPackageState: Equatable, Sendable {
         self.previewPointY = previewPointY.isFinite ? previewPointY : 0
         self.viewMode = viewMode
         self.sidebarTab = sidebarTab
+        self.compileTarget = compileTarget
     }
 
     static func clampedFraction(_ fraction: Double) -> Double {
@@ -109,7 +115,10 @@ public struct DocumentPackageState: Equatable, Sendable {
 }
 
 public struct DocumentPackage: Equatable, Sendable {
-    private static let metadataFileName = ".typeset"
+    /// Obsolete standalone compile-target file from earlier versions. Never
+    /// read or written anymore — only skipped, so stale copies don't appear
+    /// as package files (and disappear on the next save).
+    private static let legacyMetadataFileName = ".typeset"
     private static let stateFileName = ".typesetstate"
     private static let gitignoreFileName = ".gitignore"
 
@@ -118,6 +127,12 @@ public struct DocumentPackage: Equatable, Sendable {
     public var selectedPath: String
     public var compileTargetPath: String
     public var state: DocumentPackageState
+
+    /// The editor state exactly as decoded from a persisted state file, or
+    /// `nil` when the package was loaded without one. Restore-on-open flows
+    /// read this instead of `state`, which is live and may already reflect
+    /// editor activity from the current session.
+    public private(set) var persistedState: DocumentPackageState?
 
     public init(
         files: [PackageFile] = DocumentPackage.defaultFiles(),
@@ -841,7 +856,6 @@ public extension DocumentPackage {
 
         var files: [PackageFile] = []
         var folders: [String] = []
-        var compileTargetPath: String?
         var state: DocumentPackageState?
 
         for url in contents {
@@ -850,7 +864,6 @@ public extension DocumentPackage {
                 rootURL: directoryURL,
                 files: &files,
                 folders: &folders,
-                compileTargetPath: &compileTargetPath,
                 state: &state
             )
         }
@@ -860,9 +873,13 @@ public extension DocumentPackage {
             files: files,
             folders: folders,
             selectedPath: openedPath,
-            compileTargetPath: openedPath,
+            // A compile target persisted in the folder's state file wins over
+            // the opened file, so opening a chapter still compiles the
+            // document root.
+            compileTargetPath: state?.compileTarget ?? openedPath,
             state: state ?? DocumentPackageState(selectedFile: openedPath)
         )
+        persistedState = state
     }
 
     init(fileWrapper: FileWrapper) throws {
@@ -874,9 +891,10 @@ public extension DocumentPackage {
         try self.init(
             files: entries.files,
             folders: entries.folders,
-            compileTargetPath: entries.compileTargetPath,
+            compileTargetPath: entries.state?.compileTarget,
             state: entries.state ?? DocumentPackageState()
         )
+        persistedState = entries.state
     }
 
     func fileWrapper() -> FileWrapper {
@@ -891,10 +909,6 @@ public extension DocumentPackage {
             append(file: file, parts: parts, to: root)
         }
 
-        let metadata = FileWrapper(regularFileWithContents: Data(compileTargetPath.utf8))
-        metadata.preferredFilename = Self.metadataFileName
-        root.addFileWrapper(metadata)
-
         let state = FileWrapper(regularFileWithContents: Data(encodeState().utf8))
         state.preferredFilename = Self.stateFileName
         root.addFileWrapper(state)
@@ -906,13 +920,14 @@ public extension DocumentPackage {
         return root
     }
 
-    private static func flatten(wrappers: [String: FileWrapper], prefix: String) -> (files: [PackageFile], folders: [String], compileTargetPath: String?, state: DocumentPackageState?) {
-        wrappers.reduce(into: (files: [PackageFile](), folders: [String](), compileTargetPath: Optional<String>.none, state: Optional<DocumentPackageState>.none)) { result, entry in
+    private static func flatten(wrappers: [String: FileWrapper], prefix: String) -> (files: [PackageFile], folders: [String], state: DocumentPackageState?) {
+        wrappers.reduce(into: (files: [PackageFile](), folders: [String](), state: Optional<DocumentPackageState>.none)) { result, entry in
             let name = entry.key
             let wrapper = entry.value
             let path = prefix.isEmpty ? name : "\(prefix)/\(name)"
-            if prefix.isEmpty, name == Self.metadataFileName {
-                result.compileTargetPath = Self.decodeCompileTarget(from: wrapper.regularFileContents)
+            if prefix.isEmpty, name == Self.legacyMetadataFileName {
+                // Obsolete standalone compile-target file; ignored, and
+                // dropped from the package on the next save.
                 return
             }
             if prefix.isEmpty, name == Self.stateFileName {
@@ -928,22 +943,11 @@ public extension DocumentPackage {
                 let flattened = flatten(wrappers: children, prefix: path)
                 result.files.append(contentsOf: flattened.files)
                 result.folders.append(contentsOf: flattened.folders)
-                result.compileTargetPath = result.compileTargetPath ?? flattened.compileTargetPath
                 result.state = result.state ?? flattened.state
             } else {
                 result.files.append(PackageFile(path: path, data: wrapper.regularFileContents ?? Data()))
             }
         }
-    }
-
-    private static func decodeCompileTarget(from data: Data?) -> String? {
-        guard let data,
-              let text = String(data: data, encoding: .utf8) else {
-            return nil
-        }
-
-        let path = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return path.isEmpty ? nil : path
     }
 
     private func encodeState() -> String {
@@ -960,6 +964,7 @@ public extension DocumentPackage {
         preview_point_y = \(String(format: "%.4f", state.previewPointY))
         view_mode = "\(Self.tomlEscaped(state.viewMode))"
         sidebar_tab = "\(Self.tomlEscaped(state.sidebarTab))"
+        compile_target = "\(Self.tomlEscaped(compileTargetPath))"
         """
     }
 
@@ -987,6 +992,7 @@ public extension DocumentPackage {
         var previewPointY = 0.0
         var viewMode = ""
         var sidebarTab = ""
+        var compileTarget: String?
 
         for rawLine in text.split(whereSeparator: \.isNewline) {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
@@ -1023,6 +1029,9 @@ public extension DocumentPackage {
                 viewMode = tomlStringValue(value)
             case "sidebar_tab":
                 sidebarTab = tomlStringValue(value)
+            case "compile_target":
+                let target = tomlStringValue(value)
+                compileTarget = target.isEmpty ? nil : target
             default:
                 continue
             }
@@ -1040,7 +1049,8 @@ public extension DocumentPackage {
             previewPointX: previewPointX,
             previewPointY: previewPointY,
             viewMode: viewMode,
-            sidebarTab: sidebarTab
+            sidebarTab: sidebarTab,
+            compileTarget: compileTarget
         )
     }
 
@@ -1146,7 +1156,6 @@ public extension DocumentPackage {
         rootURL: URL,
         files: inout [PackageFile],
         folders: inout [String],
-        compileTargetPath: inout String?,
         state: inout DocumentPackageState?
     ) throws {
         let resourceValues = try url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
@@ -1154,8 +1163,8 @@ public extension DocumentPackage {
         let name = url.lastPathComponent
 
         if url.deletingLastPathComponent().standardizedFileURL == rootURL {
-            if name == Self.metadataFileName {
-                compileTargetPath = decodeCompileTarget(from: try? Data(contentsOf: url))
+            if name == Self.legacyMetadataFileName {
+                // Obsolete standalone compile-target file; ignored.
                 return
             }
             if name == Self.stateFileName {
@@ -1180,7 +1189,6 @@ public extension DocumentPackage {
                     rootURL: rootURL,
                     files: &files,
                     folders: &folders,
-                    compileTargetPath: &compileTargetPath,
                     state: &state
                 )
             }

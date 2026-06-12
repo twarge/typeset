@@ -541,7 +541,7 @@ extension PDFPreviewView {
     override func becomeFirstResponder() -> Bool { false }
 }
 
-private func pdfInternalScrollView(in view: UIView) -> UIScrollView? {
+@MainActor private func pdfInternalScrollView(in view: UIView) -> UIScrollView? {
     if let scrollView = view as? UIScrollView { return scrollView }
     for subview in view.subviews {
         if let scrollView = pdfInternalScrollView(in: subview) { return scrollView }
@@ -764,7 +764,7 @@ private func pdfInternalScrollView(in view: UIView) -> UIScrollView? {
     }
 }
 
-private extension UIView {
+@MainActor private extension UIView {
     /// Walks the view hierarchy rooted at `self` to find the current first
     /// responder. Used to cache the focused editor view before a PDF
     /// document swap, so we can put focus back afterwards.
@@ -879,7 +879,7 @@ private extension UIView {
         )
     }
 
-    private static func scrollView(in view: UIView) -> UIScrollView? {
+    @MainActor private static func scrollView(in view: UIView) -> UIScrollView? {
         if let scrollView = view as? UIScrollView {
             return scrollView
         }

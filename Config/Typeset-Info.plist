@@ -76,6 +76,9 @@
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>com.twarge.typeset.package</string>
+				<!-- Legacy UTI from the app's earlier "Typset" name; machines
+				     with an old install may still type .typeset folders as it. -->
+				<string>com.twarge.typset.package</string>
 			</array>
 		</dict>
 		<dict>
@@ -117,7 +120,6 @@
 				<key>public.filename-extension</key>
 				<array>
 					<string>typeset</string>
-					<string>typeset</string>
 				</array>
 			</dict>
 		</dict>
@@ -144,6 +146,26 @@
 	</array>
 	<key>UTImportedTypeDeclarations</key>
 	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>com.apple.package</string>
+				<string>public.directory</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Typeset Package (Legacy)</string>
+			<key>UTTypeIconFile</key>
+			<string>TypesetPackageIcon.icns</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.twarge.typset.package</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>typset</string>
+				</array>
+			</dict>
+		</dict>
 		<dict>
 			<key>UTTypeConformsTo</key>
 			<array>

@@ -73,6 +73,7 @@
 			<key>QLSupportedContentTypes</key>
 			<array>
 				<string>com.twarge.typeset.package</string>
+				<string>com.twarge.typset.package</string>
 				<string>com.typst.source</string>
 			</array>
 			<key>QLSupportsSearchableItems</key>
