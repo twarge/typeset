@@ -118,6 +118,14 @@ struct TypesetWorkspaceView: View {
     #endif
     @State private var externalReconcileTask: Task<Void, Never>?
     @State private var pendingConflict: DiskConflict?
+    /// Last-converged text per file — the three-way merge base. Advances only
+    /// when editor and disk agree: after load, write-through, adopting an
+    /// external change, or resolving a conflict. Keyed like `diskFileSnapshot`.
+    @State private var diskFileBaseline: [String: String] = [:]
+    @State private var remoteEditToken = 0
+    @State private var pendingRemoteEdit: RemoteEditRequest?
+    @State private var collabController: CollabSyncController?
+    @State private var pendingShareInvitation: ShareInvitation?
     @AppStorage("workspace.splitBehavior") private var splitBehaviorRaw = SplitBehavior.automatic.rawValue
     @AppStorage("workspace.tallSplitThreshold") private var tallSplitThreshold = 1.12
     @AppStorage("appearance.theme") private var themePreferenceRaw = ThemePreference.system.rawValue
@@ -131,6 +139,7 @@ struct TypesetWorkspaceView: View {
     @AppStorage("export.autoPDFOnClose") private var autoExportPDFOnClose = false
     @AppStorage("preview.renderWarmupDelay") private var previewRenderWarmupDelay = 0.5
     @AppStorage("developer.lspDebugLogging") private var lspDebugLoggingEnabled = false
+    @AppStorage("collab.syncOwnDocuments") private var syncOwnDocuments = true
 
     private let renderer = TypstRenderer()
     private let languageService = TypstLanguageServiceFactory.make()
@@ -190,6 +199,7 @@ struct TypesetWorkspaceView: View {
                     updateReferencesOnRename: $updateReferencesOnRename,
                     previewRenderWarmupDelay: $previewRenderWarmupDelay,
                     lspDebugLoggingEnabled: $lspDebugLoggingEnabled,
+                    syncOwnDocuments: $syncOwnDocuments,
                     onDismiss: { isSettingsPresented = false }
                 )
             }
@@ -232,8 +242,20 @@ struct TypesetWorkspaceView: View {
             }
             .onAppear {
                 loadTypstDirectoryIfNeeded()
+                #if os(macOS)
+                // Package documents (.typeset) also get the external-change
+                // watcher: iCloud Drive and other apps can rewrite package
+                // contents while we're open, and the merge reconcile keeps
+                // both sides converged instead of last-writer-wins.
+                if loadedTypstDirectoryFileURL == nil, packageRootURL != nil {
+                    resetDiskSnapshotFromPackage()
+                    startDirectoryWatcher()
+                }
+                #endif
+                attachCollabControllerIfNeeded()
                 restoreSidebarState()
                 if selectedPath.isEmpty {
+                    adoptPerDeviceEditorStateIfAvailable()
                     select(document.package.selectedPath, restoringEditorState: true)
                 }
                 focusSourceEditor()
@@ -261,6 +283,12 @@ struct TypesetWorkspaceView: View {
                 didAutoExportPDFOnDisappear = false
                 didForceInitialPreviewRecompile = false
                 loadTypstDirectoryIfNeeded()
+                #if os(macOS)
+                if loadedTypstDirectoryFileURL == nil, packageRootURL != nil {
+                    resetDiskSnapshotFromPackage()
+                    startDirectoryWatcher()
+                }
+                #endif
                 restoreSidebarState()
                 focusSourceEditor()
                 syncLanguageServiceDebugLogging()
@@ -274,6 +302,9 @@ struct TypesetWorkspaceView: View {
             }
             .onChange(of: selectedView) { _, newValue in
                 persistViewMode(newValue)
+            }
+            .onChange(of: syncOwnDocuments) { _, _ in
+                updateCollabForPreferenceChange()
             }
             .onChange(of: spellCheckingIgnoresCommands) { _, _ in
                 Task {
@@ -300,12 +331,12 @@ struct TypesetWorkspaceView: View {
             .alert(
                 "“\(pendingConflict?.fileName ?? "")” was changed on disk",
                 isPresented: Binding(
-                    get: { pendingConflict != nil },
+                    get: { pendingConflict != nil && pendingConflict?.mergeResult == nil },
                     set: { presented in
                         // Dismissed without choosing (Escape / window close):
                         // default to keeping the user's edits rather than leaving
                         // a divergence that a later reload would silently discard.
-                        if !presented, let conflict = pendingConflict {
+                        if !presented, let conflict = pendingConflict, conflict.mergeResult == nil {
                             resolveConflictKeepingMine(conflict)
                         }
                     }
@@ -316,6 +347,29 @@ struct TypesetWorkspaceView: View {
                 Button("Revert to Disk", role: .destructive) { resolveConflictRevertingToDisk(conflict) }
             } message: { _ in
                 Text("This file has unsaved changes here and was also modified by another program. Keep your version, or replace it with the version on disk?")
+            }
+            .sheet(
+                item: Binding(
+                    get: { pendingConflict?.mergeResult != nil ? pendingConflict : nil },
+                    set: { newValue in
+                        // Dismissed without applying: keep the user's edits,
+                        // matching the alert's escape behavior.
+                        if newValue == nil, let conflict = pendingConflict, conflict.mergeResult != nil {
+                            resolveConflictKeepingMine(conflict)
+                        }
+                    }
+                )
+            ) { conflict in
+                MergeConflictSheet(
+                    conflict: conflict,
+                    onResolve: { choices in resolveConflictWithChoices(conflict, choices: choices) },
+                    onCancel: { resolveConflictKeepingMine(conflict) }
+                )
+            }
+            .sheet(item: $pendingShareInvitation) { invitation in
+                ShareInvitationSheet(url: invitation.url) {
+                    pendingShareInvitation = nil
+                }
             }
     }
 
@@ -370,6 +424,7 @@ struct TypesetWorkspaceView: View {
             } label: {
                 Label("Files", systemImage: "sidebar.trailing")
             }
+            shareToolbarButton
             exportToolbarButton
             settingsToolbarButton
             logsToolbarButton
@@ -463,6 +518,13 @@ struct TypesetWorkspaceView: View {
         }
         .disabled(!supportsPDFExport)
         .help("Export PDF")
+    }
+
+    private var shareToolbarButton: some View {
+        Button(action: shareDocument) {
+            Label("Share via iCloud", systemImage: "person.2")
+        }
+        .help("Share via iCloud")
     }
 
     private var settingsToolbarButton: some View {
@@ -620,6 +682,7 @@ struct TypesetWorkspaceView: View {
             exportPDF: exportPDF,
             exportPDFToDefaultLocation: exportPDFToDefaultLocation,
             canExportPDFToDefaultLocation: canExportPDFToDefaultLocation,
+            shareDocument: shareDocument,
             newFolder: prepareNewFolder,
             toggleLogs: {
                 withAnimation(.snappy(duration: 0.28)) {
@@ -854,7 +917,8 @@ struct TypesetWorkspaceView: View {
                         fraction: scrollRestoreFraction,
                         selection: scrollRestoreSelection,
                         revealSelection: scrollRestoreReveal
-                    )
+                    ),
+                    remoteEditRequest: pendingRemoteEdit
                 )
                 .id(selectedPath)
             } else {
@@ -991,6 +1055,7 @@ struct TypesetWorkspaceView: View {
                 openedFileURL: fileURL
             )
             loadedTypstDirectoryFileURL = fileURL
+            adoptPerDeviceEditorStateIfAvailable()
             // The freshly loaded package already matches the folder on disk.
             resetDiskSnapshotFromPackage()
             #if os(macOS)
@@ -1166,6 +1231,7 @@ struct TypesetWorkspaceView: View {
         withoutDocumentUndo {
             document.package.updateScrollFraction(fraction)
         }
+        persistPerDeviceEditorState()
     }
 
     private var restoredPreviewViewport: PreviewViewport? {
@@ -1211,6 +1277,7 @@ struct TypesetWorkspaceView: View {
                 pointY: viewport.y
             )
         }
+        persistPerDeviceEditorState()
     }
 
     private func scheduleEditorStateSave() {
@@ -1242,6 +1309,28 @@ struct TypesetWorkspaceView: View {
             }
         } catch {
             recordLog("Editor state update failed", message: error.localizedDescription, level: .warning)
+        }
+        persistPerDeviceEditorState()
+    }
+
+    /// Stable per-document key for the per-device editor state store.
+    private var editorStateDocumentKey: String? {
+        (fileURL ?? loadedTypstDirectoryFileURL).map { EditorStateStore.documentKey(for: $0) }
+    }
+
+    private func persistPerDeviceEditorState() {
+        guard let key = editorStateDocumentKey else { return }
+        EditorStateStore.save(document.package, forKey: key)
+    }
+
+    /// Prefers per-device editor state (cursor, scroll, viewport) over the
+    /// state file inside the package, so documents shared across devices stop
+    /// fighting over a single `.typesetstate`.
+    private func adoptPerDeviceEditorStateIfAvailable() {
+        guard let key = editorStateDocumentKey,
+              let state = EditorStateStore.load(forKey: key) else { return }
+        withoutDocumentUndo {
+            document.package.adoptPersistedState(state)
         }
     }
 
@@ -1311,6 +1400,7 @@ struct TypesetWorkspaceView: View {
     private func updateSource(_ text: String, selectionRange: NSRange? = nil) {
         guard selectedFile?.isTextEditable == true else { return }
         let path = selectedPath
+        collabController?.noteLocalEdit(path: path)
         if let selectionRange {
             applyEditorSelection(
                 selectionRange,
@@ -2953,6 +3043,14 @@ struct TypesetWorkspaceView: View {
             uniquingKeysWith: { first, _ in first }
         )
         diskFolderSnapshot = Set(document.package.allFolderPaths)
+        diskFileBaseline = Dictionary(
+            document.package.files.compactMap { file -> (String, String)? in
+                guard file.path != managed,
+                      let text = String(data: file.data, encoding: .utf8) else { return nil }
+                return (file.path, text)
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
     }
 
     private func scheduleDirectorySync() {
@@ -2992,6 +3090,7 @@ struct TypesetWorkspaceView: View {
         let conflictPath = pendingConflict?.path
         let managed = documentManagedPath
         var nextSnapshot: [String: Int] = [:]
+        var nextBaseline: [String: String] = [:]
         for file in document.package.files {
             // The opened .typ is persisted by the document machinery; leave it
             // out of our writes AND our snapshot entirely.
@@ -2999,9 +3098,16 @@ struct TypesetWorkspaceView: View {
             let hash = file.data.hashValue
             if file.path == conflictPath {
                 nextSnapshot[file.path] = diskFileSnapshot[file.path] ?? hash
+                // A frozen conflict keeps its pre-divergence merge base.
+                if let base = diskFileBaseline[file.path] {
+                    nextBaseline[file.path] = base
+                }
                 continue
             }
             nextSnapshot[file.path] = hash
+            if let text = String(data: file.data, encoding: .utf8) {
+                nextBaseline[file.path] = text
+            }
             guard diskFileSnapshot[file.path] != hash else { continue }
             let url = root.appending(path: file.path)
             try? fileManager.createDirectory(
@@ -3028,6 +3134,7 @@ struct TypesetWorkspaceView: View {
 
         diskFileSnapshot = nextSnapshot
         diskFolderSnapshot = currentFolders
+        diskFileBaseline = nextBaseline
     }
 
     // MARK: - External folder monitoring (#1 reflect changes, #3 conflict prompt)
@@ -3037,7 +3144,7 @@ struct TypesetWorkspaceView: View {
     /// call repeatedly; tears down any previous watcher first.
     private func startDirectoryWatcher() {
         stopDirectoryWatcher()
-        guard let root = directoryModeRootURL else { return }
+        guard let root = packageRootURL else { return }
         directoryWatcher = DirectoryWatcher(rootURL: root) {
             // FSEvents callback runs on a background queue; hop to the main actor.
             Task { @MainActor in
@@ -3055,7 +3162,7 @@ struct TypesetWorkspaceView: View {
     #endif
 
     private func scheduleExternalReconcile() {
-        guard directoryModeRootURL != nil else { return }
+        guard packageRootURL != nil else { return }
         externalReconcileTask?.cancel()
         externalReconcileTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(250))
@@ -3102,7 +3209,8 @@ struct TypesetWorkspaceView: View {
         #endif
         // Don't reconcile while a conflict prompt is up; we re-run after it resolves.
         guard pendingConflict == nil else { return }
-        guard let root = directoryModeRootURL, let openedURL = loadedTypstDirectoryFileURL else { return }
+        guard let root = packageRootURL else { return }
+        let openedURL = loadedTypstDirectoryFileURL ?? root.appending(path: document.package.selectedPath)
 
         // Re-read disk through the same loader so file filtering can't drift. A
         // transient failure (root vanished, mid atomic-rename) just bails; a later
@@ -3169,6 +3277,8 @@ struct TypesetWorkspaceView: View {
         fresh.state = document.package.state
 
         var conflict = false
+        var autoMergedText: String?
+        var conflictMerge: MergeResult?
 
         if openInPackage {
             fresh.selectedPath = openPath
@@ -3176,7 +3286,24 @@ struct TypesetWorkspaceView: View {
             if openDirty {
                 // Keep the user's version in the package no matter what.
                 try? fresh.updateFileData(Data(sourceText.utf8), for: openPath)
-                conflict = openDiskDiffersFromEditor
+                if openDiskDiffersFromEditor {
+                    // Three-way merge against the last-converged base: edits
+                    // on disjoint lines combine silently; only genuinely
+                    // overlapping hunks fall through to the conflict prompt.
+                    if let base = diskFileBaseline[openPath] {
+                        let result = ThreeWayMerge.merge(base: base, mine: sourceText, theirs: openDiskText)
+                        if result.isClean {
+                            let merged = result.mergedKeepingMine
+                            autoMergedText = merged
+                            try? fresh.updateFileData(Data(merged.utf8), for: openPath)
+                        } else {
+                            conflictMerge = result
+                            conflict = true
+                        }
+                    } else {
+                        conflict = true
+                    }
+                }
             }
         } else if openDirty {
             // Open file deleted/renamed externally but has unsaved edits: re-add
@@ -3208,12 +3335,17 @@ struct TypesetWorkspaceView: View {
         // Clean open file changed externally -> reload its editor text from disk.
         if openDiskDiffersFromEditor, !openDirty,
            document.package.files.contains(where: { $0.path == openPath }) {
-            let diskText = document.package.text(for: openPath)
-            if sourceText != diskText {
-                sourceText = diskText
-                selectedRange = nil
-                syncLanguageServiceFile(path: openPath, text: diskText, selectionRange: nil)
+            applyExternalEditorText(document.package.text(for: openPath), for: openPath)
+        }
+
+        // A clean auto-merge replaces the editor text and converges disk to
+        // the merged result immediately, so no side stays divergent.
+        if let merged = autoMergedText {
+            applyExternalEditorText(merged, for: openPath)
+            if let root = packageRootURL {
+                try? Data(merged.utf8).write(to: root.appending(path: openPath), options: .atomic)
             }
+            recordLog("Merged external changes", message: openPath, level: .info)
         }
 
         // Re-baseline to the ACTUAL disk state (excluding in-memory-only pending
@@ -3221,20 +3353,232 @@ struct TypesetWorkspaceView: View {
         // divergent and prompt.
         diskFileSnapshot = diskHashes
         diskFolderSnapshot = diskFolders
+        if let merged = autoMergedText {
+            diskFileSnapshot[openPath] = Data(merged.utf8).hashValue
+        }
         if conflict {
             diskFileSnapshot[openPath] = Data(sourceText.utf8).hashValue
-            pendingConflict = DiskConflict(path: openPath, diskText: openDiskText)
+            pendingConflict = DiskConflict(
+                path: openPath,
+                diskText: openDiskText,
+                mergeResult: conflictMerge
+            )
         }
+
+        // Baselines advance to the adopted content; a pending conflict keeps
+        // its pre-divergence base for the hunk resolution.
+        var nextBaseline: [String: String] = [:]
+        let managedPath = documentManagedPath
+        for file in document.package.files where file.path != managedPath {
+            guard let text = String(data: file.data, encoding: .utf8) else { continue }
+            nextBaseline[file.path] = text
+        }
+        if conflict {
+            if let base = diskFileBaseline[openPath] {
+                nextBaseline[openPath] = base
+            } else {
+                nextBaseline.removeValue(forKey: openPath)
+            }
+        }
+        diskFileBaseline = nextBaseline
 
         syncLanguageServiceWorkspace()
         refreshPreview()
+    }
+
+    // MARK: - Collaboration
+
+    /// Attaches (once) the CloudKit sync controller when the package carries
+    /// a collaboration manifest. Without a manifest, account, or entitlement
+    /// this is inert.
+    private func attachCollabControllerIfNeeded() {
+        guard collabController == nil else { return }
+
+        if let manifest = document.package.collabManifestData.flatMap(CollabManifest.decode) {
+            // Auto-enrolled documents are gated by the preference; explicit
+            // shares always sync.
+            guard !manifest.isAutoEnrolled || syncOwnDocuments else { return }
+            startCollabController(CollabSyncController(manifest: manifest))
+            return
+        }
+
+        // No manifest yet: opt-in same-user sync auto-enrolls eligible
+        // documents (iCloud Drive packages) into the private database.
+        guard syncOwnDocuments, documentEligibleForAutoSync else { return }
+        let snapshot = document.package
+        let title = fileURL?.deletingPathExtension().lastPathComponent ?? "Typeset Document"
+        Task { @MainActor in
+            do {
+                let manifest = try await CollabShareManager.enablePrivateSync(for: snapshot, title: title)
+                guard collabController == nil, document.package.collabManifestData == nil else { return }
+                withoutDocumentUndo {
+                    document.package.collabManifestData = manifest.encoded()
+                }
+                startCollabController(CollabSyncController(manifest: manifest))
+                recordLog("Live sync enabled", message: "This document now syncs across your devices via iCloud.", level: .info)
+            } catch {
+                recordLog("Live sync unavailable", message: error.localizedDescription, level: .warning)
+            }
+        }
+    }
+
+    private func startCollabController(_ controller: CollabSyncController) {
+        controller.localTextProvider = { path in
+            if path == selectedPath { return sourceText }
+            guard document.package.files.contains(where: { $0.path == path }) else { return nil }
+            return document.package.text(for: path)
+        }
+        controller.onRemoteResolution = { path, resolution in
+            handleCollabResolution(path: path, resolution: resolution)
+        }
+        collabController = controller
+        Task { await controller.start() }
+    }
+
+    /// Documents eligible for automatic same-user sync: package documents
+    /// (not bare-folder mode, where the manifest has nowhere to persist) that
+    /// live in iCloud Drive, so the user's other devices open the same file
+    /// and rendezvous on the shared private-database zone via the manifest.
+    private var documentEligibleForAutoSync: Bool {
+        guard loadedTypstDirectoryFileURL == nil, let url = fileURL else { return false }
+        if FileManager.default.isUbiquitousItem(at: url) { return true }
+        return url.standardizedFileURL.path.contains("/Mobile Documents/")
+    }
+
+    private func updateCollabForPreferenceChange() {
+        if syncOwnDocuments {
+            attachCollabControllerIfNeeded()
+        } else if let manifest = collabController?.manifest, manifest.isAutoEnrolled {
+            // Turning sync off stops auto-enrolled documents; explicit shares
+            // keep running.
+            collabController?.stop()
+            collabController = nil
+        }
+    }
+
+    /// Applies a sync resolution to the document and editor: adopt/merge
+    /// updates content in place (ranged edits keep the caret), conflicts
+    /// reuse the merge sheet.
+    private func handleCollabResolution(path: String, resolution: CollabResolution) {
+        switch resolution {
+        case .alreadyConverged, .keepLocal:
+            break
+        case .adoptRemote(let text), .adoptMerged(let text):
+            if document.package.files.contains(where: { $0.path == path }) {
+                try? withoutDocumentUndo {
+                    try document.package.updateText(text, for: path)
+                }
+            } else {
+                let parts = path.split(separator: "/").map(String.init)
+                let folder = parts.count > 1 ? parts.dropLast().joined(separator: "/") : nil
+                var package = document.package
+                if let folder { ensureFolderExists(folder, in: &package) }
+                if let leaf = parts.last {
+                    _ = try? package.addFile(named: leaf, data: Data(text.utf8), in: folder)
+                }
+                withoutDocumentUndo { document.package = package }
+            }
+            applyExternalEditorText(text, for: path)
+            refreshPreview()
+        case .conflict(let result):
+            pendingConflict = DiskConflict(
+                path: path,
+                diskText: result.resolved { _ in .theirs },
+                mergeResult: result
+            )
+        }
+    }
+
+    /// Promotes this document to a shared CloudKit document and copies the
+    /// invitation link to the clipboard.
+    private func shareDocument() {
+        #if os(macOS)
+        Task { @MainActor in
+            do {
+                let title = fileURL?.deletingPathExtension().lastPathComponent ?? "Typeset Document"
+                let (manifest, share, _) = try await CollabShareManager.createShare(
+                    for: document.package,
+                    title: title
+                )
+                withoutDocumentUndo {
+                    document.package.collabManifestData = manifest.encoded()
+                }
+                attachCollabControllerIfNeeded()
+                if let url = share.url {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                    recordLog("Share link copied to clipboard", message: url.absoluteString, level: .info, present: true)
+                } else {
+                    recordLog("Shared", message: "Share created; the link will appear once CloudKit finishes provisioning.", level: .info, present: true)
+                }
+            } catch {
+                recordLog("Sharing failed", message: error.localizedDescription, level: .error, present: true)
+            }
+        }
+        #else
+        Task { @MainActor in
+            do {
+                let title = fileURL?.deletingPathExtension().lastPathComponent ?? "Typeset Document"
+                let (manifest, share, _) = try await CollabShareManager.createShare(
+                    for: document.package,
+                    title: title
+                )
+                withoutDocumentUndo {
+                    document.package.collabManifestData = manifest.encoded()
+                }
+                attachCollabControllerIfNeeded()
+                if let url = share.url {
+                    pendingShareInvitation = ShareInvitation(url: url)
+                } else {
+                    recordLog("Shared", message: "Share created; reopen the share action once CloudKit finishes provisioning to get the link.", level: .info, present: true)
+                }
+            } catch {
+                recordLog("Sharing failed", message: error.localizedDescription, level: .error, present: true)
+            }
+        }
+        #endif
+    }
+
+    /// Replaces the open file's editor text with externally produced content
+    /// (merge results, external reloads), delivered as ranged edits so the
+    /// local caret, selection, and scroll position survive.
+    private func applyExternalEditorText(_ newText: String, for path: String) {
+        guard selectedPath == path, sourceText != newText else { return }
+        remoteEditToken += 1
+        pendingRemoteEdit = RemoteEditRequest(
+            token: remoteEditToken,
+            edits: TextEditScript.edits(from: sourceText, to: newText)
+        )
+        sourceText = newText
+        syncLanguageServiceFile(path: path, text: newText, selectionRange: nil)
+    }
+
+    /// Applies the user's per-hunk choices from the merge sheet: the resolved
+    /// document (auto-merged regions plus chosen hunks) becomes the editor
+    /// content and is written through so all sides converge.
+    private func resolveConflictWithChoices(_ conflict: DiskConflict, choices: [Int: MergeSide]) {
+        guard pendingConflict?.id == conflict.id, let result = conflict.mergeResult else { return }
+        pendingConflict = nil
+        let resolved = result.resolved(choices: choices)
+        applyExternalEditorText(resolved, for: conflict.path)
+        try? withoutDocumentUndo {
+            try document.package.updateText(resolved, for: conflict.path)
+        }
+        if let root = packageRootURL {
+            try? Data(resolved.utf8).write(to: root.appending(path: conflict.path), options: .atomic)
+        }
+        diskFileSnapshot[conflict.path] = Data(resolved.utf8).hashValue
+        diskFileBaseline[conflict.path] = resolved
+        syncLanguageServiceFile(path: conflict.path, text: resolved, selectionRange: nil)
+        refreshPreview()
+        scheduleExternalReconcile()
     }
 
     private func resolveConflictKeepingMine(_ conflict: DiskConflict) {
         // Idempotent: a button tap and the alert's dismiss-binding can both fire.
         guard pendingConflict?.id == conflict.id else { return }
         pendingConflict = nil
-        guard let root = directoryModeRootURL else { return }
+        guard let root = packageRootURL else { return }
         let data = Data(document.package.text(for: conflict.path).utf8)
         do {
             try data.write(to: root.appending(path: conflict.path), options: .atomic)
@@ -3242,6 +3586,9 @@ struct TypesetWorkspaceView: View {
             recordLog("Save failed", message: "\(conflict.path): \(error.localizedDescription)", level: .error, present: true)
         }
         diskFileSnapshot[conflict.path] = data.hashValue
+        if let text = String(data: data, encoding: .utf8) {
+            diskFileBaseline[conflict.path] = text
+        }
         // Drain any other changes batched while the prompt was up.
         scheduleExternalReconcile()
     }
@@ -3249,14 +3596,12 @@ struct TypesetWorkspaceView: View {
     private func resolveConflictRevertingToDisk(_ conflict: DiskConflict) {
         guard pendingConflict?.id == conflict.id else { return }
         pendingConflict = nil
-        if selectedPath == conflict.path {
-            sourceText = conflict.diskText
-            selectedRange = nil
-        }
+        applyExternalEditorText(conflict.diskText, for: conflict.path)
         try? withoutDocumentUndo {
             try document.package.updateText(conflict.diskText, for: conflict.path)
         }
         diskFileSnapshot[conflict.path] = Data(conflict.diskText.utf8).hashValue
+        diskFileBaseline[conflict.path] = conflict.diskText
         syncLanguageServiceFile(path: conflict.path, text: conflict.diskText, selectionRange: nil)
         refreshPreview()
         scheduleExternalReconcile()
@@ -3280,12 +3625,55 @@ enum WorkspaceViewMode: String {
     case both
 }
 
+/// A freshly created CloudKit share invitation, presented so the user can
+/// send the link to collaborators.
+struct ShareInvitation: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+/// Minimal SwiftUI share sheet wrapping the invitation link in a `ShareLink`,
+/// avoiding UIKit presentation-controller plumbing.
+private struct ShareInvitationSheet: View {
+    let url: URL
+    let onDone: () -> Void
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "person.2.badge.gearshape")
+                .font(.system(size: 44))
+                .foregroundStyle(.tint)
+            Text("Invite Collaborators")
+                .font(.title3.bold())
+            Text("Anyone with this link can open and edit the document. Edits sync and merge through iCloud.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            ShareLink(item: url) {
+                Label("Send Invitation Link", systemImage: "square.and.arrow.up")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            Button("Done", action: onDone)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+        }
+        .padding(28)
+        .frame(maxWidth: 420)
+        .presentationDetents([.medium])
+    }
+}
+
 /// An unresolved conflict: the open file was changed on disk by another program
-/// while it had unsaved in-app edits. Drives the overwrite/revert prompt.
+/// while it had unsaved in-app edits, and the changes overlap. When a merge
+/// base was available, `mergeResult` carries the auto-merged segments plus the
+/// overlapping hunks for per-hunk resolution; otherwise the binary
+/// overwrite/revert prompt is shown.
 struct DiskConflict: Identifiable, Equatable {
     let id = UUID()
     let path: String
     let diskText: String
+    var mergeResult: MergeResult?
 
     var fileName: String { path.split(separator: "/").last.map(String.init) ?? path }
 }
@@ -3380,6 +3768,7 @@ struct WorkspaceSettingsPane: View {
     @Binding var updateReferencesOnRename: Bool
     @Binding var previewRenderWarmupDelay: Double
     @Binding var lspDebugLoggingEnabled: Bool
+    @Binding var syncOwnDocuments: Bool
     // Shares the editor's persisted font-size key, so this control and any
     // open editor stay in sync.
     @AppStorage("sourceEditor.fontSize") private var editorFontSize = SourceEditorFont.defaultSize
@@ -3548,6 +3937,16 @@ struct WorkspaceSettingsPane: View {
                 Toggle("Ignore Typst Commands and Arguments", isOn: $spellCheckingIgnoresCommands)
                     .disabled(!spellCheckingEnabled)
                 Toggle("Update References When Renaming or Moving Files", isOn: $updateReferencesOnRename)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Collaboration")
+                    .font(.subheadline.weight(.semibold))
+
+                Toggle("Sync My Documents via iCloud", isOn: $syncOwnDocuments)
+                Text("Documents in iCloud Drive sync and merge live across your devices. Edits arrive within seconds; simultaneous changes to the same lines merge automatically.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             VStack(alignment: .leading, spacing: 8) {

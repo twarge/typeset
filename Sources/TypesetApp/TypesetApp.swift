@@ -1,15 +1,57 @@
 // Copyright (c) 2026 Twarge LLC.
 // SPDX-License-Identifier: Apache-2.0
 
+import CloudKit
 import SwiftUI
 import TypesetCore
 import UniformTypeIdentifiers
 #if os(macOS)
 import AppKit
+#elseif os(iOS)
+import UIKit
+#endif
+
+#if os(macOS)
+/// Receives CloudKit share acceptances (the user opened an invitation link)
+/// and opens the materialized local replica through the document machinery.
+final class TypesetAppDelegate: NSObject, NSApplicationDelegate {
+    func application(_ application: NSApplication, userDidAcceptCloudKitShareWith metadata: CKShare.Metadata) {
+        Task { @MainActor in
+            do {
+                let replicaURL = try await CollabShareManager.acceptShare(metadata: metadata)
+                NSWorkspace.shared.open(replicaURL)
+            } catch {
+                NSLog("Typeset share acceptance failed: \(error.localizedDescription)")
+            }
+        }
+    }
+}
+#elseif os(iOS)
+/// iOS counterpart: SwiftUI apps using `@UIApplicationDelegateAdaptor` and no
+/// custom scene delegate receive share acceptances on the app delegate. The
+/// replica is materialized into Documents (browser-discoverable) and opened.
+final class TypesetAppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, userDidAcceptCloudKitShareWith metadata: CKShare.Metadata) {
+        Task { @MainActor in
+            do {
+                let replicaURL = try await CollabShareManager.acceptShare(metadata: metadata)
+                _ = await UIApplication.shared.open(replicaURL)
+            } catch {
+                NSLog("Typeset share acceptance failed: \(error.localizedDescription)")
+            }
+        }
+    }
+}
 #endif
 
 @main
 struct TypesetApp: App {
+    #if os(macOS)
+    @NSApplicationDelegateAdaptor(TypesetAppDelegate.self) private var appDelegate
+    #elseif os(iOS)
+    @UIApplicationDelegateAdaptor(TypesetAppDelegate.self) private var appDelegate
+    #endif
+
     init() {
         TypesetBundledFonts.register()
         UserDefaults.standard.register(defaults: [
@@ -17,7 +59,8 @@ struct TypesetApp: App {
             "sourceEditor.spellCheckingIgnoresCommands": true,
             "export.autoPDFOnClose": false,
             "preview.renderWarmupDelay": 0.5,
-            "developer.lspDebugLogging": false
+            "developer.lspDebugLogging": false,
+            "collab.syncOwnDocuments": true
         ])
     }
 
@@ -58,6 +101,7 @@ struct TypesetCommandSet: Equatable {
     var exportPDF: () -> Void
     var exportPDFToDefaultLocation: () -> Void
     var canExportPDFToDefaultLocation: Bool
+    var shareDocument: () -> Void
     var newFolder: () -> Void
     var toggleLogs: () -> Void
     var requestCompletion: () -> Void
@@ -110,6 +154,11 @@ struct TypesetCommands: Commands {
         }
 
         CommandGroup(after: .saveItem) {
+            Button("Share Document via iCloud…") {
+                commands?.shareDocument()
+            }
+            .disabled(commands == nil)
+
             Button("Export PDF...") {
                 commands?.exportPDF()
             }

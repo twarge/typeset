@@ -121,6 +121,9 @@ public struct DocumentPackage: Equatable, Sendable {
     private static let legacyMetadataFileName = ".typeset"
     private static let stateFileName = ".typesetstate"
     private static let gitignoreFileName = ".gitignore"
+    /// Collaboration identity manifest (see `CollabManifest`): hidden inside
+    /// the package like the state file, never listed as a package file.
+    private static let collabManifestFileName = ".typesetcollab"
 
     public var files: [PackageFile]
     public var folders: [String]
@@ -133,6 +136,10 @@ public struct DocumentPackage: Equatable, Sendable {
     /// read this instead of `state`, which is live and may already reflect
     /// editor activity from the current session.
     public private(set) var persistedState: DocumentPackageState?
+
+    /// Raw `.typesetcollab` manifest bytes when this package is a
+    /// collaboration replica; round-trips through saves untouched.
+    public var collabManifestData: Data?
 
     public init(
         files: [PackageFile] = DocumentPackage.defaultFiles(),
@@ -857,6 +864,7 @@ public extension DocumentPackage {
         var files: [PackageFile] = []
         var folders: [String] = []
         var state: DocumentPackageState?
+        var collabManifest: Data?
 
         for url in contents {
             try Self.collectDirectoryEntry(
@@ -864,7 +872,8 @@ public extension DocumentPackage {
                 rootURL: directoryURL,
                 files: &files,
                 folders: &folders,
-                state: &state
+                state: &state,
+                collabManifest: &collabManifest
             )
         }
 
@@ -880,6 +889,7 @@ public extension DocumentPackage {
             state: state ?? DocumentPackageState(selectedFile: openedPath)
         )
         persistedState = state
+        collabManifestData = collabManifest
     }
 
     init(fileWrapper: FileWrapper) throws {
@@ -895,9 +905,13 @@ public extension DocumentPackage {
             state: entries.state ?? DocumentPackageState()
         )
         persistedState = entries.state
+        collabManifestData = entries.collabManifest
     }
 
-    func fileWrapper() -> FileWrapper {
+    /// Serializes the package. `includeState` omits the `.typesetstate` file
+    /// for packages whose editor state lives elsewhere (per-device storage or
+    /// a collaboration replica).
+    func fileWrapper(includeState: Bool = true) -> FileWrapper {
         let root = FileWrapper(directoryWithFileWrappers: [:])
 
         for folder in allFolderPaths {
@@ -909,9 +923,17 @@ public extension DocumentPackage {
             append(file: file, parts: parts, to: root)
         }
 
-        let state = FileWrapper(regularFileWithContents: Data(encodeState().utf8))
-        state.preferredFilename = Self.stateFileName
-        root.addFileWrapper(state)
+        if includeState {
+            let state = FileWrapper(regularFileWithContents: Data(encodeState().utf8))
+            state.preferredFilename = Self.stateFileName
+            root.addFileWrapper(state)
+        }
+
+        if let collabManifestData {
+            let manifest = FileWrapper(regularFileWithContents: collabManifestData)
+            manifest.preferredFilename = Self.collabManifestFileName
+            root.addFileWrapper(manifest)
+        }
 
         let gitignore = FileWrapper(regularFileWithContents: Data("\(Self.stateFileName)\n".utf8))
         gitignore.preferredFilename = Self.gitignoreFileName
@@ -920,8 +942,8 @@ public extension DocumentPackage {
         return root
     }
 
-    private static func flatten(wrappers: [String: FileWrapper], prefix: String) -> (files: [PackageFile], folders: [String], state: DocumentPackageState?) {
-        wrappers.reduce(into: (files: [PackageFile](), folders: [String](), state: Optional<DocumentPackageState>.none)) { result, entry in
+    private static func flatten(wrappers: [String: FileWrapper], prefix: String) -> (files: [PackageFile], folders: [String], state: DocumentPackageState?, collabManifest: Data?) {
+        wrappers.reduce(into: (files: [PackageFile](), folders: [String](), state: Optional<DocumentPackageState>.none, collabManifest: Optional<Data>.none)) { result, entry in
             let name = entry.key
             let wrapper = entry.value
             let path = prefix.isEmpty ? name : "\(prefix)/\(name)"
@@ -934,6 +956,10 @@ public extension DocumentPackage {
                 result.state = Self.decodeState(from: wrapper.regularFileContents)
                 return
             }
+            if prefix.isEmpty, name == Self.collabManifestFileName {
+                result.collabManifest = wrapper.regularFileContents
+                return
+            }
             if prefix.isEmpty, name == Self.gitignoreFileName {
                 return
             }
@@ -944,10 +970,28 @@ public extension DocumentPackage {
                 result.files.append(contentsOf: flattened.files)
                 result.folders.append(contentsOf: flattened.folders)
                 result.state = result.state ?? flattened.state
+                result.collabManifest = result.collabManifest ?? flattened.collabManifest
             } else {
                 result.files.append(PackageFile(path: path, data: wrapper.regularFileContents ?? Data()))
             }
         }
+    }
+
+    /// The `.typesetstate` TOML for the current editor state — also used by
+    /// the per-device state store outside the package.
+    public func encodedEditorState() -> String {
+        encodeState()
+    }
+
+    /// Decodes `.typesetstate` TOML produced by `encodedEditorState()`.
+    public static func decodeEditorState(_ text: String) -> DocumentPackageState? {
+        decodeState(from: Data(text.utf8))
+    }
+
+    /// Replaces the restore-on-open snapshot — used when a per-device state
+    /// store carries fresher editor state than the package itself.
+    public mutating func adoptPersistedState(_ newState: DocumentPackageState) {
+        persistedState = newState
     }
 
     private func encodeState() -> String {
@@ -1156,7 +1200,8 @@ public extension DocumentPackage {
         rootURL: URL,
         files: inout [PackageFile],
         folders: inout [String],
-        state: inout DocumentPackageState?
+        state: inout DocumentPackageState?,
+        collabManifest: inout Data?
     ) throws {
         let resourceValues = try url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
         let relativePath = relativePackagePath(for: url, rootURL: rootURL)
@@ -1169,6 +1214,10 @@ public extension DocumentPackage {
             }
             if name == Self.stateFileName {
                 state = decodeState(from: try? Data(contentsOf: url))
+                return
+            }
+            if name == Self.collabManifestFileName {
+                collabManifest = try? Data(contentsOf: url)
                 return
             }
             if name == Self.gitignoreFileName {
@@ -1189,7 +1238,8 @@ public extension DocumentPackage {
                     rootURL: rootURL,
                     files: &files,
                     folders: &folders,
-                    state: &state
+                    state: &state,
+                    collabManifest: &collabManifest
                 )
             }
         } else if resourceValues.isRegularFile == true {

@@ -28,6 +28,15 @@ private let kSourceEditorScrollOffsetTrackingEnabled = true
 /// the per-keystroke anchor update is the loop.
 private let kSourceEditorOverlayAnchorTrackingEnabled = true
 
+/// A one-shot request to apply externally produced text (a remote or external
+/// merge result) as minimal ranged replacements instead of a wholesale text
+/// reset, so the local caret, selection, and scroll position survive. The
+/// `edits` transform the editor's current text into the new bound `text`.
+struct RemoteEditRequest: Equatable {
+    var token: Int
+    var edits: [TextEdit]
+}
+
 /// A one-shot request to insert a snippet template through the text view (so it
 /// is registered with the text view's undo manager and can wrap the selection).
 /// `token` changes to trigger a new insertion.
@@ -82,6 +91,7 @@ struct SourceEditor: View {
     var onCompletionDismiss: () -> Void = {}
     var onScrollFractionChange: (Double) -> Void = { _ in }
     var scrollRestore: SourceEditorScrollRestore?
+    var remoteEditRequest: RemoteEditRequest?
 
     // Persisted and shared with the Settings pane (same key), so the editor
     // font size is adjustable from preferences on both platforms.
@@ -132,6 +142,7 @@ struct SourceEditor: View {
             },
             onScrollFractionChange: onScrollFractionChange,
             scrollRestore: scrollRestore,
+            remoteEditRequest: remoteEditRequest,
             isPackageDropTargeted: $isPackageDropTargeted,
             fontSize: $fontSize
         )
@@ -714,6 +725,7 @@ struct PlatformTextView: NSViewRepresentable {
     var onLanguageOverlayAnchorChange: (CGPoint) -> Void
     var onScrollFractionChange: (Double) -> Void = { _ in }
     var scrollRestore: SourceEditorScrollRestore?
+    var remoteEditRequest: RemoteEditRequest?
     @Binding var isPackageDropTargeted: Bool
     @Binding var fontSize: Double
 
@@ -797,12 +809,18 @@ struct PlatformTextView: NSViewRepresentable {
         (scrollView.verticalRulerView as? LineNumberRulerView)?.invalidateLineNumbers()
 
         if textView.string != text {
-            if context.coordinator.shouldKeepNativeText(textView.string, representedText: text) {
+            if context.coordinator.applyRemoteEditsIfNeeded(remoteEditRequest, to: textView, expecting: text) {
+                // Remote merge applied as ranged replacements: caret,
+                // selection, and scroll survived; just repaint.
+                context.coordinator.markRepresentedTextSynced(text)
+                context.coordinator.repaintSyntaxOnly(in: textView)
+            } else if context.coordinator.shouldKeepNativeText(textView.string, representedText: text) {
                 context.coordinator.repaintSyntaxOnly(in: textView)
             } else {
                 context.coordinator.applyHighlighting(to: textView, text: text)
             }
         } else {
+            context.coordinator.noteRemoteEditToken(remoteEditRequest)
             context.coordinator.markRepresentedTextSynced(text)
             context.coordinator.repaintSyntaxOnly(in: textView)
         }
@@ -1121,6 +1139,49 @@ struct PlatformTextView: NSViewRepresentable {
                     self.enforceScrollAnchor()
                 }
             }
+        }
+
+        private var lastRemoteEditToken = 0
+
+        /// Consumes a remote-edit token when no application is needed (the
+        /// view's text already matches the bound text).
+        func noteRemoteEditToken(_ request: RemoteEditRequest?) {
+            if let request { lastRemoteEditToken = request.token }
+        }
+
+        /// Applies externally merged text as ranged replacements when the
+        /// request's edits transform the view's current text into `text`
+        /// exactly; the caret, selection, and scroll position survive.
+        /// Returns false untouched when the editor has moved on — the caller
+        /// falls back to a full text reset.
+        func applyRemoteEditsIfNeeded(
+            _ request: RemoteEditRequest?,
+            to textView: NSTextView,
+            expecting text: String
+        ) -> Bool {
+            guard let request, request.token != lastRemoteEditToken else { return false }
+            lastRemoteEditToken = request.token
+            guard let textStorage = textView.textStorage else { return false }
+            guard TextEditScript.apply(request.edits, to: textView.string) == text else { return false }
+
+            let selection = textView.selectedRange()
+            isApplyingHighlighting = true
+            textView.undoManager?.disableUndoRegistration()
+            let attributes = TypstSyntaxHighlighter.baseAttributes(font: font())
+            for edit in request.edits.reversed() {
+                textStorage.replaceCharacters(
+                    in: edit.range,
+                    with: NSAttributedString(string: edit.replacement, attributes: attributes)
+                )
+            }
+            textView.undoManager?.enableUndoRegistration()
+            isApplyingHighlighting = false
+
+            let remapped = TextEditScript.remap(selection, through: request.edits)
+            let length = (textView.string as NSString).length
+            let location = min(max(0, remapped.location), length)
+            textView.setSelectedRange(NSRange(location: location, length: min(remapped.length, max(0, length - location))))
+            return true
         }
 
         func focusIfNeeded(_ focusRequest: Int, textView: NSTextView) {
@@ -1811,6 +1872,7 @@ struct PlatformTextView: UIViewRepresentable {
     var onLanguageOverlayAnchorChange: (CGPoint) -> Void
     var onScrollFractionChange: (Double) -> Void = { _ in }
     var scrollRestore: SourceEditorScrollRestore?
+    var remoteEditRequest: RemoteEditRequest?
     @Binding var isPackageDropTargeted: Bool
     @Binding var fontSize: Double
 
@@ -1883,12 +1945,18 @@ struct PlatformTextView: UIViewRepresentable {
         )
 
         if textView.text != text {
-            if context.coordinator.shouldKeepNativeText(textView.text, representedText: text) {
+            if context.coordinator.applyRemoteEditsIfNeeded(remoteEditRequest, to: textView, expecting: text) {
+                // Remote merge applied as ranged replacements: caret,
+                // selection, and scroll survived; just repaint.
+                context.coordinator.markRepresentedTextSynced(text)
+                context.coordinator.scheduleRepaint(in: textView)
+            } else if context.coordinator.shouldKeepNativeText(textView.text, representedText: text) {
                 context.coordinator.scheduleRepaint(in: textView)
             } else {
                 context.coordinator.applyHighlighting(to: textView, text: text)
             }
         } else {
+            context.coordinator.noteRemoteEditToken(remoteEditRequest)
             context.coordinator.markRepresentedTextSynced(text)
             if annotationsChanged {
                 context.coordinator.scheduleRepaint(in: textView)
@@ -2023,6 +2091,41 @@ struct PlatformTextView: UIViewRepresentable {
             scheduleRepaint(in: textView)
             sendTextChange(nextText, selectedRange: range)
             updateLanguageOverlayAnchor(in: textView, selectedRange: range)
+        }
+
+        private var lastRemoteEditToken = 0
+
+        /// Consumes a remote-edit token when no application is needed.
+        func noteRemoteEditToken(_ request: RemoteEditRequest?) {
+            if let request { lastRemoteEditToken = request.token }
+        }
+
+        /// Applies externally merged text as ranged replacements when the
+        /// request's edits transform the view's current text into `text`
+        /// exactly; the caret, selection, and scroll position survive.
+        func applyRemoteEditsIfNeeded(
+            _ request: RemoteEditRequest?,
+            to textView: UITextView,
+            expecting text: String
+        ) -> Bool {
+            guard let request, request.token != lastRemoteEditToken else { return false }
+            lastRemoteEditToken = request.token
+            guard TextEditScript.apply(request.edits, to: textView.text ?? "") == text else { return false }
+
+            let selection = textView.selectedRange
+            isApplyingHighlighting = true
+            textView.undoManager?.disableUndoRegistration()
+            for edit in request.edits.reversed() {
+                textView.textStorage.replaceCharacters(in: edit.range, with: edit.replacement)
+            }
+            textView.undoManager?.enableUndoRegistration()
+            isApplyingHighlighting = false
+
+            let remapped = TextEditScript.remap(selection, through: request.edits)
+            let length = (textView.text as NSString).length
+            let location = min(max(0, remapped.location), length)
+            textView.selectedRange = NSRange(location: location, length: min(remapped.length, max(0, length - location)))
+            return true
         }
 
         func focusIfNeeded(_ focusRequest: Int, textView: UITextView) {

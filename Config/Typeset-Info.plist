@@ -20,6 +20,12 @@
 	<string>1</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright (c) 2026 Twarge LLC.</string>
+	<key>CKSharingSupported</key>
+	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>

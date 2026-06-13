@@ -8,6 +8,14 @@
 
 /* Begin PBXBuildFile section */
 		100000000000000000000001 /* DocumentPackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000101 /* DocumentPackage.swift */; };
+		1000000000000000000000E1 /* LineDiff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001E1 /* LineDiff.swift */; };
+		1000000000000000000000E7 /* CollabModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001E7 /* CollabModel.swift */; };
+		1000000000000000000000E8 /* MergeCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001E8 /* MergeCoordinator.swift */; };
+		1000000000000000000000E9 /* BaseStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001E9 /* BaseStore.swift */; };
+		1000000000000000000000EA /* MergeCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001EA /* MergeCoordinatorTests.swift */; };
+		1000000000000000000000E2 /* ThreeWayMerge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001E2 /* ThreeWayMerge.swift */; };
+		1000000000000000000000E3 /* TextEditScript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001E3 /* TextEditScript.swift */; };
+		1000000000000000000000E4 /* MergeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001E4 /* MergeTests.swift */; };
 		100000000000000000000002 /* PreviewHTMLBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000102 /* PreviewHTMLBuilder.swift */; };
 		100000000000000000000003 /* TypstRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000103 /* TypstRenderer.swift */; };
 		100000000000000000000004 /* TypesetApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000104 /* TypesetApp.swift */; };
@@ -44,6 +52,11 @@
 		100000000000000000000035 /* Resources/DocumentIcons/TypstSourceIcon-1024.png in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000134 /* Resources/DocumentIcons/TypstSourceIcon-1024.png */; };
 		1000000000000000000000D1 /* DirectoryWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001D1 /* DirectoryWatcher.swift */; };
 		1000000000000000000000DA /* FolderAccessStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001DA /* FolderAccessStore.swift */; };
+		1000000000000000000000E5 /* MergeConflictSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001E5 /* MergeConflictSheet.swift */; };
+		1000000000000000000000E6 /* EditorStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001E6 /* EditorStateStore.swift */; };
+		1000000000000000000000EB /* CollabRecordMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001EB /* CollabRecordMapping.swift */; };
+		1000000000000000000000EC /* CollabSyncController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001EC /* CollabSyncController.swift */; };
+		1000000000000000000000ED /* CollabShareManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001ED /* CollabShareManager.swift */; };
 		300000000000000000000001 /* PreviewViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000101 /* PreviewViewController.swift */; };
 		300000000000000000000002 /* TypesetCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; };
 		300000000000000000000003 /* TypesetQuickLook.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 300000000000000000000201 /* TypesetQuickLook.appex */; platformFilters = (macos, ); settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -107,6 +120,14 @@
 
 /* Begin PBXFileReference section */
 		100000000000000000000101 /* DocumentPackage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentPackage.swift; sourceTree = "<group>"; };
+		1000000000000000000001E1 /* LineDiff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Merge/LineDiff.swift; sourceTree = "<group>"; };
+		1000000000000000000001E7 /* CollabModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Collab/CollabModel.swift; sourceTree = "<group>"; };
+		1000000000000000000001E8 /* MergeCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Collab/MergeCoordinator.swift; sourceTree = "<group>"; };
+		1000000000000000000001E9 /* BaseStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Collab/BaseStore.swift; sourceTree = "<group>"; };
+		1000000000000000000001EA /* MergeCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeCoordinatorTests.swift; sourceTree = "<group>"; };
+		1000000000000000000001E2 /* ThreeWayMerge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Merge/ThreeWayMerge.swift; sourceTree = "<group>"; };
+		1000000000000000000001E3 /* TextEditScript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Merge/TextEditScript.swift; sourceTree = "<group>"; };
+		1000000000000000000001E4 /* MergeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeTests.swift; sourceTree = "<group>"; };
 		100000000000000000000102 /* PreviewHTMLBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewHTMLBuilder.swift; sourceTree = "<group>"; };
 		100000000000000000000103 /* TypstRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstRenderer.swift; sourceTree = "<group>"; };
 		100000000000000000000104 /* TypesetApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypesetApp.swift; sourceTree = "<group>"; };
@@ -141,6 +162,11 @@
 		100000000000000000000134 /* Resources/DocumentIcons/TypstSourceIcon-1024.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/DocumentIcons/TypstSourceIcon-1024.png"; sourceTree = SOURCE_ROOT; };
 		1000000000000000000001D1 /* DirectoryWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectoryWatcher.swift; sourceTree = "<group>"; };
 		1000000000000000000001DA /* FolderAccessStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderAccessStore.swift; sourceTree = "<group>"; };
+		1000000000000000000001E5 /* MergeConflictSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeConflictSheet.swift; sourceTree = "<group>"; };
+		1000000000000000000001E6 /* EditorStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorStateStore.swift; sourceTree = "<group>"; };
+		1000000000000000000001EB /* CollabRecordMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Collab/CollabRecordMapping.swift; sourceTree = "<group>"; };
+		1000000000000000000001EC /* CollabSyncController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Collab/CollabSyncController.swift; sourceTree = "<group>"; };
+		1000000000000000000001ED /* CollabShareManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Collab/CollabShareManager.swift; sourceTree = "<group>"; };
 		100000000000000000000201 /* TypesetCore.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = TypesetCore.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		100000000000000000000202 /* Typeset.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Typeset.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		100000000000000000000203 /* TypesetCoreTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TypesetCoreTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -211,6 +237,12 @@
 			isa = PBXGroup;
 			children = (
 				100000000000000000000101 /* DocumentPackage.swift */,
+				1000000000000000000001E1 /* LineDiff.swift */,
+				1000000000000000000001E2 /* ThreeWayMerge.swift */,
+				1000000000000000000001E3 /* TextEditScript.swift */,
+				1000000000000000000001E7 /* CollabModel.swift */,
+				1000000000000000000001E8 /* MergeCoordinator.swift */,
+				1000000000000000000001E9 /* BaseStore.swift */,
 				100000000000000000000102 /* PreviewHTMLBuilder.swift */,
 				100000000000000000000103 /* TypstRenderer.swift */,
 				10000000000000000000010C /* TypstLanguageService.swift */,
@@ -228,6 +260,11 @@
 				10000000000000000000010F /* PDFPreviewView.swift */,
 				1000000000000000000001D1 /* DirectoryWatcher.swift */,
 				1000000000000000000001DA /* FolderAccessStore.swift */,
+				1000000000000000000001E5 /* MergeConflictSheet.swift */,
+				1000000000000000000001E6 /* EditorStateStore.swift */,
+				1000000000000000000001EB /* CollabRecordMapping.swift */,
+				1000000000000000000001EC /* CollabSyncController.swift */,
+				1000000000000000000001ED /* CollabShareManager.swift */,
 			);
 			path = TypesetApp;
 			sourceTree = "<group>";
@@ -244,6 +281,8 @@
 			isa = PBXGroup;
 			children = (
 				100000000000000000000108 /* DocumentPackageTests.swift */,
+				1000000000000000000001E4 /* MergeTests.swift */,
+				1000000000000000000001EA /* MergeCoordinatorTests.swift */,
 			);
 			path = TypesetCoreTests;
 			sourceTree = "<group>";
@@ -513,6 +552,12 @@
 			buildActionMask = 2147483647;
 			files = (
 				100000000000000000000001 /* DocumentPackage.swift in Sources */,
+				1000000000000000000000E1 /* LineDiff.swift in Sources */,
+				1000000000000000000000E2 /* ThreeWayMerge.swift in Sources */,
+				1000000000000000000000E3 /* TextEditScript.swift in Sources */,
+				1000000000000000000000E7 /* CollabModel.swift in Sources */,
+				1000000000000000000000E8 /* MergeCoordinator.swift in Sources */,
+				1000000000000000000000E9 /* BaseStore.swift in Sources */,
 				100000000000000000000002 /* PreviewHTMLBuilder.swift in Sources */,
 				100000000000000000000003 /* TypstRenderer.swift in Sources */,
 				10000000000000000000000C /* TypstLanguageService.swift in Sources */,
@@ -530,6 +575,11 @@
 				10000000000000000000002C /* PDFPreviewView.swift in Sources */,
 				1000000000000000000000D1 /* DirectoryWatcher.swift in Sources */,
 				1000000000000000000000DA /* FolderAccessStore.swift in Sources */,
+				1000000000000000000000E5 /* MergeConflictSheet.swift in Sources */,
+				1000000000000000000000E6 /* EditorStateStore.swift in Sources */,
+				1000000000000000000000EB /* CollabRecordMapping.swift in Sources */,
+				1000000000000000000000EC /* CollabSyncController.swift in Sources */,
+				1000000000000000000000ED /* CollabShareManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -538,6 +588,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				10000000000000000000000A /* DocumentPackageTests.swift in Sources */,
+				1000000000000000000000E4 /* MergeTests.swift in Sources */,
+				1000000000000000000000EA /* MergeCoordinatorTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -758,6 +810,8 @@
 			buildSettings = {
 				"ARCHS[sdk=macosx*]" = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "Config/Typeset-iOS.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = "Config/Typeset-iOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/Typeset.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
@@ -790,6 +844,8 @@
 			buildSettings = {
 				"ARCHS[sdk=macosx*]" = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "Config/Typeset-iOS.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = "Config/Typeset-iOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/Typeset.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
