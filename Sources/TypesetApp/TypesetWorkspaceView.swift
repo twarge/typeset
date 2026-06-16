@@ -4048,8 +4048,14 @@ struct DiagnosticLogSlideOver: View {
     private var panel: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Label("Logs", systemImage: "list.bullet.rectangle")
-                    .font(.headline)
+                VStack(alignment: .leading, spacing: 2) {
+                    Label("Logs", systemImage: "list.bullet.rectangle")
+                        .font(.headline)
+
+                    Text("Typst \(TypstRuntime.typstVersion)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
                 Spacer()
             }

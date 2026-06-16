@@ -25,7 +25,7 @@ use typst_kit::downloader::SystemDownloader;
 use typst_kit::files::{FileLoader, FileStore, FsRoot};
 use typst_kit::fonts::{self, FontStore};
 use typst_kit::packages::{FsPackages, SystemPackages, UniversePackages};
-use typst_html::HtmlDocument;
+use typst_html::{HtmlDocument, HtmlOptions};
 use typst_layout::PagedDocument;
 use typst_pdf::{PdfOptions, PdfStandards};
 use typst_syntax::{SyntaxKind, SyntaxNode, parse};
@@ -465,6 +465,12 @@ pub extern "C" fn typeset_typst_compile_html(
     })
 }
 
+/// Returns the version string of the embedded Typst compiler (e.g. "0.15.0").
+#[unsafe(no_mangle)]
+pub extern "C" fn typeset_typst_version() -> *mut c_char {
+    into_c_string(typst::utils::version().raw().to_string())
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn typeset_tinymist_string_free(string: *mut c_char) {
     if !string.is_null() {
@@ -604,10 +610,12 @@ fn compile_pdf_response(
         &document,
         &PdfOptions {
             ident: Smart::Auto,
+            creator: Smart::Auto,
             timestamp: None,
             page_ranges: None,
             standards: PdfStandards::default(),
             tagged: false,
+            pretty: false,
         },
     ) {
         Ok(pdf) => pdf,
@@ -650,7 +658,7 @@ fn compile_html_response(
         }
     };
     let diagnostics = render_diagnostics(&world, warnings.iter());
-    let html = match typst_html::html(&document) {
+    let html = match typst_html::html(&document, &HtmlOptions { pretty: false }) {
         Ok(html) => html,
         Err(errors) => return Ok(RenderResponse::error(render_error_message(&world, &errors))),
     };
@@ -2971,7 +2979,7 @@ fn collect_symbols(
 fn func_call_name(node: &SyntaxNode) -> Option<String> {
     for child in node.children() {
         match child.kind() {
-            SyntaxKind::Ident => return Some(child.text().to_string()),
+            SyntaxKind::Ident => return Some(child.leaf_text().to_string()),
             SyntaxKind::FieldAccess => return field_access_last_ident(child),
             SyntaxKind::Args => break,
             _ => {}
@@ -2984,7 +2992,7 @@ fn field_access_last_ident(node: &SyntaxNode) -> Option<String> {
     let mut last = None;
     for child in node.children() {
         if child.kind() == SyntaxKind::Ident {
-            last = Some(child.text().to_string());
+            last = Some(child.leaf_text().to_string());
         }
     }
     last

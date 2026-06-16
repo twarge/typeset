@@ -29,6 +29,7 @@ char *typeset_tinymist_document_symbols(TypesetTinymistSession *session, const c
 char *typeset_typst_compile_svg(const char *root, const char *main_path, const char *package_path, const char *package_cache_path);
 char *typeset_typst_compile_pdf(const char *root, const char *main_path, const char *package_path, const char *package_cache_path);
 char *typeset_typst_compile_html(const char *root, const char *main_path, const char *package_path, const char *package_cache_path);
+char *typeset_typst_version(void);
 void typeset_tinymist_string_free(char *string);
 
 #ifdef __cplusplus

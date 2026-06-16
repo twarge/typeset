@@ -10,6 +10,7 @@
 		100000000000000000000001 /* DocumentPackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000101 /* DocumentPackage.swift */; };
 		100000000000000000000002 /* PreviewHTMLBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000102 /* PreviewHTMLBuilder.swift */; };
 		100000000000000000000003 /* TypstRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000103 /* TypstRenderer.swift */; };
+		100000000000000000000007 /* TypstVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000107 /* TypstVersion.swift */; };
 		100000000000000000000004 /* TypesetApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000104 /* TypesetApp.swift */; };
 		100000000000000000000005 /* TypesetWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000105 /* TypesetWorkspaceView.swift */; };
 		100000000000000000000006 /* SourceEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000106 /* SourceEditor.swift */; };
@@ -109,6 +110,7 @@
 		100000000000000000000101 /* DocumentPackage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentPackage.swift; sourceTree = "<group>"; };
 		100000000000000000000102 /* PreviewHTMLBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewHTMLBuilder.swift; sourceTree = "<group>"; };
 		100000000000000000000103 /* TypstRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstRenderer.swift; sourceTree = "<group>"; };
+		100000000000000000000107 /* TypstVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstVersion.swift; sourceTree = "<group>"; };
 		100000000000000000000104 /* TypesetApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypesetApp.swift; sourceTree = "<group>"; };
 		100000000000000000000105 /* TypesetWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypesetWorkspaceView.swift; sourceTree = "<group>"; };
 		100000000000000000000106 /* SourceEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditor.swift; sourceTree = "<group>"; };
@@ -213,6 +215,7 @@
 				100000000000000000000101 /* DocumentPackage.swift */,
 				100000000000000000000102 /* PreviewHTMLBuilder.swift */,
 				100000000000000000000103 /* TypstRenderer.swift */,
+				100000000000000000000107 /* TypstVersion.swift */,
 				10000000000000000000010C /* TypstLanguageService.swift */,
 				10000000000000000000010D /* TinymistWorkspaceStore.swift */,
 			);
@@ -515,6 +518,7 @@
 				100000000000000000000001 /* DocumentPackage.swift in Sources */,
 				100000000000000000000002 /* PreviewHTMLBuilder.swift in Sources */,
 				100000000000000000000003 /* TypstRenderer.swift in Sources */,
+				100000000000000000000007 /* TypstVersion.swift in Sources */,
 				10000000000000000000000C /* TypstLanguageService.swift in Sources */,
 				10000000000000000000000D /* TinymistWorkspaceStore.swift in Sources */,
 			);

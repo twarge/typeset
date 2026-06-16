@@ -255,7 +255,7 @@ private enum TypesetAboutPanel {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.paragraphSpacing = 6
 
-        let text = "\(makerText)\n\(supportEmail)\n\n\(acknowledgementText)"
+        let text = "\(makerText)\n\(supportEmail)\n\nTypst \(TypstRuntime.typstVersion)\n\n\(acknowledgementText)"
         let attributed = NSMutableAttributedString(
             string: text,
             attributes: [
