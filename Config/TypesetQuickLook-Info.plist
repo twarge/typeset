@@ -20,6 +20,26 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionAttributes</key>
+		<dict>
+			<key>QLIsDataBasedPreview</key>
+			<false/>
+			<key>QLSupportedContentTypes</key>
+			<array>
+				<string>com.twarge.typeset.package</string>
+				<string>com.twarge.typset.package</string>
+				<string>com.typst.source</string>
+			</array>
+			<key>QLSupportsSearchableItems</key>
+			<false/>
+		</dict>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.quicklook.preview</string>
+		<key>NSExtensionPrincipalClass</key>
+		<string>$(PRODUCT_MODULE_NAME).PreviewViewController</string>
+	</dict>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
@@ -64,25 +84,5 @@
 			</dict>
 		</dict>
 	</array>
-	<key>NSExtension</key>
-	<dict>
-		<key>NSExtensionAttributes</key>
-		<dict>
-			<key>QLIsDataBasedPreview</key>
-			<false/>
-			<key>QLSupportedContentTypes</key>
-			<array>
-				<string>com.twarge.typeset.package</string>
-				<string>com.twarge.typset.package</string>
-				<string>com.typst.source</string>
-			</array>
-			<key>QLSupportsSearchableItems</key>
-			<false/>
-		</dict>
-		<key>NSExtensionPointIdentifier</key>
-		<string>com.apple.quicklook.preview</string>
-		<key>NSExtensionPrincipalClass</key>
-		<string>$(PRODUCT_MODULE_NAME).PreviewViewController</string>
-	</dict>
 </dict>
 </plist>

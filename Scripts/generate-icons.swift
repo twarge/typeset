@@ -5,6 +5,7 @@
 import AppKit
 import CoreText
 import Foundation
+import ImageIO
 
 enum IconKind {
     case app
@@ -465,6 +466,47 @@ func writePNG(_ image: NSImage, to url: URL) throws {
     try data.write(to: url, options: [.atomic])
 }
 
+func writeOpaquePNG(_ image: NSImage, to url: URL, background: NSColor = white) throws {
+    guard let rep = image.representations.compactMap({ $0 as? NSBitmapImageRep }).first,
+          let source = rep.cgImage else {
+        throw NSError(domain: "TypesetIconGeneration", code: 2, userInfo: [NSLocalizedDescriptionKey: "Could not read bitmap for \(url.path)"])
+    }
+
+    let width = source.width
+    let height = source.height
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+    guard let context = CGContext(
+        data: nil,
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bytesPerRow: width * 4,
+        space: colorSpace,
+        bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+    ) else {
+        throw NSError(domain: "TypesetIconGeneration", code: 3, userInfo: [NSLocalizedDescriptionKey: "Could not create opaque context for \(url.path)"])
+    }
+
+    let backgroundColor = background.usingColorSpace(.deviceRGB)?.cgColor ?? CGColor(gray: 1.0, alpha: 1.0)
+    let rect = CGRect(x: 0, y: 0, width: width, height: height)
+    context.setFillColor(backgroundColor)
+    context.fill(rect)
+    context.draw(source, in: rect)
+
+    guard let flattened = context.makeImage(),
+          let destinationData = CFDataCreateMutable(nil, 0),
+          let destination = CGImageDestinationCreateWithData(destinationData, "public.png" as CFString, 1, nil) else {
+        throw NSError(domain: "TypesetIconGeneration", code: 4, userInfo: [NSLocalizedDescriptionKey: "Could not prepare opaque PNG for \(url.path)"])
+    }
+
+    CGImageDestinationAddImage(destination, flattened, [kCGImageDestinationLossyCompressionQuality: 0.92] as CFDictionary)
+    guard CGImageDestinationFinalize(destination) else {
+        throw NSError(domain: "TypesetIconGeneration", code: 5, userInfo: [NSLocalizedDescriptionKey: "Could not encode opaque PNG for \(url.path)"])
+    }
+
+    try (destinationData as Data).write(to: url, options: [.atomic])
+}
+
 func run(_ executable: String, _ arguments: [String]) throws {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: executable)
@@ -480,7 +522,7 @@ func generateAppIcons() throws {
     let sizes = [16, 20, 29, 32, 40, 58, 60, 64, 76, 80, 87, 120, 128, 152, 167, 180, 256, 512, 1024]
     try FileManager.default.createDirectory(at: appIconSet, withIntermediateDirectories: true)
     for size in sizes {
-        try writePNG(appIcon(size: size), to: appIconSet.appending(path: "Icon-\(size).png"))
+        try writeOpaquePNG(appIcon(size: size), to: appIconSet.appending(path: "Icon-\(size).png"))
     }
 }
 

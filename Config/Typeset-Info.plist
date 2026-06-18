@@ -4,6 +4,48 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeIconFile</key>
+			<string>TypesetPackageIcon.icns</string>
+			<key>CFBundleTypeIconFiles</key>
+			<array>
+				<string>TypesetPackageIcon-64.png</string>
+				<string>TypesetPackageIcon-320.png</string>
+			</array>
+			<key>CFBundleTypeName</key>
+			<string>Typeset Package</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.twarge.typeset.package</string>
+				<string>com.twarge.typset.package</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeIconFile</key>
+			<string>TypstSourceIcon.icns</string>
+			<key>CFBundleTypeIconFiles</key>
+			<array>
+				<string>TypstSourceIcon-64.png</string>
+				<string>TypstSourceIcon-320.png</string>
+			</array>
+			<key>CFBundleTypeName</key>
+			<string>Typst Source</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.typst.source</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -18,19 +60,30 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
-	<key>NSHumanReadableCopyright</key>
-	<string>Copyright (c) 2026 Twarge LLC.</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
-	<key>UILaunchScreen</key>
-	<dict/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright (c) 2026 Twarge LLC.</string>
+	<key>UIAppFonts</key>
+	<array>
+		<string>FiraCode-Light.ttf</string>
+		<string>FiraCode-Regular.ttf</string>
+		<string>FiraCode-Retina.ttf</string>
+		<string>FiraCode-Medium.ttf</string>
+		<string>FiraCode-SemiBold.ttf</string>
+		<string>FiraCode-Bold.ttf</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<true/>
 	</dict>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>UILaunchScreen</key>
+	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
@@ -46,61 +99,6 @@
 	</array>
 	<key>UISupportsDocumentBrowser</key>
 	<true/>
-	<key>UIFileSharingEnabled</key>
-	<true/>
-	<key>UIAppFonts</key>
-	<array>
-		<string>FiraCode-Light.ttf</string>
-		<string>FiraCode-Regular.ttf</string>
-		<string>FiraCode-Retina.ttf</string>
-		<string>FiraCode-Medium.ttf</string>
-		<string>FiraCode-SemiBold.ttf</string>
-		<string>FiraCode-Bold.ttf</string>
-	</array>
-	<key>CFBundleDocumentTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleTypeName</key>
-			<string>Typeset Package</string>
-			<key>CFBundleTypeIconFile</key>
-			<string>TypesetPackageIcon.icns</string>
-			<key>CFBundleTypeIconFiles</key>
-			<array>
-				<string>TypesetPackageIcon-64.png</string>
-				<string>TypesetPackageIcon-320.png</string>
-			</array>
-			<key>CFBundleTypeRole</key>
-			<string>Editor</string>
-			<key>LSHandlerRank</key>
-			<string>Owner</string>
-			<key>LSItemContentTypes</key>
-			<array>
-				<string>com.twarge.typeset.package</string>
-				<!-- Legacy UTI from the app's earlier "Typset" name; machines
-				     with an old install may still type .typeset folders as it. -->
-				<string>com.twarge.typset.package</string>
-			</array>
-		</dict>
-		<dict>
-			<key>CFBundleTypeName</key>
-			<string>Typst Source</string>
-			<key>CFBundleTypeIconFile</key>
-			<string>TypstSourceIcon.icns</string>
-			<key>CFBundleTypeIconFiles</key>
-			<array>
-				<string>TypstSourceIcon-64.png</string>
-				<string>TypstSourceIcon-320.png</string>
-			</array>
-			<key>CFBundleTypeRole</key>
-			<string>Editor</string>
-			<key>LSHandlerRank</key>
-			<string>Alternate</string>
-			<key>LSItemContentTypes</key>
-			<array>
-				<string>com.typst.source</string>
-			</array>
-		</dict>
-	</array>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>

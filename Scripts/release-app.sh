@@ -32,7 +32,7 @@ IOS_TEAM_ID="${IOS_TEAM_ID:-${APPLE_TEAM_ID:-${TEAM_ID:-}}}"
 IOS_SIGNING_STYLE="${IOS_SIGNING_STYLE:-automatic}"
 IOS_SIGNING_CERTIFICATE="${IOS_SIGNING_CERTIFICATE:-Apple Distribution}"
 IOS_PROVISIONING_PROFILE="${IOS_PROVISIONING_PROFILE:-}"
-IOS_BUNDLE_ID="${IOS_BUNDLE_ID:-com.twarge.typeset}"
+IOS_BUNDLE_ID="${IOS_BUNDLE_ID:-com.twarge.app.typeset}"
 IOS_EXPORT_METHOD="${IOS_EXPORT_METHOD:-app-store-connect}"
 IOS_UPLOAD_SYMBOLS="${IOS_UPLOAD_SYMBOLS:-YES}"
 IOS_MANAGE_APP_VERSION_AND_BUILD_NUMBER="${IOS_MANAGE_APP_VERSION_AND_BUILD_NUMBER:-NO}"
@@ -395,6 +395,27 @@ PLIST
 	fi
 }
 
+validate_ios_archive_framework_plists() {
+	local archive_path="$1"
+	local app_dir="$archive_path/Products/Applications/$APP_NAME.app"
+	local frameworks_dir="$app_dir/Frameworks"
+
+	require_dir "$app_dir"
+	[[ -d "$frameworks_dir" ]] || return 0
+
+	while IFS= read -r info_plist; do
+		local framework_name
+		local short_version
+		local bundle_version
+		framework_name="$(basename "$(dirname "$info_plist")")"
+		short_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info_plist" 2>/dev/null || true)"
+		bundle_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info_plist" 2>/dev/null || true)"
+
+		[[ -n "$short_version" ]] || fail "iOS archive framework $framework_name is missing CFBundleShortVersionString in $info_plist."
+		[[ -n "$bundle_version" ]] || fail "iOS archive framework $framework_name is missing CFBundleVersion in $info_plist."
+	done < <(find "$frameworks_dir" -path "*.framework/Info.plist" -type f -print | sort)
+}
+
 build_ios_app() {
 	require_command find
 	require_command xcodebuild
@@ -450,6 +471,7 @@ build_ios_app() {
 	else
 		xcodebuild "${archive_args[@]}" archive
 	fi
+	validate_ios_archive_framework_plists "$archive_path"
 
 	echo "Exporting iOS IPA"
 	if [[ "$IOS_AUTH_ARGS_PRESENT" -eq 1 ]]; then

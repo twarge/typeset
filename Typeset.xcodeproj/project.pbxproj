@@ -10,10 +10,10 @@
 		100000000000000000000001 /* DocumentPackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000101 /* DocumentPackage.swift */; };
 		100000000000000000000002 /* PreviewHTMLBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000102 /* PreviewHTMLBuilder.swift */; };
 		100000000000000000000003 /* TypstRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000103 /* TypstRenderer.swift */; };
-		100000000000000000000007 /* TypstVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000107 /* TypstVersion.swift */; };
 		100000000000000000000004 /* TypesetApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000104 /* TypesetApp.swift */; };
 		100000000000000000000005 /* TypesetWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000105 /* TypesetWorkspaceView.swift */; };
 		100000000000000000000006 /* SourceEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000106 /* SourceEditor.swift */; };
+		100000000000000000000007 /* TypstVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000107 /* TypstVersion.swift */; };
 		100000000000000000000008 /* TypesetCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; };
 		100000000000000000000009 /* TypesetCore.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		10000000000000000000000A /* DocumentPackageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000108 /* DocumentPackageTests.swift */; };
@@ -79,6 +79,13 @@
 			remoteGlobalIDString = 300000000000000000000801;
 			remoteInfo = TypesetQuickLook;
 		};
+		8FF558822FE38487001E1051 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 100000000000000000000900 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 100000000000000000000802;
+			remoteInfo = Typeset;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -110,10 +117,10 @@
 		100000000000000000000101 /* DocumentPackage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentPackage.swift; sourceTree = "<group>"; };
 		100000000000000000000102 /* PreviewHTMLBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewHTMLBuilder.swift; sourceTree = "<group>"; };
 		100000000000000000000103 /* TypstRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstRenderer.swift; sourceTree = "<group>"; };
-		100000000000000000000107 /* TypstVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstVersion.swift; sourceTree = "<group>"; };
 		100000000000000000000104 /* TypesetApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypesetApp.swift; sourceTree = "<group>"; };
 		100000000000000000000105 /* TypesetWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypesetWorkspaceView.swift; sourceTree = "<group>"; };
 		100000000000000000000106 /* SourceEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditor.swift; sourceTree = "<group>"; };
+		100000000000000000000107 /* TypstVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstVersion.swift; sourceTree = "<group>"; };
 		100000000000000000000108 /* DocumentPackageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentPackageTests.swift; sourceTree = "<group>"; };
 		100000000000000000000109 /* Typeset-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Typeset-Info.plist"; sourceTree = "<group>"; };
 		10000000000000000000010C /* TypstLanguageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstLanguageService.swift; sourceTree = "<group>"; };
@@ -360,6 +367,7 @@
 			);
 			dependencies = (
 				100000000000000000000304 /* PBXTargetDependency */,
+				8FF558832FE38487001E1051 /* PBXTargetDependency */,
 			);
 			name = TypesetCoreTests;
 			productName = TypesetCoreTests;
@@ -401,7 +409,7 @@
 					};
 					100000000000000000000803 = {
 						CreatedOnToolsVersion = 16.4;
-						TestTargetID = 100000000000000000000801;
+						TestTargetID = 100000000000000000000802;
 					};
 					300000000000000000000801 = {
 						CreatedOnToolsVersion = 16.4;
@@ -495,6 +503,7 @@
 			inputFileListPaths = (
 			);
 			inputPaths = (
+				"$(SRCROOT)/Scripts/build-bundled-typst.sh",
 				"$(SRCROOT)/Vendor/typst/Cargo.toml",
 				"$(SRCROOT)/Vendor/typst/Cargo.lock",
 			);
@@ -502,11 +511,12 @@
 			outputFileListPaths = (
 			);
 			outputPaths = (
+				"$(DWARF_DSYM_FOLDER_PATH)/typst.dSYM",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/typst",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "set -euo pipefail\n\nif [ \"${PLATFORM_NAME}\" != \"macosx\" ]; then\n  exit 0\nfi\n\nCARGO_BIN=\"${CARGO:-$HOME/.cargo/bin/cargo}\"\nif [ ! -x \"$CARGO_BIN\" ]; then\n  CARGO_BIN=\"$(command -v cargo || true)\"\nfi\nif [ -z \"$CARGO_BIN\" ] || [ ! -x \"$CARGO_BIN\" ]; then\n  echo \"error: cargo is required to build bundled Typst\" >&2\n  exit 1\nfi\n\nexport RUSTFLAGS=\"${RUSTFLAGS:-} --remap-path-prefix=$SRCROOT=. --remap-path-prefix=${HOME:-$SRCROOT}=~\"\n\ncd \"$SRCROOT/Vendor/typst\"\n\"$CARGO_BIN\" build --release --bin typst\n\nmkdir -p \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\ncp \"$SRCROOT/Vendor/typst/target/release/typst\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/typst\"\nchmod 755 \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/typst\"\n\n# The sandboxed app spawns this helper; it needs the inherit entitlement to\n# join the app's sandbox and keep its dynamic file-access grants.\nif [ \"${CODE_SIGNING_ALLOWED:-NO}\" = \"YES\" ]; then\n  IDENTITY=\"${EXPANDED_CODE_SIGN_IDENTITY:--}\"\n  codesign --force --sign \"$IDENTITY\" --entitlements \"$SRCROOT/Config/TypstCLI.entitlements\" --options runtime --timestamp=none \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/typst\"\nfi\n";
+			shellScript = "/bin/bash \"$SRCROOT/Scripts/build-bundled-typst.sh\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -578,6 +588,11 @@
 			);
 			target = 300000000000000000000801 /* TypesetQuickLook */;
 			targetProxy = 300000000000000000000302 /* PBXContainerItemProxy */;
+		};
+		8FF558832FE38487001E1051 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 100000000000000000000802 /* Typeset */;
+			targetProxy = 8FF558822FE38487001E1051 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -679,14 +694,14 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = YES;
 				DEAD_CODE_STRIPPING = YES;
-				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEPLOYMENT_POSTPROCESSING = YES;
 				ENABLE_CODE_COVERAGE = NO;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
-				GCC_GENERATE_DEBUGGING_SYMBOLS = NO;
+				GCC_GENERATE_DEBUGGING_SYMBOLS = YES;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
 				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
@@ -713,18 +728,22 @@
 				"ARCHS[sdk=macosx*]" = arm64;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEFINES_MODULE = YES;
-				DEVELOPMENT_TEAM = 6MFC6VKTVX;
+				DEVELOPMENT_TEAM = 257KW9ZJFP;
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
 				ENABLE_MODULE_VERIFIER = YES;
 				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleShortVersionString = "$(MARKETING_VERSION)";
+				INFOPLIST_KEY_CFBundleVersion = "$(CURRENT_PROJECT_VERSION)";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
 				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
-				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.typeset.core;
+				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.app.typeset.core;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SKIP_INSTALL = YES;
@@ -738,18 +757,22 @@
 				"ARCHS[sdk=macosx*]" = arm64;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEFINES_MODULE = YES;
-				DEVELOPMENT_TEAM = 6MFC6VKTVX;
+				DEVELOPMENT_TEAM = 257KW9ZJFP;
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
 				ENABLE_MODULE_VERIFIER = YES;
 				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleShortVersionString = "$(MARKETING_VERSION)";
+				INFOPLIST_KEY_CFBundleVersion = "$(CURRENT_PROJECT_VERSION)";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
 				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
-				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.typeset.core;
+				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.app.typeset.core;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SKIP_INSTALL = YES;
@@ -767,8 +790,9 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 6MFC6VKTVX;
+				DEVELOPMENT_TEAM = 257KW9ZJFP;
 				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
+				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/Typeset-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Typeset;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
@@ -779,7 +803,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.typeset;
+				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.app.typeset;
 				PRODUCT_NAME = Typeset;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = auto;
@@ -799,8 +823,9 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 6MFC6VKTVX;
+				DEVELOPMENT_TEAM = 257KW9ZJFP;
 				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
+				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/Typeset-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Typeset;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
@@ -811,7 +836,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.typeset;
+				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.app.typeset;
 				PRODUCT_NAME = Typeset;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = auto;
@@ -824,11 +849,10 @@
 		100000000000000000000B06 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 6MFC6VKTVX;
+				DEVELOPMENT_TEAM = 257KW9ZJFP;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -836,22 +860,21 @@
 					"@loader_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.typeset.core.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.app.typeset.core.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SUPPORTED_PLATFORMS = "macosx iphoneos iphonesimulator";
-				TEST_HOST = "";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Typeset.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Typeset";
 			};
 			name = Debug;
 		};
 		100000000000000000000B07 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 6MFC6VKTVX;
+				DEVELOPMENT_TEAM = 257KW9ZJFP;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -859,11 +882,11 @@
 					"@loader_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.typeset.core.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.app.typeset.core.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SUPPORTED_PLATFORMS = "macosx iphoneos iphonesimulator";
-				TEST_HOST = "";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Typeset.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Typeset";
 			};
 			name = Release;
 		};
@@ -876,8 +899,9 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 6MFC6VKTVX;
+				DEVELOPMENT_TEAM = 257KW9ZJFP;
 				EXCLUDED_ARCHS = x86_64;
+				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/TypesetQuickLook-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -886,7 +910,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.typeset.quicklook;
+				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.app.typeset.quicklook;
 				PRODUCT_NAME = TypesetQuickLook;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
@@ -906,8 +930,9 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = 6MFC6VKTVX;
+				DEVELOPMENT_TEAM = 257KW9ZJFP;
 				EXCLUDED_ARCHS = x86_64;
+				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/TypesetQuickLook-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -916,7 +941,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.typeset.quicklook;
+				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.app.typeset.quicklook;
 				PRODUCT_NAME = TypesetQuickLook;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
