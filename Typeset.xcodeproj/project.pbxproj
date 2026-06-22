@@ -45,6 +45,19 @@
 		100000000000000000000035 /* Resources/DocumentIcons/TypstSourceIcon-1024.png in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000134 /* Resources/DocumentIcons/TypstSourceIcon-1024.png */; };
 		1000000000000000000000D1 /* DirectoryWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001D1 /* DirectoryWatcher.swift */; };
 		1000000000000000000000DA /* FolderAccessStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001DA /* FolderAccessStore.swift */; };
+		100000000000000000000D01 /* WorkspaceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C01 /* WorkspaceModels.swift */; };
+		100000000000000000000D02 /* WorkspaceSettingsPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C02 /* WorkspaceSettingsPane.swift */; };
+		100000000000000000000D03 /* FindReplacePanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C03 /* FindReplacePanel.swift */; };
+		100000000000000000000D04 /* WorkspacePreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C04 /* WorkspacePreviews.swift */; };
+		100000000000000000000D05 /* DiagnosticLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C05 /* DiagnosticLog.swift */; };
+		100000000000000000000D06 /* WorkspaceSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C06 /* WorkspaceSearch.swift */; };
+		100000000000000000000D07 /* FileSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C07 /* FileSidebar.swift */; };
+		100000000000000000000D08 /* FileTreeDragDrop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C08 /* FileTreeDragDrop.swift */; };
+		100000000000000000000D09 /* FileTreeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C09 /* FileTreeModel.swift */; };
+		100000000000000000000D0A /* WorkspaceConfigurators.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C0A /* WorkspaceConfigurators.swift */; };
+		100000000000000000000F01 /* PlatformTextView+macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000E01 /* PlatformTextView+macOS.swift */; };
+		100000000000000000000F02 /* PlatformTextView+iOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000E02 /* PlatformTextView+iOS.swift */; };
+		100000000000000000000F03 /* TypstSyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000E03 /* TypstSyntaxHighlighter.swift */; };
 		300000000000000000000001 /* PreviewViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000101 /* PreviewViewController.swift */; };
 		300000000000000000000002 /* TypesetCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; };
 		300000000000000000000003 /* TypesetQuickLook.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 300000000000000000000201 /* TypesetQuickLook.appex */; platformFilters = (macos, ); settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -153,6 +166,19 @@
 		100000000000000000000201 /* TypesetCore.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = TypesetCore.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		100000000000000000000202 /* Typeset.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Typeset.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		100000000000000000000203 /* TypesetCoreTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TypesetCoreTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		100000000000000000000C01 /* WorkspaceModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceModels.swift; sourceTree = "<group>"; };
+		100000000000000000000C02 /* WorkspaceSettingsPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSettingsPane.swift; sourceTree = "<group>"; };
+		100000000000000000000C03 /* FindReplacePanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FindReplacePanel.swift; sourceTree = "<group>"; };
+		100000000000000000000C04 /* WorkspacePreviews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspacePreviews.swift; sourceTree = "<group>"; };
+		100000000000000000000C05 /* DiagnosticLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticLog.swift; sourceTree = "<group>"; };
+		100000000000000000000C06 /* WorkspaceSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSearch.swift; sourceTree = "<group>"; };
+		100000000000000000000C07 /* FileSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileSidebar.swift; sourceTree = "<group>"; };
+		100000000000000000000C08 /* FileTreeDragDrop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTreeDragDrop.swift; sourceTree = "<group>"; };
+		100000000000000000000C09 /* FileTreeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTreeModel.swift; sourceTree = "<group>"; };
+		100000000000000000000C0A /* WorkspaceConfigurators.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceConfigurators.swift; sourceTree = "<group>"; };
+		100000000000000000000E01 /* PlatformTextView+macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PlatformTextView+macOS.swift"; sourceTree = "<group>"; };
+		100000000000000000000E02 /* PlatformTextView+iOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PlatformTextView+iOS.swift"; sourceTree = "<group>"; };
+		100000000000000000000E03 /* TypstSyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstSyntaxHighlighter.swift; sourceTree = "<group>"; };
 		300000000000000000000101 /* PreviewViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewViewController.swift; sourceTree = "<group>"; };
 		300000000000000000000102 /* TypesetQuickLook-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "TypesetQuickLook-Info.plist"; sourceTree = "<group>"; };
 		300000000000000000000201 /* TypesetQuickLook.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TypesetQuickLook.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -235,6 +261,19 @@
 				100000000000000000000104 /* TypesetApp.swift */,
 				100000000000000000000105 /* TypesetWorkspaceView.swift */,
 				100000000000000000000106 /* SourceEditor.swift */,
+				100000000000000000000E01 /* PlatformTextView+macOS.swift */,
+				100000000000000000000E02 /* PlatformTextView+iOS.swift */,
+				100000000000000000000E03 /* TypstSyntaxHighlighter.swift */,
+				100000000000000000000C01 /* WorkspaceModels.swift */,
+				100000000000000000000C02 /* WorkspaceSettingsPane.swift */,
+				100000000000000000000C03 /* FindReplacePanel.swift */,
+				100000000000000000000C04 /* WorkspacePreviews.swift */,
+				100000000000000000000C05 /* DiagnosticLog.swift */,
+				100000000000000000000C06 /* WorkspaceSearch.swift */,
+				100000000000000000000C07 /* FileSidebar.swift */,
+				100000000000000000000C08 /* FileTreeDragDrop.swift */,
+				100000000000000000000C09 /* FileTreeModel.swift */,
+				100000000000000000000C0A /* WorkspaceConfigurators.swift */,
 				10000000000000000000010F /* PDFPreviewView.swift */,
 				1000000000000000000001D1 /* DirectoryWatcher.swift */,
 				1000000000000000000001DA /* FolderAccessStore.swift */,
@@ -541,6 +580,19 @@
 				100000000000000000000004 /* TypesetApp.swift in Sources */,
 				100000000000000000000005 /* TypesetWorkspaceView.swift in Sources */,
 				100000000000000000000006 /* SourceEditor.swift in Sources */,
+				100000000000000000000F01 /* PlatformTextView+macOS.swift in Sources */,
+				100000000000000000000F02 /* PlatformTextView+iOS.swift in Sources */,
+				100000000000000000000F03 /* TypstSyntaxHighlighter.swift in Sources */,
+				100000000000000000000D01 /* WorkspaceModels.swift in Sources */,
+				100000000000000000000D02 /* WorkspaceSettingsPane.swift in Sources */,
+				100000000000000000000D03 /* FindReplacePanel.swift in Sources */,
+				100000000000000000000D04 /* WorkspacePreviews.swift in Sources */,
+				100000000000000000000D05 /* DiagnosticLog.swift in Sources */,
+				100000000000000000000D06 /* WorkspaceSearch.swift in Sources */,
+				100000000000000000000D07 /* FileSidebar.swift in Sources */,
+				100000000000000000000D08 /* FileTreeDragDrop.swift in Sources */,
+				100000000000000000000D09 /* FileTreeModel.swift in Sources */,
+				100000000000000000000D0A /* WorkspaceConfigurators.swift in Sources */,
 				10000000000000000000002C /* PDFPreviewView.swift in Sources */,
 				1000000000000000000000D1 /* DirectoryWatcher.swift in Sources */,
 				1000000000000000000000DA /* FolderAccessStore.swift in Sources */,
@@ -788,7 +840,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/Typeset.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 257KW9ZJFP;
 				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
@@ -802,12 +854,14 @@
 					"@loader_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.app.typeset;
 				PRODUCT_NAME = Typeset;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = auto;
 				SUPPORTED_PLATFORMS = "macosx iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				TARGETED_DEVICE_FAMILY = "1,2,6";
 			};
@@ -821,7 +875,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/Typeset.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 257KW9ZJFP;
 				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
@@ -835,12 +889,14 @@
 					"@loader_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.app.typeset;
 				PRODUCT_NAME = Typeset;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = auto;
 				SUPPORTED_PLATFORMS = "macosx iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				TARGETED_DEVICE_FAMILY = "1,2,6";
 			};
@@ -897,7 +953,7 @@
 				CODE_SIGN_ENTITLEMENTS = Config/TypesetQuickLook.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 257KW9ZJFP;
 				EXCLUDED_ARCHS = x86_64;
@@ -909,13 +965,15 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.app.typeset.quicklook;
 				PRODUCT_NAME = TypesetQuickLook;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				TARGETED_DEVICE_FAMILY = 6;
 			};
@@ -928,7 +986,7 @@
 				CODE_SIGN_ENTITLEMENTS = Config/TypesetQuickLook.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 257KW9ZJFP;
 				EXCLUDED_ARCHS = x86_64;
@@ -940,13 +998,15 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.app.typeset.quicklook;
 				PRODUCT_NAME = TypesetQuickLook;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				TARGETED_DEVICE_FAMILY = 6;
 			};

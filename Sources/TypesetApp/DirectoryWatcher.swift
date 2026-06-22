@@ -21,7 +21,7 @@ import Foundation
 /// (balanced by the `release` callback when the stream is released), so a
 /// callback can never run against a freed instance. `stop()` additionally drains
 /// the private queue so no in-flight callback outlives teardown.
-final class DirectoryWatcher {
+nonisolated final class DirectoryWatcher {
     private let queue = DispatchQueue(label: "com.twarge.typeset.directorywatcher")
     private var stream: FSEventStreamRef?
     /// Invoked (on the private queue) for every coalesced batch of events. The
