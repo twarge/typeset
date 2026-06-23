@@ -840,7 +840,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/Typeset.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 257KW9ZJFP;
 				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
@@ -854,7 +854,7 @@
 					"@loader_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.app.typeset;
 				PRODUCT_NAME = Typeset;
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -875,7 +875,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/Typeset.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 257KW9ZJFP;
 				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
@@ -889,7 +889,7 @@
 					"@loader_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.app.typeset;
 				PRODUCT_NAME = Typeset;
 				PROVISIONING_PROFILE_SPECIFIER = "";
