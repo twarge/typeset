@@ -42,6 +42,13 @@ build_target() {
   local framework_dir="$BUILD_DIR/$out_name/TypesetTinymist.framework"
   mkdir -p "$framework_dir/Headers" "$framework_dir/Modules"
   cp "$lib_path" "$framework_dir/TypesetTinymist"
+  # Strip debug info from the Rust staticlib. Its DWARF references rustc temp
+  # build dirs (target/.../deps/rustc*/) that are deleted after the build, so a
+  # dSYM-generating link (DEBUG_INFORMATION_FORMAT=dwarf-with-dsym) warns
+  # "unable to open object file" for them. -S removes only debug/local symbols and
+  # keeps the global FFI symbols the app links against; the dropped debug info is
+  # third-party Rust that is never symbolicated anyway.
+  strip -S "$framework_dir/TypesetTinymist"
   cp "$CRATE_DIR/include/typeset_tinymist.h" "$framework_dir/Headers/TypesetTinymist.h"
   cat > "$framework_dir/Modules/module.modulemap" <<'MODULEMAP'
 framework module TypesetTinymist {
