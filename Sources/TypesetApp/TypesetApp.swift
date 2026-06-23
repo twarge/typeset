@@ -111,7 +111,7 @@ struct TypesetCommands: Commands {
         }
 
         CommandGroup(after: .saveItem) {
-            Button("Export PDF...") {
+            Button("Export PDF…") {
                 commands?.exportPDF()
             }
             .disabled(commands == nil)
@@ -126,13 +126,13 @@ struct TypesetCommands: Commands {
         CommandGroup(after: .pasteboard) {
             Divider()
 
-            Button("Find and Replace...") {
+            Button("Find and Replace…") {
                 commands?.showFindReplace()
             }
             .keyboardShortcut("f", modifiers: .command)
             .disabled(commands == nil)
 
-            Button("Find in Files...") {
+            Button("Find in Files…") {
                 commands?.showFindInFiles()
             }
             .keyboardShortcut("f", modifiers: [.command, .shift])
@@ -214,8 +214,12 @@ struct TypesetCommands: Commands {
             }
             .keyboardShortcut(" ", modifiers: .command)
             .disabled(commands == nil)
+        }
 
-            Button("Settings...") {
+        // Settings… belongs in the app menu (after About), not the View menu.
+        // `.appSettings` is the standard placement on both macOS and iPadOS.
+        CommandGroup(replacing: .appSettings) {
+            Button("Settings…") {
                 commands?.showSettings()
             }
             #if os(macOS)
