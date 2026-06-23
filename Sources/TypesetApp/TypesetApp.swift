@@ -13,6 +13,7 @@ struct TypesetApp: App {
     init() {
         TypesetBundledFonts.register()
         UserDefaults.standard.register(defaults: [
+            "newDocument.includesSampleContent": true,
             "sourceEditor.showLineNumbers": false,
             "sourceEditor.spellCheckingIgnoresCommands": true,
             "export.autoPDFOnClose": false,
@@ -320,7 +321,9 @@ struct TypesetDocument: FileDocument {
     var openedContentType: UTType
 
     init() {
-        package = try! DocumentPackage()
+        let includesSample = UserDefaults.standard.bool(forKey: "newDocument.includesSampleContent")
+        let files = includesSample ? DocumentPackage.defaultFiles() : DocumentPackage.emptyFiles()
+        package = try! DocumentPackage(files: files)
         openedContentType = .typesetPackage
     }
 

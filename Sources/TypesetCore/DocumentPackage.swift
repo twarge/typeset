@@ -307,6 +307,13 @@ public struct DocumentPackage: Equatable, Sendable {
         return [PackageFile(path: "main.typ", data: Data(source.utf8))]
     }
 
+    /// A single empty `main.typ`, used for new documents when the user turns off
+    /// sample content in Settings. A package must contain at least one Typst
+    /// source file, so an empty `main.typ` is the minimal valid blank document.
+    public static func emptyFiles() -> [PackageFile] {
+        [PackageFile(path: "main.typ", data: Data())]
+    }
+
     public var selectedFile: PackageFile? {
         files.first { $0.path == selectedPath }
     }

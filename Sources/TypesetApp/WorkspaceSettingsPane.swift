@@ -32,6 +32,9 @@ struct WorkspaceSettingsPane: View {
     // Shares the editor's persisted font-size key, so this control and any
     // open editor stay in sync.
     @AppStorage("sourceEditor.fontSize") private var editorFontSize = SourceEditorFont.defaultSize
+    // Read at document creation in `TypesetDocument.init()`; this control just
+    // writes the same global key (default registered in `TypesetApp.init`).
+    @AppStorage("newDocument.includesSampleContent") private var newDocumentIncludesSampleContent = true
     var onDismiss: () -> Void
 
     var body: some View {
@@ -84,6 +87,17 @@ struct WorkspaceSettingsPane: View {
                     .font(.headline)
             }
             #endif
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("New Documents")
+                    .font(.subheadline.weight(.semibold))
+
+                Toggle("Include Sample Content", isOn: $newDocumentIncludesSampleContent)
+
+                Text("Start new documents with a demonstration of Typst features instead of a blank file.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             #if os(macOS)
             // Theme and split-orientation controls are macOS-only. iOS follows

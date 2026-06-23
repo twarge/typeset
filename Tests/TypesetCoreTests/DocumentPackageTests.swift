@@ -15,6 +15,17 @@ import Testing
     #expect(source.contains("Typeset can save a package that contains multiple `.typ` files"))
 }
 
+@Test func emptyFilesProduceValidBlankPackage() throws {
+    // New documents use `emptyFiles()` instead of the demo when the user turns
+    // off sample content in Settings. The package must still be valid: a single
+    // empty `main.typ` that is the compile target.
+    let package = try DocumentPackage(files: DocumentPackage.emptyFiles())
+
+    #expect(package.files.count == 1)
+    #expect(package.mainTypstPath == "main.typ")
+    #expect(package.text(for: "main.typ").isEmpty)
+}
+
 @Test func packageRoundTripsNestedFiles() throws {
     let package = try DocumentPackage(files: [
         PackageFile(path: "main.typ", data: Data("= Hello".utf8)),
