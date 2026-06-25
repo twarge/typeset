@@ -2558,6 +2558,7 @@ name = "typeset-tinymist-ffi"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "comemo",
  "libc",
  "serde",
  "serde_json",

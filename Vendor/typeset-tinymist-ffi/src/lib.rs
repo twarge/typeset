@@ -645,6 +645,7 @@ fn compile_html_response(
     let package_cache_path = read_c_string(package_cache_path)?;
     let world = RenderWorld::new_for_html(&root, &main_path, &package_path, &package_cache_path)?;
     let typst::diag::Warned { output, warnings } = typst::compile::<HtmlDocument>(&world);
+    comemo::evict(COMEMO_EVICT_MAX_AGE);
     let document = match output {
         Ok(document) => document,
         Err(errors) => {
@@ -683,6 +684,7 @@ fn compile_paged_document(
     let world = RenderWorld::new(root, main_path, package_path, package_cache_path)
         .map_err(RenderResponse::error)?;
     let typst::diag::Warned { output, warnings } = typst::compile::<PagedDocument>(&world);
+    comemo::evict(COMEMO_EVICT_MAX_AGE);
     match output {
         Ok(document) => Ok((world, document, warnings.into_iter().collect())),
         Err(errors) => {
@@ -992,8 +994,8 @@ fn diagnostics_to_conventional_message(diagnostics: &[Diagnostic]) -> String {
 
 struct RenderWorld {
     main_path: String,
-    library: LazyHash<Library>,
-    fonts: FontStore,
+    library: &'static LazyHash<Library>,
+    fonts: &'static FontStore,
     files: FileStore<RenderFiles>,
     now: Time,
 }
@@ -1025,17 +1027,10 @@ impl RenderWorld {
         html_enabled: bool,
     ) -> Result<Self, String> {
         let files = RenderFiles::new(root, main_path, package_path, package_cache_path)?;
-        let library = if html_enabled {
-            Library::builder()
-                .with_features([Feature::Html].into_iter().collect())
-                .build()
-        } else {
-            Library::builder().build()
-        };
         Ok(Self {
             main_path: main_path.to_string(),
-            library: LazyHash::new(library),
-            fonts: discover_fonts(),
+            library: shared_render_library(html_enabled),
+            fonts: shared_render_fonts(),
             files: FileStore::new(files),
             now: Time::system(),
         })
@@ -1052,7 +1047,7 @@ impl RenderWorld {
 
 impl World for RenderWorld {
     fn library(&self) -> &LazyHash<Library> {
-        &self.library
+        self.library
     }
 
     fn book(&self) -> &LazyHash<FontBook> {
@@ -1135,6 +1130,37 @@ fn discover_fonts() -> FontStore {
     font_store.extend(fonts::embedded());
     font_store.extend(fonts::system());
     font_store
+}
+
+/// Bound the incremental compilation cache so it doesn't grow without limit
+/// across edits, while keeping entries reused by recent compiles. Evicted once
+/// per compile, like `typst watch`.
+const COMEMO_EVICT_MAX_AGE: usize = 30;
+
+/// The render font store, scanned once and shared by every compile. Rendering
+/// needs real fonts (unlike the completion path's empty book), but the expensive
+/// system font scan happens only on the first compile — every subsequent
+/// `RenderWorld` reuses it, like `typst watch` rather than `typst compile`.
+fn shared_render_fonts() -> &'static FontStore {
+    static FONTS: OnceLock<FontStore> = OnceLock::new();
+    FONTS.get_or_init(discover_fonts)
+}
+
+/// The render library, built once per feature set and shared, so a fresh
+/// `RenderWorld` per compile never rebuilds the standard library. The non-HTML
+/// library is the same instance the completion path already shares.
+fn shared_render_library(html_enabled: bool) -> &'static LazyHash<Library> {
+    if !html_enabled {
+        return shared_completion_library();
+    }
+    static HTML_LIBRARY: OnceLock<LazyHash<Library>> = OnceLock::new();
+    HTML_LIBRARY.get_or_init(|| {
+        LazyHash::new(
+            Library::builder()
+                .with_features([Feature::Html].into_iter().collect())
+                .build(),
+        )
+    })
 }
 
 fn syntax_diagnostics(path: &str, text: &str) -> Vec<Diagnostic> {

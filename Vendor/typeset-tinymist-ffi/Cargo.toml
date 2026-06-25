@@ -10,6 +10,9 @@ crate-type = ["staticlib"]
 
 [dependencies]
 base64 = "0.22"
+# Pinned to the exact version Typst depends on so `comemo::evict` operates on the
+# same (process-global) incremental cache that `typst::compile` populates.
+comemo = "=0.5.1"
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
