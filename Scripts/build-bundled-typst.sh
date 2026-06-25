@@ -27,7 +27,14 @@ export CARGO_PROFILE_RELEASE_PACKAGE_TYPST_CLI_STRIP="${CARGO_PROFILE_RELEASE_PA
 export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$SRCROOT=. --remap-path-prefix=${HOME:-$SRCROOT}=~"
 
 cd "$TYPST_ROOT"
-"$CARGO_BIN" rustc --release -p typst-cli --bin typst -- -C debuginfo=1 -C strip=none
+# psm ships hand-written assembly whose object file rustc deletes (with its temp
+# build directory) before the linker writes the debug map — producing a benign
+# "(arm64) …libpsm…aarch_aapcs64.o unable to open object file" warning on every
+# build. That assembly has no line info worth symbolicating, so drop psm's debug
+# info while keeping full DWARF (and the dSYM) for typst itself.
+"$CARGO_BIN" rustc --release \
+	--config 'profile.release.package.psm.debug=false' \
+	-p typst-cli --bin typst -- -C debuginfo=1 -C strip=none
 
 mkdir -p "$(dirname "$BUNDLED_TYPST")"
 cp "$BUILT_TYPST" "$BUNDLED_TYPST"

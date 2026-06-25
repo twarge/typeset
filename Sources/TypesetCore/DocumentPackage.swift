@@ -850,7 +850,7 @@ extension TypesetPackageError: LocalizedError {
 }
 
 public extension DocumentPackage {
-    init(directoryURL: URL, openedFileURL: URL) throws {
+    init(directoryURL: URL, openedFileURL: URL, openedFileIsAuthoritative: Bool = false) throws {
         let directoryURL = directoryURL.standardizedFileURL
         let openedFileURL = openedFileURL.standardizedFileURL
         let fileManager = FileManager.default
@@ -876,17 +876,38 @@ public extension DocumentPackage {
         }
 
         let openedPath = Self.relativePackagePath(for: openedFileURL, rootURL: directoryURL)
-        try self.init(
-            files: files,
-            folders: folders,
-            selectedPath: openedPath,
-            // A compile target persisted in the folder's state file wins over
-            // the opened file, so opening a chapter still compiles the
-            // document root.
-            compileTargetPath: state?.compileTarget ?? openedPath,
-            state: state ?? DocumentPackageState(selectedFile: openedPath)
-        )
-        persistedState = state
+
+        if openedFileIsAuthoritative {
+            // Opening a file directly makes THAT file both the selection and the
+            // compile target, regardless of what the folder's `.typesetstate`
+            // recorded. When the state was saved for a different file or compile
+            // target, its remaining settings (scroll, zoom, view mode, sidebar,
+            // expanded folders) belong to a different context, so drop them
+            // entirely and open the file fresh.
+            let stateMatchesOpenedFile =
+                state?.selectedFile == openedPath && state?.compileTarget == openedPath
+            let keptState = stateMatchesOpenedFile ? state : nil
+            try self.init(
+                files: files,
+                folders: folders,
+                selectedPath: openedPath,
+                compileTargetPath: openedPath,
+                state: keptState ?? DocumentPackageState(selectedFile: openedPath)
+            )
+            persistedState = keptState
+        } else {
+            try self.init(
+                files: files,
+                folders: folders,
+                selectedPath: openedPath,
+                // A compile target persisted in the folder's state file wins
+                // over the opened file, so a watcher re-read keeps the chosen
+                // target.
+                compileTargetPath: state?.compileTarget ?? openedPath,
+                state: state ?? DocumentPackageState(selectedFile: openedPath)
+            )
+            persistedState = state
+        }
     }
 
     init(fileWrapper: FileWrapper) throws {

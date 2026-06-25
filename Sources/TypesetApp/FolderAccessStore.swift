@@ -53,6 +53,20 @@ enum FolderAccessStore {
         return isAccessible(folder, requiresWrite: requiresWrite)
     }
 
+    /// The folders the user has granted access to, as standardized paths,
+    /// sorted for stable display in Settings.
+    static func grantedPaths() -> [String] {
+        storedBookmarks().keys.sorted()
+    }
+
+    /// Forgets a persisted folder grant so it is no longer restored on launch.
+    /// A security scope already activated this session keeps working until the
+    /// app quits; dropping the bookmark is what revokes it going forward.
+    static func revokeAccess(toPath path: String) {
+        activeScopePaths.remove(path)
+        removeBookmark(for: path)
+    }
+
     private static func isAccessible(_ folder: URL, requiresWrite: Bool) -> Bool {
         let manager = FileManager.default
         guard manager.isReadableFile(atPath: folder.path) else { return false }

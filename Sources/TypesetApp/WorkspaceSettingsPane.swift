@@ -35,6 +35,11 @@ struct WorkspaceSettingsPane: View {
     // Read at document creation in `TypesetDocument.init()`; this control just
     // writes the same global key (default registered in `TypesetApp.init`).
     @AppStorage("newDocument.includesSampleContent") private var newDocumentIncludesSampleContent = true
+    #if os(macOS)
+    // Snapshot of the sandbox folder grants, refreshed when the pane appears and
+    // after each revoke so the list re-renders.
+    @State private var grantedFolders: [String] = []
+    #endif
     var onDismiss: () -> Void
 
     var body: some View {
@@ -242,6 +247,10 @@ struct WorkspaceSettingsPane: View {
                 Toggle("Log LSP Requests", isOn: $lspDebugLoggingEnabled)
             }
 
+            #if os(macOS)
+            folderAccessSection
+            #endif
+
             VStack(alignment: .leading, spacing: 6) {
                 Text("Typeset is made by Twarge LLC.")
                     .font(.footnote)
@@ -252,5 +261,59 @@ struct WorkspaceSettingsPane: View {
             }
         }
     }
+
+    #if os(macOS)
+    @ViewBuilder
+    private var folderAccessSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Folder Access")
+                .font(.subheadline.weight(.semibold))
+
+            Text("Folders you've granted Typeset access to outside its sandbox.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if grantedFolders.isEmpty {
+                Text("No folders granted.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(spacing: 6) {
+                    ForEach(grantedFolders, id: \.self) { path in
+                        HStack(spacing: 8) {
+                            Image(systemName: "folder")
+                                .foregroundStyle(.secondary)
+                            Text((path as NSString).abbreviatingWithTildeInPath)
+                                .font(.callout)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .help(path)
+                            Spacer(minLength: 8)
+                            Button {
+                                withAnimation {
+                                    FolderAccessStore.revokeAccess(toPath: path)
+                                    grantedFolders = FolderAccessStore.grantedPaths()
+                                }
+                            } label: {
+                                Image(systemName: "trash")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Revoke access to \(path)")
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color.secondary.opacity(0.1))
+                        )
+                    }
+                }
+            }
+        }
+        .onAppear { grantedFolders = FolderAccessStore.grantedPaths() }
+    }
+    #endif
 }
 

@@ -118,6 +118,12 @@ struct TypesetWorkspaceView: View {
     #endif
     @State private var externalReconcileTask: Task<Void, Never>?
     @State private var pendingConflict: DiskConflict?
+    /// Hash of the opened document's bytes the last time the editor and disk
+    /// agreed (load, save echo, or a resolved conflict). The opened file is
+    /// otherwise left to SwiftUI, which shows no live "changed on disk" prompt,
+    /// so this lets the watcher tell a genuine external write (disk != baseline
+    /// and disk != editor) from our own saves echoing back (disk == editor).
+    @State private var managedFileDiskHash: Int?
     @AppStorage("workspace.splitBehavior") private var splitBehaviorRaw = SplitBehavior.automatic.rawValue
     @AppStorage("workspace.tallSplitThreshold") private var tallSplitThreshold = 1.12
     @AppStorage("appearance.theme") private var themePreferenceRaw = ThemePreference.system.rawValue
@@ -967,6 +973,10 @@ struct TypesetWorkspaceView: View {
                     return
                 }
                 loadTypstDirectory(openedFileURL: fileURL)
+                // The first compile ran before this grant, on the lone document
+                // file, so it couldn't read the document's imports or assets.
+                // Recompile now that the whole folder is accessible.
+                refreshPreview()
             }
             return
         }
@@ -988,7 +998,8 @@ struct TypesetWorkspaceView: View {
 
             document.package = try DocumentPackage(
                 directoryURL: fileURL.deletingLastPathComponent(),
-                openedFileURL: fileURL
+                openedFileURL: fileURL,
+                openedFileIsAuthoritative: true
             )
             loadedTypstDirectoryFileURL = fileURL
             // The freshly loaded package already matches the folder on disk.
@@ -2953,6 +2964,11 @@ struct TypesetWorkspaceView: View {
             uniquingKeysWith: { first, _ in first }
         )
         diskFolderSnapshot = Set(document.package.allFolderPaths)
+        // The freshly loaded package matches disk, so the opened file's bytes are
+        // the agreed baseline for its external-change detection.
+        managedFileDiskHash = managed.flatMap { path in
+            document.package.files.first { $0.path == path }?.data.hashValue
+        }
     }
 
     private func scheduleDirectorySync() {
@@ -3116,6 +3132,25 @@ struct TypesetWorkspaceView: View {
         // diff/snapshot, and keep its in-app content in `fresh` so a
         // neighbor-triggered reconcile never reverts the user's edits to it.
         let managed = documentManagedPath
+        // The opened document is normally left to SwiftUI, but SwiftUI has no
+        // live "changed on disk" prompt, so monitor it here too. Capture its
+        // on-disk bytes now, before the in-app copy below overwrites them in
+        // `fresh`, and compare against the editor and the agreed baseline.
+        let managedDiskText: String? = managed.flatMap { path in
+            fresh.files.contains(where: { $0.path == path }) ? fresh.text(for: path) : nil
+        }
+        let managedEditorText: String? = managed.map { path in
+            path == selectedPath ? sourceText : document.package.text(for: path)
+        }
+        let managedDiskHash = managedDiskText.map { Data($0.utf8).hashValue }
+        // A genuine external write: disk moved off the baseline AND differs from
+        // the editor (our own saves echo back as disk == editor and are ignored).
+        let managedChangedExternally = managed != nil
+            && managedDiskHash != managedFileDiskHash
+            && managedDiskText != managedEditorText
+        // Unsaved edits = the editor has moved off that same baseline.
+        let managedHasUnsavedEdits =
+            managedEditorText.map { Data($0.utf8).hashValue } != managedFileDiskHash
         if let managed, let inApp = document.package.files.first(where: { $0.path == managed }),
            fresh.files.contains(where: { $0.path == managed }) {
             try? fresh.updateFileData(inApp.data, for: managed)
@@ -3128,8 +3163,18 @@ struct TypesetWorkspaceView: View {
         let diskHashes = Dictionary(fresh.files.filter { $0.path != managed }.map { ($0.path, $0.data.hashValue) }, uniquingKeysWith: { first, _ in first })
         let diskFolders = Set(fresh.allFolderPaths)
 
-        // Self-write echo / no genuine change.
-        guard diskHashes != diskFileSnapshot || diskFolders != diskFolderSnapshot else { return }
+        // Whenever the opened file's disk bytes and the editor agree (our own
+        // save echoing back, or no change at all), advance its baseline now —
+        // even if the guard below returns early — so a later edit is not misread
+        // as an unsaved change against a stale baseline.
+        if managed != nil, let managedDiskHash, managedDiskText == managedEditorText {
+            managedFileDiskHash = managedDiskHash
+        }
+
+        // Self-write echo / no genuine change. The opened file is tracked apart
+        // from `diskHashes`, so check it explicitly too.
+        guard diskHashes != diskFileSnapshot || diskFolders != diskFolderSnapshot
+            || managedChangedExternally else { return }
 
         // Preserve in-app files created/imported but not yet written to disk
         // (absent from disk AND from the snapshot): merge them into `fresh` so
@@ -3226,7 +3271,41 @@ struct TypesetWorkspaceView: View {
             pendingConflict = DiskConflict(path: openPath, diskText: openDiskText)
         }
 
+        // The opened document, with the same policy as siblings: silently reload
+        // when the editor is clean, prompt when it has unsaved edits. A sibling
+        // conflict (if any) takes the single prompt first; we re-detect next pass.
+        if let managed, managedChangedExternally, let managedDiskText, let managedDiskHash {
+            if managedHasUnsavedEdits {
+                if pendingConflict == nil {
+                    pendingConflict = DiskConflict(path: managed, diskText: managedDiskText)
+                }
+                // Leave the baseline divergent; resolving the prompt advances it.
+            } else {
+                reloadManagedFileFromDisk(managed, diskText: managedDiskText)
+                managedFileDiskHash = managedDiskHash
+            }
+        } else if let managedDiskHash {
+            // No external change (or our own save echoing back): keep the baseline
+            // current so the next genuine change is detected.
+            managedFileDiskHash = managedDiskHash
+        }
+
         syncLanguageServiceWorkspace()
+        refreshPreview()
+    }
+
+    /// Adopt the opened document's on-disk bytes into the editor and package
+    /// without writing disk (the file is SwiftUI-managed). Used both for a clean
+    /// external change and for "Revert to Disk" on the opened document.
+    private func reloadManagedFileFromDisk(_ path: String, diskText: String) {
+        if selectedPath == path {
+            sourceText = diskText
+            selectedRange = nil
+        }
+        try? withoutDocumentUndo {
+            try document.package.updateText(diskText, for: path)
+        }
+        syncLanguageServiceFile(path: path, text: diskText, selectionRange: nil)
         refreshPreview()
     }
 
@@ -3234,6 +3313,16 @@ struct TypesetWorkspaceView: View {
         // Idempotent: a button tap and the alert's dismiss-binding can both fire.
         guard pendingConflict?.id == conflict.id else { return }
         pendingConflict = nil
+        // The opened document is SwiftUI-managed: don't write it ourselves (that
+        // desyncs SwiftUI's change tracking). The editor keeps the user's text
+        // and the document stays dirty, so SwiftUI saves it over the external
+        // version. Advance the baseline to the current on-disk bytes so the same
+        // external change doesn't re-prompt before that save lands.
+        if conflict.path == documentManagedPath {
+            managedFileDiskHash = Data(conflict.diskText.utf8).hashValue
+            scheduleExternalReconcile()
+            return
+        }
         guard let root = directoryModeRootURL else { return }
         let data = Data(document.package.text(for: conflict.path).utf8)
         do {
@@ -3249,6 +3338,14 @@ struct TypesetWorkspaceView: View {
     private func resolveConflictRevertingToDisk(_ conflict: DiskConflict) {
         guard pendingConflict?.id == conflict.id else { return }
         pendingConflict = nil
+        // The opened document is tracked apart from `diskFileSnapshot`; adopt the
+        // disk bytes and advance its own baseline instead.
+        if conflict.path == documentManagedPath {
+            reloadManagedFileFromDisk(conflict.path, diskText: conflict.diskText)
+            managedFileDiskHash = Data(conflict.diskText.utf8).hashValue
+            scheduleExternalReconcile()
+            return
+        }
         if selectedPath == conflict.path {
             sourceText = conflict.diskText
             selectedRange = nil
