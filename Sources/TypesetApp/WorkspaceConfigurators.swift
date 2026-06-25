@@ -128,7 +128,10 @@ struct DocumentProxyConfigurator: NSViewRepresentable {
                 documentTitle = fileURL.lastPathComponent
             }
             guard !editedPath.isEmpty else { return documentTitle }
-            return "\(documentTitle) - \(editedPath)"
+            // A chevron breadcrumb (matching the iOS title's grey `chevron.right`)
+            // rather than a dash. `NSWindow.title` is plain text drawn in the
+            // muted titlebar color, so the separator reads grey.
+            return "\(documentTitle) › \(editedPath)"
         }
     }
 }
