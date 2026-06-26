@@ -106,6 +106,7 @@ struct PlatformTextView: NSViewRepresentable {
         context.coordinator.onImportExternalFile = onImportExternalFile
         context.coordinator.onImportPastedImage = onImportPastedImage
         context.coordinator.diagnostics = diagnostics
+        (textView as? PackagePathTextView)?.inlineDiagnostics = diagnostics
         context.coordinator.proseRanges = proseRanges
         context.coordinator.spellCheckingEnabled = spellCheckingEnabled
         context.coordinator.onTextChange = onTextChange
@@ -554,6 +555,7 @@ struct PlatformTextView: NSViewRepresentable {
             let range = textView.selectedRange()
             sendSelectionChange(range)
             updateLanguageOverlayAnchor(in: textView, selectedRange: range)
+            (textView as? PackagePathTextView)?.diagnosticCaretDidChange()
         }
 
         private func sendTextChange(_ nextText: String, selectedRange range: NSRange) {
@@ -682,7 +684,6 @@ struct PlatformTextView: NSViewRepresentable {
             let fullRange = NSRange(location: 0, length: textStorage.length)
             layoutManager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: fullRange)
             layoutManager.removeTemporaryAttribute(.underlineColor, forCharacterRange: fullRange)
-            layoutManager.removeTemporaryAttribute(.toolTip, forCharacterRange: fullRange)
 
             if spellCheckingEnabled {
                 for proseRange in proseRanges where NSMaxRange(proseRange.range) <= textStorage.length {
@@ -705,13 +706,15 @@ struct PlatformTextView: NSViewRepresentable {
                 }
             }
 
-            for diagnostic in diagnostics where NSMaxRange(diagnostic.range) <= textStorage.length {
+            // Underline only when the compiler gave a real span (>1 char). Point
+            // diagnostics (line:column → length 1) get a triangle marker instead
+            // — see `drawDiagnosticPointMarkers`.
+            for diagnostic in diagnostics where diagnostic.range.length > 1 && NSMaxRange(diagnostic.range) <= textStorage.length {
                 let color: NSColor = diagnostic.severity == .error ? .systemRed : .systemYellow
                 layoutManager.addTemporaryAttributes([
                     .underlineStyle: NSUnderlineStyle.patternDot.rawValue | NSUnderlineStyle.thick.rawValue,
                     .underlineColor: color,
-                    .toolTip: diagnostic.message,
-                ], forCharacterRange: diagnostic.range.length == 0 ? NSRange(location: diagnostic.range.location, length: min(1, textStorage.length - diagnostic.range.location)) : diagnostic.range)
+                ], forCharacterRange: diagnostic.range)
             }
         }
 
@@ -777,6 +780,17 @@ struct PlatformTextView: NSViewRepresentable {
         var onUserInteraction: (() -> Void)?
         private var selectionBeforePackageDrag: NSRange?
 
+        /// Compiler diagnostics rendered inline: a faint full-width tint behind
+        /// every line the diagnostic spans, plus a coloured message badge
+        /// right-aligned at the trailing edge of the first spanned line.
+        var inlineDiagnostics: [TypstSourceDiagnostic] = [] {
+            didSet {
+                guard inlineDiagnostics != oldValue else { return }
+                needsDisplay = true
+                updateDiagnosticToolTips()
+            }
+        }
+
         override func scrollWheel(with event: NSEvent) {
             onUserInteraction?()
             super.scrollWheel(with: event)
@@ -796,6 +810,10 @@ struct PlatformTextView: NSViewRepresentable {
         /// frame changes instead; intentional scrolling (user input,
         /// `scrollRangeToVisible`, the restore passes) is unaffected.
         override func setFrameSize(_ newSize: NSSize) {
+            // A width change reflows the badges (they're right-aligned), so their
+            // tooltip rects must be re-registered. Runs after super sets the frame.
+            let widthChanged = abs(newSize.width - frame.width) > 0.5
+            defer { if widthChanged { updateDiagnosticToolTips() } }
             guard let clipView = superview as? NSClipView else {
                 super.setFrameSize(newSize)
                 return
@@ -833,6 +851,199 @@ struct PlatformTextView: NSViewRepresentable {
                 return true
             }
             return super.validateUserInterfaceItem(item)
+        }
+
+        // MARK: - Inline diagnostics
+
+        override func draw(_ dirtyRect: NSRect) {
+            drawDiagnosticHighlights(in: dirtyRect)
+            super.draw(dirtyRect)
+            drawDiagnosticPointMarkers(in: dirtyRect)
+            drawDiagnosticBadges(in: dirtyRect)
+        }
+
+        /// Full-width rects for every line the diagnostic spans, plus the first
+        /// spanned line's fragment rect (the badge anchor). In the text view's
+        /// flipped coordinate space. `nil` when the range no longer fits the text
+        /// (it can lag a fast edit until fresh diagnostics arrive).
+        private func diagnosticRects(for diagnostic: TypstSourceDiagnostic) -> (lines: [NSRect], badgeLine: NSRect)? {
+            guard let layoutManager, let textStorage, textStorage.length > 0 else { return nil }
+            let length = textStorage.length
+            var charRange = diagnostic.range
+            if charRange.length == 0 {
+                charRange = NSRange(location: min(charRange.location, length - 1), length: 1)
+            }
+            guard charRange.location >= 0, NSMaxRange(charRange) <= length else { return nil }
+
+            // Expand to the full source line(s), minus the trailing terminator, so a
+            // wrapped line tints all of its visual lines — not just the fragment the
+            // range happens to touch.
+            let string = textStorage.string as NSString
+            var lineStart = 0
+            var contentsEnd = 0
+            string.getLineStart(&lineStart, end: nil, contentsEnd: &contentsEnd, for: charRange)
+            let highlightRange = contentsEnd > lineStart
+                ? NSRange(location: lineStart, length: contentsEnd - lineStart)
+                : charRange
+
+            let glyphRange = layoutManager.glyphRange(forCharacterRange: highlightRange, actualCharacterRange: nil)
+            let origin = textContainerOrigin
+            var lines: [NSRect] = []
+            var badgeLine = NSRect.zero
+            layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { fragmentRect, _, _, _, _ in
+                let shifted = fragmentRect.offsetBy(dx: origin.x, dy: origin.y)
+                lines.append(NSRect(x: 0, y: shifted.minY, width: self.bounds.width, height: shifted.height))
+                badgeLine = shifted // last fragment wins → badge on the final visual line
+            }
+            guard !lines.isEmpty else { return nil }
+            return (lines, badgeLine)
+        }
+
+        private func drawDiagnosticHighlights(in dirtyRect: NSRect) {
+            for diagnostic in inlineDiagnostics {
+                guard let rects = diagnosticRects(for: diagnostic) else { continue }
+                let tint = diagnostic.severity == .error ? NSColor.systemRed : NSColor.systemYellow
+                tint.withAlphaComponent(0.10).setFill()
+                for line in rects.lines where line.intersects(dirtyRect) {
+                    NSBezierPath(rect: line).fill()
+                }
+            }
+        }
+
+        /// For point diagnostics (no usable span, `range.length <= 1`), draw a
+        /// small severity-coloured triangle at the foot of the character pointing
+        /// up at the error location — clearer than a one-character underline.
+        private func drawDiagnosticPointMarkers(in dirtyRect: NSRect) {
+            guard let layoutManager, let textContainer, let textStorage else { return }
+            let length = textStorage.length
+            let markerHeight: CGFloat = 5
+            let markerHalfWidth: CGFloat = 4.5
+            for diagnostic in inlineDiagnostics where diagnostic.range.length <= 1 {
+                let location = diagnostic.range.location
+                guard location >= 0, location < length else { continue }
+                let glyphRange = layoutManager.glyphRange(
+                    forCharacterRange: NSRange(location: location, length: 1),
+                    actualCharacterRange: nil
+                )
+                var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+                rect.origin.x += textContainerOrigin.x
+                rect.origin.y += textContainerOrigin.y
+                let centerX = rect.midX
+                let baseY = rect.maxY
+                let markerRect = NSRect(
+                    x: centerX - markerHalfWidth,
+                    y: baseY - markerHeight,
+                    width: markerHalfWidth * 2,
+                    height: markerHeight
+                )
+                guard markerRect.intersects(dirtyRect) else { continue }
+
+                let path = NSBezierPath()
+                path.move(to: NSPoint(x: centerX, y: baseY - markerHeight)) // apex (up)
+                path.line(to: NSPoint(x: centerX - markerHalfWidth, y: baseY))
+                path.line(to: NSPoint(x: centerX + markerHalfWidth, y: baseY))
+                path.close()
+                (diagnostic.severity == .error ? NSColor.systemRed : NSColor.systemYellow).setFill()
+                path.fill()
+            }
+        }
+
+        private struct DiagnosticBadgeLayout {
+            let rect: NSRect
+            let message: String
+            let isError: Bool
+            let isTruncated: Bool
+        }
+
+        private static let badgeHorizontalPadding: CGFloat = 7
+        private static let badgeVerticalPadding: CGFloat = 2
+
+        /// Measurement attributes (no colour — that doesn't affect size and is
+        /// applied per badge at draw time).
+        private func diagnosticBadgeTextAttributes() -> [NSAttributedString.Key: Any] {
+            let badgeFont = NSFont.systemFont(ofSize: max(9, (font?.pointSize ?? 12) - 2), weight: .medium)
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.lineBreakMode = .byTruncatingTail
+            return [.font: badgeFont, .paragraphStyle: paragraph]
+        }
+
+        private func diagnosticBadgeLayouts() -> [DiagnosticBadgeLayout] {
+            guard !inlineDiagnostics.isEmpty else { return [] }
+            let horizontalInset = textContainerInset.width
+            let attributes = diagnosticBadgeTextAttributes()
+            let hPad = Self.badgeHorizontalPadding
+            let vPad = Self.badgeVerticalPadding
+            let caretLine = diagnosticCaretLineRange()
+
+            return inlineDiagnostics.compactMap { diagnostic in
+                // The diagnostic on the caret's line shows as a callout above the
+                // caret instead, so suppress its inline badge here.
+                if let caretLine, self.diagnosticIsOnLine(diagnostic, line: caretLine) { return nil }
+                guard let rects = diagnosticRects(for: diagnostic) else { return nil }
+                let measured = (diagnostic.message as NSString).size(withAttributes: attributes)
+                let maxWidth = max(80, bounds.width * 0.6)
+                let fullWidth = measured.width.rounded(.up) + hPad * 2
+                let badgeWidth = min(fullWidth, maxWidth)
+                let badgeHeight = measured.height.rounded(.up) + vPad * 2
+                let rect = NSRect(
+                    x: bounds.width - horizontalInset - badgeWidth,
+                    y: rects.badgeLine.midY - badgeHeight / 2,
+                    width: badgeWidth,
+                    height: badgeHeight
+                )
+                return DiagnosticBadgeLayout(
+                    rect: rect,
+                    message: diagnostic.message,
+                    isError: diagnostic.severity == .error,
+                    isTruncated: fullWidth > maxWidth
+                )
+            }
+        }
+
+        private func drawDiagnosticBadges(in dirtyRect: NSRect) {
+            var attributes = diagnosticBadgeTextAttributes()
+            let inset = NSSize(width: Self.badgeHorizontalPadding, height: Self.badgeVerticalPadding)
+            for badge in diagnosticBadgeLayouts() where badge.rect.intersects(dirtyRect) {
+                (badge.isError ? NSColor.systemRed : NSColor.systemYellow).setFill()
+                NSBezierPath(roundedRect: badge.rect, xRadius: 5, yRadius: 5).fill()
+                attributes[.foregroundColor] = badge.isError ? NSColor.white : NSColor.black
+                (badge.message as NSString).draw(
+                    in: badge.rect.insetBy(dx: inset.width, dy: inset.height),
+                    withAttributes: attributes
+                )
+            }
+        }
+
+        /// Register a hover tooltip carrying the full text for any badge whose
+        /// message is truncated, so the rest stays readable on hover.
+        private func updateDiagnosticToolTips() {
+            removeAllToolTips()
+            for badge in diagnosticBadgeLayouts() where badge.isTruncated {
+                addToolTip(badge.rect, owner: badge.message as NSString, userData: nil)
+            }
+        }
+
+        private func diagnosticCaretLineRange() -> NSRange? {
+            guard let textStorage else { return nil }
+            let caret = min(max(0, selectedRange().location), textStorage.length)
+            return (textStorage.string as NSString).lineRange(for: NSRange(location: caret, length: 0))
+        }
+
+        private func diagnosticIsOnLine(_ diagnostic: TypstSourceDiagnostic, line: NSRange) -> Bool {
+            guard let textStorage, diagnostic.range.location <= textStorage.length else { return false }
+            let string = textStorage.string as NSString
+            let safe = NSRange(
+                location: diagnostic.range.location,
+                length: min(diagnostic.range.length, string.length - diagnostic.range.location)
+            )
+            return NSIntersectionRange(line, string.lineRange(for: safe)).length > 0
+        }
+
+        /// The caret moved: re-evaluate which badge is suppressed (the one on the
+        /// caret's line, now shown as a callout) and refresh tooltip rects.
+        func diagnosticCaretDidChange() {
+            needsDisplay = true
+            updateDiagnosticToolTips()
         }
 
         /// `NSTextView` only advertises plain-text types as pasteable when

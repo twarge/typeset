@@ -75,7 +75,7 @@ struct SourceEditor: View {
     var proseRanges: [TypstProseRange] = []
     var completions: [TypstCompletionItem] = []
     var hoverInfo: TypstHoverInfo?
-    var hoverDiagnosticSeverity: TypstDiagnosticSeverity?
+    var cursorDiagnostic: TypstSourceDiagnostic?
     var signatureHelp: TypstSignatureHelp?
     var selectedCompletionIndex = 0
     var showLineNumbers = false
@@ -159,9 +159,10 @@ struct SourceEditor: View {
                 SourceEditorLanguageOverlay(
                     completions: completions,
                     hoverInfo: hoverInfo,
-                    hoverDiagnosticSeverity: hoverDiagnosticSeverity,
+                    cursorDiagnostic: cursorDiagnostic,
                     signatureHelp: signatureHelp,
                     selectedCompletionIndex: selectedCompletionIndex,
+                    fontSize: fontSize,
                     anchor: languageOverlayAnchor,
                     onCompletionSelected: onCompletionSelected,
                     onCompletionDismiss: onCompletionDismiss
@@ -263,9 +264,10 @@ enum TypesetBundledFonts {
 private struct SourceEditorLanguageOverlay: View {
     var completions: [TypstCompletionItem]
     var hoverInfo: TypstHoverInfo?
-    var hoverDiagnosticSeverity: TypstDiagnosticSeverity?
+    var cursorDiagnostic: TypstSourceDiagnostic?
     var signatureHelp: TypstSignatureHelp?
     var selectedCompletionIndex: Int
+    var fontSize: Double
     var anchor: CGPoint
     var onCompletionSelected: (TypstCompletionItem) -> Void
     var onCompletionDismiss: () -> Void
@@ -284,15 +286,21 @@ private struct SourceEditorLanguageOverlay: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 if !completions.isEmpty {
-                    calloutPanel(arrowX: arrowX, pointsUp: placeBelow, severity: nil) {
+                    calloutPanel(arrowX: arrowX, pointsUp: placeBelow) {
                         completionPanel
                     }
                 } else if let signatureHelp {
-                    calloutPanel(arrowX: arrowX, pointsUp: placeBelow, severity: nil) {
+                    calloutPanel(arrowX: arrowX, pointsUp: placeBelow) {
                         signaturePanel(signatureHelp)
                     }
+                } else if let cursorDiagnostic {
+                    // The cursor is on a diagnostic's line, where the inline badge
+                    // would sit behind the caret — show the message here instead.
+                    calloutPanel(arrowX: arrowX, pointsUp: placeBelow, severity: cursorDiagnostic.severity) {
+                        diagnosticPanel(cursorDiagnostic.message)
+                    }
                 } else if let hoverInfo, !hoverInfo.text.isEmpty {
-                    calloutPanel(arrowX: arrowX, pointsUp: placeBelow, severity: hoverDiagnosticSeverity) {
+                    calloutPanel(arrowX: arrowX, pointsUp: placeBelow) {
                         hoverPanel(hoverInfo.text)
                     }
                 }
@@ -305,12 +313,41 @@ private struct SourceEditorLanguageOverlay: View {
 
     private var panelSize: CGSize {
         if !completions.isEmpty {
-            CGSize(width: 320, height: CGFloat(min(completions.count, 8)) * 48 + 34)
+            return CGSize(width: 320, height: CGFloat(min(completions.count, 8)) * 48 + 34)
         } else if signatureHelp != nil {
-            CGSize(width: 430, height: 108)
+            return CGSize(width: 430, height: 108)
+        } else if let cursorDiagnostic {
+            // Size to the whole message so the popover never truncates: width is
+            // fixed, height grows to fit the wrapped text.
+            let width: CGFloat = 360
+            let textHeight = diagnosticMessageHeight(cursorDiagnostic.message, width: width - 20)
+            return CGSize(width: width, height: textHeight + 16 + PopoverBubbleShape.arrowHeight)
         } else {
-            CGSize(width: 360, height: 96)
+            return CGSize(width: 360, height: 96)
         }
+    }
+
+    /// The inline badge font: two points below the editor font, floored at 9,
+    /// medium weight. Shared by the diagnostic popover so it matches the badge.
+    private var diagnosticFontSize: CGFloat {
+        max(9, CGFloat(fontSize) - 2)
+    }
+
+    /// Height of `message` wrapped to `width` in the badge font, so `panelSize`
+    /// matches what `diagnosticPanel` renders (and the popover positions right).
+    private func diagnosticMessageHeight(_ message: String, width: CGFloat) -> CGFloat {
+        #if os(macOS)
+        let font = NSFont.systemFont(ofSize: diagnosticFontSize, weight: .medium)
+        #else
+        let font = UIFont.systemFont(ofSize: diagnosticFontSize, weight: .medium)
+        #endif
+        let bounds = (message as NSString).boundingRect(
+            with: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font],
+            context: nil
+        )
+        return ceil(bounds.height)
     }
 
     private var completionPanel: some View {
@@ -360,33 +397,74 @@ private struct SourceEditorLanguageOverlay: View {
         }
     }
 
+    /// The exact system red/yellow the inline badge fills with, so the popover
+    /// matches it.
+    private static var systemRed: Color {
+        #if os(macOS)
+        Color(nsColor: .systemRed)
+        #else
+        Color(uiColor: .systemRed)
+        #endif
+    }
+
+    private static var systemYellow: Color {
+        #if os(macOS)
+        Color(nsColor: .systemYellow)
+        #else
+        Color(uiColor: .systemYellow)
+        #endif
+    }
+
     private func calloutPanel<Content: View>(
         arrowX: CGFloat,
         pointsUp: Bool,
-        severity: TypstDiagnosticSeverity?,
+        severity: TypstDiagnosticSeverity? = nil,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        let isError = severity == .error
         let bubble = PopoverBubbleShape(pointsUp: pointsUp, arrowX: arrowX)
+        let fill: AnyShapeStyle
+        let textColor: Color
+        let strokeColor: Color
+        switch severity {
+        case .error:
+            fill = AnyShapeStyle(Self.systemRed)
+            textColor = .white
+            strokeColor = Self.systemRed.opacity(0.6)
+        case .warning:
+            fill = AnyShapeStyle(Self.systemYellow)
+            textColor = .black
+            strokeColor = Color.orange.opacity(0.7)
+        default:
+            fill = AnyShapeStyle(.regularMaterial)
+            textColor = .primary
+            strokeColor = Color.secondary.opacity(0.18)
+        }
 
         return ZStack(alignment: .topLeading) {
             content()
-                .foregroundStyle(isError ? Color.white : Color.primary)
+                .foregroundStyle(textColor)
                 .padding(.top, pointsUp ? PopoverBubbleShape.arrowHeight : 0)
                 .padding(.bottom, pointsUp ? 0 : PopoverBubbleShape.arrowHeight)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background {
-            if isError {
-                bubble.fill(Color.red)
-            } else {
-                bubble.fill(.regularMaterial)
-            }
+            bubble.fill(fill)
         }
         .overlay {
-            bubble.stroke(isError ? Color.red.opacity(0.55) : Color.secondary.opacity(0.18), lineWidth: 1)
+            bubble.stroke(strokeColor, lineWidth: 1)
         }
-        .shadow(color: .black.opacity(isError ? 0.22 : 0.14), radius: 16, x: 0, y: 7)
+        .shadow(color: .black.opacity(0.16), radius: 16, x: 0, y: 7)
+    }
+
+    private func diagnosticPanel(_ message: String) -> some View {
+        // Same size, weight, and colour as the inline badge; no line limit so the
+        // full message wraps across as many lines as it needs.
+        Text(message)
+            .font(.system(size: diagnosticFontSize, weight: .medium))
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func hoverPanel(_ text: String) -> some View {

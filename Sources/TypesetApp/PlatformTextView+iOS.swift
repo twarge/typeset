@@ -80,6 +80,7 @@ struct PlatformTextView: UIViewRepresentable {
         context.coordinator.onImportExternalFile = onImportExternalFile
         context.coordinator.onImportPastedImage = onImportPastedImage
         context.coordinator.diagnostics = diagnostics
+        (textView as? PackageTextView)?.inlineDiagnostics = diagnostics
         context.coordinator.proseRanges = proseRanges
         context.coordinator.spellCheckingEnabled = spellCheckingEnabled
         context.coordinator.onTextChange = onTextChange
@@ -325,6 +326,7 @@ struct PlatformTextView: UIViewRepresentable {
             let range = textView.selectedRange
             sendSelectionChange(range)
             updateLanguageOverlayAnchor(in: textView, selectedRange: range)
+            (textView as? PackageTextView)?.rebuildDiagnosticDecorations()
         }
 
         private func sendTextChange(_ nextText: String, selectedRange range: NSRange) {
@@ -599,14 +601,14 @@ struct PlatformTextView: UIViewRepresentable {
                 }
             }
 
-            for diagnostic in diagnostics where diagnostic.range.location < textView.textStorage.length {
-                let length = diagnostic.range.length == 0 ? 1 : diagnostic.range.length
-                let range = NSRange(location: diagnostic.range.location, length: min(length, textView.textStorage.length - diagnostic.range.location))
+            // Underline only for a real span (>1 char); point diagnostics get a
+            // triangle marker in `rebuildDiagnosticDecorations` instead.
+            for diagnostic in diagnostics where diagnostic.range.length > 1 && NSMaxRange(diagnostic.range) <= textView.textStorage.length {
                 let color: UIColor = diagnostic.severity == .error ? .systemRed : .systemYellow
                 textView.textStorage.addAttributes([
                     .underlineStyle: NSUnderlineStyle.patternDot.rawValue | NSUnderlineStyle.thick.rawValue,
                     .underlineColor: color,
-                ], range: range)
+                ], range: diagnostic.range)
             }
             textView.textStorage.endEditing()
         }
@@ -905,6 +907,21 @@ struct PlatformTextView: UIViewRepresentable {
         var onCompletionKey: ((CompletionKeyAction) -> Bool)?
         var isCompletionPresented = false
 
+        /// Compiler diagnostics rendered inline. UITextView lays out (and
+        /// scrolls) text in content-space sublayers, so decorations are overlay
+        /// subviews positioned via UITextInput geometry: a faint full-width tint
+        /// behind every spanned line, and a coloured message badge on top,
+        /// right-aligned at the first spanned line's trailing edge.
+        var inlineDiagnostics: [TypstSourceDiagnostic] = [] {
+            didSet {
+                guard inlineDiagnostics != oldValue else { return }
+                rebuildDiagnosticDecorations()
+            }
+        }
+        private var diagnosticHighlightViews: [UIView] = []
+        private var diagnosticBadgeViews: [UIView] = []
+        private var lastDecorationLayoutWidth: CGFloat = 0
+
         override init(frame: CGRect, textContainer: NSTextContainer?) {
             super.init(frame: frame, textContainer: textContainer)
             // Manage the top scroll inset ourselves. UIKit's automatic
@@ -942,6 +959,171 @@ struct PlatformTextView: UIViewRepresentable {
         override func layoutSubviews() {
             super.layoutSubviews()
             applySafeAreaScrollInsets()
+            // Text reflows when the content width changes (rotation, split view);
+            // rebuild then. Otherwise the overlay subviews scroll with the
+            // content for free. Re-assert z-order every pass so text fragments
+            // added/removed during scroll don't cover the badges or sit behind
+            // the highlights.
+            if abs(bounds.width - lastDecorationLayoutWidth) > 0.5 {
+                lastDecorationLayoutWidth = bounds.width
+                rebuildDiagnosticDecorations()
+            }
+            for highlight in diagnosticHighlightViews { sendSubviewToBack(highlight) }
+            for badge in diagnosticBadgeViews { bringSubviewToFront(badge) }
+        }
+
+        func rebuildDiagnosticDecorations() {
+            for view in diagnosticHighlightViews { view.removeFromSuperview() }
+            for view in diagnosticBadgeViews { view.removeFromSuperview() }
+            diagnosticHighlightViews.removeAll()
+            diagnosticBadgeViews.removeAll()
+            guard !inlineDiagnostics.isEmpty, textStorage.length > 0 else { return }
+
+            let contentWidth = bounds.width
+            let badgeFont = UIFont.systemFont(ofSize: max(9, (font?.pointSize ?? 12) - 2), weight: .medium)
+            let horizontalPadding: CGFloat = 7
+            let verticalPadding: CGFloat = 2
+            let caretLine = diagnosticCaretLineRange()
+
+            for diagnostic in inlineDiagnostics {
+                guard let geometry = diagnosticGeometry(for: diagnostic) else { continue }
+                let isError = diagnostic.severity == .error
+
+                let tint = (isError ? UIColor.systemRed : .systemYellow).withAlphaComponent(0.10)
+                for lineRect in geometry.lines {
+                    let highlight = UIView(frame: lineRect)
+                    highlight.backgroundColor = tint
+                    highlight.isUserInteractionEnabled = false
+                    insertSubview(highlight, at: 0)
+                    diagnosticHighlightViews.append(highlight)
+                }
+
+                // Point diagnostics (no usable span) get a triangle marker at the
+                // foot of the character instead of a one-character underline.
+                if diagnostic.range.length <= 1, let charRect = diagnosticPointMarkerRect(for: diagnostic) {
+                    let marker = makeDiagnosticTriangle(charRect: charRect, isError: isError)
+                    addSubview(marker)
+                    diagnosticBadgeViews.append(marker)
+                }
+
+                // The diagnostic on the caret's line shows as a callout above the
+                // caret instead; keep its highlight but skip the badge.
+                if let caretLine, diagnosticIsOnLine(diagnostic, line: caretLine) { continue }
+
+                let label = UILabel()
+                label.text = diagnostic.message
+                label.font = badgeFont
+                label.textColor = isError ? .white : .black
+                label.lineBreakMode = .byTruncatingTail
+                let measured = label.sizeThatFits(CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
+                let maxWidth = max(80, contentWidth * 0.6)
+                let fullWidth = measured.width.rounded(.up) + horizontalPadding * 2
+                let badgeWidth = min(fullWidth, maxWidth)
+                let badgeHeight = measured.height.rounded(.up) + verticalPadding * 2
+                let badge = UIView(frame: CGRect(
+                    x: contentWidth - textContainerInset.right - badgeWidth,
+                    y: geometry.badgeLine.midY - badgeHeight / 2,
+                    width: badgeWidth,
+                    height: badgeHeight
+                ))
+                badge.backgroundColor = isError ? UIColor.systemRed : .systemYellow
+                badge.layer.cornerRadius = 5
+                badge.isUserInteractionEnabled = false
+                label.frame = badge.bounds.insetBy(dx: horizontalPadding, dy: verticalPadding)
+                label.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                badge.addSubview(label)
+                if fullWidth > maxWidth {
+                    // Full message on pointer hover (iPad) when the badge truncates.
+                    badge.isUserInteractionEnabled = true
+                    badge.addInteraction(UIToolTipInteraction(defaultToolTip: diagnostic.message))
+                }
+                addSubview(badge)
+                diagnosticBadgeViews.append(badge)
+            }
+        }
+
+        private func diagnosticCaretLineRange() -> NSRange? {
+            let caret = min(max(0, selectedRange.location), textStorage.length)
+            return (textStorage.string as NSString).lineRange(for: NSRange(location: caret, length: 0))
+        }
+
+        private func diagnosticIsOnLine(_ diagnostic: TypstSourceDiagnostic, line: NSRange) -> Bool {
+            guard diagnostic.range.location <= textStorage.length else { return false }
+            let string = textStorage.string as NSString
+            let safe = NSRange(
+                location: diagnostic.range.location,
+                length: min(diagnostic.range.length, string.length - diagnostic.range.location)
+            )
+            return NSIntersectionRange(line, string.lineRange(for: safe)).length > 0
+        }
+
+        private func diagnosticPointMarkerRect(for diagnostic: TypstSourceDiagnostic) -> CGRect? {
+            let location = diagnostic.range.location
+            guard location >= 0, location < textStorage.length,
+                  let start = position(from: beginningOfDocument, offset: location),
+                  let end = position(from: start, offset: 1),
+                  let range = textRange(from: start, to: end) else { return nil }
+            let rect = firstRect(for: range)
+            guard rect.width.isFinite, rect.height > 0, rect.minY.isFinite else { return nil }
+            return rect
+        }
+
+        private func makeDiagnosticTriangle(charRect: CGRect, isError: Bool) -> UIView {
+            let markerHeight: CGFloat = 5
+            let markerHalfWidth: CGFloat = 4.5
+            let marker = UIView(frame: CGRect(
+                x: charRect.midX - markerHalfWidth,
+                y: charRect.maxY - markerHeight,
+                width: markerHalfWidth * 2,
+                height: markerHeight
+            ))
+            marker.backgroundColor = .clear
+            marker.isUserInteractionEnabled = false
+            let triangle = UIBezierPath()
+            triangle.move(to: CGPoint(x: markerHalfWidth, y: 0)) // apex (up)
+            triangle.addLine(to: CGPoint(x: 0, y: markerHeight))
+            triangle.addLine(to: CGPoint(x: markerHalfWidth * 2, y: markerHeight))
+            triangle.close()
+            let shape = CAShapeLayer()
+            shape.path = triangle.cgPath
+            shape.fillColor = (isError ? UIColor.systemRed : .systemYellow).cgColor
+            marker.layer.addSublayer(shape)
+            return marker
+        }
+
+        /// Full-width rects for every line the diagnostic spans plus the first
+        /// line's rect (badge anchor), in content coordinates. Uses UITextInput
+        /// geometry, so it works whether the view is backed by TextKit 1 or 2.
+        private func diagnosticGeometry(for diagnostic: TypstSourceDiagnostic) -> (lines: [CGRect], badgeLine: CGRect)? {
+            let length = textStorage.length
+            guard length > 0, diagnostic.range.location >= 0, diagnostic.range.location < length else { return nil }
+            let baseLen = min(diagnostic.range.length == 0 ? 1 : diagnostic.range.length, length - diagnostic.range.location)
+            let charRange = NSRange(location: diagnostic.range.location, length: baseLen)
+
+            // Expand to the full source line(s), minus the trailing terminator, so a
+            // wrapped line tints all of its visual lines.
+            let string = textStorage.string as NSString
+            var lineStart = 0
+            var contentsEnd = 0
+            string.getLineStart(&lineStart, end: nil, contentsEnd: &contentsEnd, for: charRange)
+            let highlightRange = contentsEnd > lineStart
+                ? NSRange(location: lineStart, length: contentsEnd - lineStart)
+                : charRange
+
+            guard let start = position(from: beginningOfDocument, offset: highlightRange.location),
+                  let end = position(from: start, offset: highlightRange.length),
+                  let range = textRange(from: start, to: end) else { return nil }
+            let rects = selectionRects(for: range)
+                .map(\.rect)
+                .filter { $0.height > 0 && $0.minY.isFinite && $0.width.isFinite }
+            guard !rects.isEmpty else { return nil }
+            var lines: [CGRect] = []
+            for rect in rects where !lines.contains(where: { abs($0.minY - rect.minY) < 1 }) {
+                lines.append(CGRect(x: 0, y: rect.minY, width: bounds.width, height: rect.height))
+            }
+            // Badge on the last (bottom-most) visual line.
+            guard let badgeLine = rects.max(by: { $0.minY < $1.minY }) else { return nil }
+            return (lines, badgeLine)
         }
 
         private func applySafeAreaScrollInsets() {

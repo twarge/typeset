@@ -41,6 +41,7 @@ struct TypesetWorkspaceView: View {
     @State private var selectedPath: String = ""
     @State private var selectedFolderPath: String?
     @State private var sourceText: String = ""
+    @State private var sourceCaretLocation = 0
     @State private var previewPDF: PDFPreview?
     @State private var previewRevision = 0
     @State private var didForceInitialPreviewRecompile = false
@@ -67,7 +68,6 @@ struct TypesetWorkspaceView: View {
     @State private var completionItems: [TypstCompletionItem] = []
     @State private var selectedCompletionIndex = 0
     @State private var hoverInfo: TypstHoverInfo?
-    @State private var hoverDiagnosticSeverity: TypstDiagnosticSeverity?
     @State private var signatureHelp: TypstSignatureHelp?
     @State private var languageRequestID = UUID()
     @State private var languageRequestTask: Task<Void, Never>?
@@ -841,7 +841,7 @@ struct TypesetWorkspaceView: View {
                     proseRanges: sourceProseRanges[selectedPath] ?? [],
                     completions: completionItems,
                     hoverInfo: hoverInfo,
-                    hoverDiagnosticSeverity: hoverDiagnosticSeverity,
+                    cursorDiagnostic: cursorLineDiagnostic,
                     signatureHelp: signatureHelp,
                     selectedCompletionIndex: selectedCompletionIndex,
                     showLineNumbers: showLineNumbers,
@@ -1070,7 +1070,6 @@ struct TypesetWorkspaceView: View {
             }
             clearCompletions()
             hoverInfo = nil
-            hoverDiagnosticSeverity = nil
             signatureHelp = nil
         } catch {
             recordLog("Selection failed", message: error.localizedDescription, level: .error, present: true)
@@ -1091,6 +1090,7 @@ struct TypesetWorkspaceView: View {
         let path = selectedPath
         DispatchQueue.main.async {
             guard selectedPath == path else { return }
+            sourceCaretLocation = range.location
             applyEditorSelection(range, for: path, allowAutomaticCompletion: false)
         }
     }
@@ -1159,12 +1159,18 @@ struct TypesetWorkspaceView: View {
     }
 
     private func handleEditorScrollFraction(_ fraction: Double) {
-        pendingScrollFraction = fraction
-        scrollSaveTask?.cancel()
-        scrollSaveTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(400))
-            guard !Task.isCancelled else { return }
-            flushPendingScrollFraction()
+        // The editor reports this from the scroll view's bounds-change
+        // notification, which can fire synchronously during a SwiftUI update
+        // (e.g. a text edit reflows the content). Hop to the next main-actor turn
+        // so the debounce state is never written during view update.
+        Task { @MainActor in
+            pendingScrollFraction = fraction
+            scrollSaveTask?.cancel()
+            scrollSaveTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(400))
+                guard !Task.isCancelled else { return }
+                flushPendingScrollFraction()
+            }
         }
     }
 
@@ -1409,7 +1415,9 @@ struct TypesetWorkspaceView: View {
             previewRevision += 1
             previewPDF = preview
             logEntries.removeAll()
-            sourceDiagnostics.removeAll()
+            // A clean compile can still carry warnings — show those (and clear any
+            // stale errors) rather than dropping all diagnostics.
+            mergeDiagnostics(compilerDiagnostics(from: preview.diagnosticsMessage))
             if !didForceInitialPreviewRecompile {
                 didForceInitialPreviewRecompile = true
                 previewNeedsRefresh = true
@@ -1492,14 +1500,18 @@ struct TypesetWorkspaceView: View {
     }
 
     private func refreshLanguageServiceAnnotations() async {
-        let diagnostics = await languageService.diagnostics()
+        // Inline diagnostics come solely from the preview compile — the
+        // authoritative Typst output, which persists until the next compile.
+        // The language server's diagnostics were merged here too, but it runs on
+        // every keystroke and returns an empty set while re-analyzing, so it
+        // wiped the compile's diagnostics between compiles: the badges flashed
+        // in and out instead of persisting.
         let selectedProse = await languageService.proseRanges(
             path: selectedPath,
             ignoringCommandsAndArguments: spellCheckingIgnoresCommands
         )
         let symbols = await languageService.documentSymbols(path: selectedPath)
         await MainActor.run {
-            mergeDiagnostics(diagnostics)
             sourceProseRanges[selectedPath] = selectedProse
             documentSymbols = symbols
         }
@@ -1616,7 +1628,6 @@ struct TypesetWorkspaceView: View {
             in: sourceText
         )
         let text = sourceText
-        let diagnostics = sourceDiagnostics[path] ?? []
         languageRequestTask = Task {
             if !forceCompletion {
                 try? await Task.sleep(for: .milliseconds(140))
@@ -1629,11 +1640,10 @@ struct TypesetWorkspaceView: View {
             let rawCompletions = shouldComplete ? await languageService.completions(path: path, utf16Offset: range.location) : []
             let completions = Self.filteredCompletions(rawCompletions, in: text, at: range.location)
             typesetLSPDebug("async completions raw=\(rawCompletions.count) filtered=\(completions.count)")
-            let diagnosticHover = completions.isEmpty && !forceCompletion ? Self.diagnosticHover(at: range.location, in: text, diagnostics: diagnostics) : nil
-            let signature = completions.isEmpty && diagnosticHover == nil ? await languageService.signatureHelp(path: path, utf16Offset: range.location) : nil
-            typesetLSPDebug("async signature=\(signature?.signatures.first?.label ?? "none") diagnosticHover=\(diagnosticHover?.info.text ?? "none")")
+            let signature = completions.isEmpty ? await languageService.signatureHelp(path: path, utf16Offset: range.location) : nil
+            typesetLSPDebug("async signature=\(signature?.signatures.first?.label ?? "none")")
             let hover: TypstHoverInfo?
-            if forceCompletion || !completions.isEmpty || diagnosticHover != nil || signature != nil {
+            if forceCompletion || !completions.isEmpty || signature != nil {
                 hover = nil
             } else {
                 try? await Task.sleep(for: .milliseconds(260))
@@ -1646,8 +1656,7 @@ struct TypesetWorkspaceView: View {
                 completionItems = completions
                 selectedCompletionIndex = 0
                 signatureHelp = signature
-                hoverInfo = diagnosticHover?.info ?? Self.filteredHover(hover, in: text)
-                hoverDiagnosticSeverity = diagnosticHover?.severity
+                hoverInfo = Self.filteredHover(hover, in: text)
             }
         }
     }
@@ -1674,20 +1683,16 @@ struct TypesetWorkspaceView: View {
         let rawCompletions = shouldComplete ? await languageService.completions(path: path, utf16Offset: range.location) : []
         let completions = Self.filteredCompletions(rawCompletions, in: text, at: range.location)
         typesetLSPDebug("direct completions raw=\(rawCompletions.count) filtered=\(completions.count)")
-        let diagnosticHover = completions.isEmpty && !forceCompletion
-            ? Self.diagnosticHover(at: range.location, in: text, diagnostics: sourceDiagnostics[path] ?? [])
-            : nil
-        let signature = completions.isEmpty && diagnosticHover == nil ? await languageService.signatureHelp(path: path, utf16Offset: range.location) : nil
-        typesetLSPDebug("direct signature=\(signature?.signatures.first?.label ?? "none") diagnosticHover=\(diagnosticHover?.info.text ?? "none")")
-        let hover = completions.isEmpty && diagnosticHover == nil && signature == nil && !forceCompletion ? await languageService.hover(path: path, utf16Offset: range.location) : nil
+        let signature = completions.isEmpty ? await languageService.signatureHelp(path: path, utf16Offset: range.location) : nil
+        typesetLSPDebug("direct signature=\(signature?.signatures.first?.label ?? "none")")
+        let hover = completions.isEmpty && signature == nil && !forceCompletion ? await languageService.hover(path: path, utf16Offset: range.location) : nil
         typesetLSPDebug("direct hover=\(hover?.text ?? "none")")
         await MainActor.run {
             guard languageRequestID == requestID, selectedPath == path else { return }
             completionItems = completions
             selectedCompletionIndex = 0
             signatureHelp = signature
-            hoverInfo = diagnosticHover?.info ?? Self.filteredHover(hover, in: text)
-            hoverDiagnosticSeverity = diagnosticHover?.severity
+            hoverInfo = Self.filteredHover(hover, in: text)
         }
     }
 
@@ -1699,33 +1704,6 @@ struct TypesetWorkspaceView: View {
         return isCodeContext(for: hover.range, in: text) ? hover : nil
     }
 
-    private static func diagnosticHover(at location: Int, in text: String, diagnostics: [TypstSourceDiagnostic]) -> (info: TypstHoverInfo, severity: TypstDiagnosticSeverity)? {
-        let nsText = text as NSString
-        let clampedLocation = min(max(0, location), nsText.length)
-        guard let diagnostic = diagnostics.first(where: { diagnosticContains(location: clampedLocation, diagnostic: $0, in: nsText) }) else {
-            return nil
-        }
-
-        return (
-            info: TypstHoverInfo(
-                range: diagnostic.range,
-                text: diagnostic.message
-            ),
-            severity: diagnostic.severity
-        )
-    }
-
-    private static func diagnosticContains(location: Int, diagnostic: TypstSourceDiagnostic, in nsText: NSString) -> Bool {
-        let diagnosticLocation = min(max(0, diagnostic.range.location), nsText.length)
-        let diagnosticLength = min(max(1, diagnostic.range.length), max(0, nsText.length - diagnosticLocation))
-        let diagnosticRange = NSRange(location: diagnosticLocation, length: diagnosticLength)
-        if NSLocationInRange(location, diagnosticRange) || location == NSMaxRange(diagnosticRange) {
-            return true
-        }
-
-        let lineRange = nsText.lineRange(for: NSRange(location: diagnosticLocation, length: 0))
-        return NSLocationInRange(location, lineRange) || location == NSMaxRange(lineRange)
-    }
 
     private func insertCompletion(_ item: TypstCompletionItem) {
         guard selectedFile?.isTextEditable == true else { return }
@@ -1865,7 +1843,6 @@ struct TypesetWorkspaceView: View {
         selectedRange = targetRange
         clearCompletions()
         hoverInfo = nil
-        hoverDiagnosticSeverity = nil
         signatureHelp = nil
     }
 
@@ -1909,7 +1886,6 @@ struct TypesetWorkspaceView: View {
         selectedCompletionIndex = 0
         signatureHelp = nil
         hoverInfo = nil
-        hoverDiagnosticSeverity = nil
     }
 
     private func seekToDiagnostic(_ diagnostic: TypstSourceDiagnostic) {
@@ -2093,6 +2069,26 @@ struct TypesetWorkspaceView: View {
 
     private static func isCompletionCharacter(_ character: unichar) -> Bool {
         CharacterSet.alphanumerics.contains(UnicodeScalar(character) ?? "\0") || character == 95 || character == 45
+    }
+
+    /// The first diagnostic whose line(s) the caret currently sits on. The editor
+    /// shows this one as a callout above the caret instead of an inline badge, so
+    /// the badge never sits behind the caret. The text view suppresses the matching
+    /// badge using the same caret-line test.
+    private var cursorLineDiagnostic: TypstSourceDiagnostic? {
+        let diagnostics = sourceDiagnostics[selectedPath] ?? []
+        guard !diagnostics.isEmpty else { return nil }
+        let ns = sourceText as NSString
+        let caret = min(max(0, sourceCaretLocation), ns.length)
+        let caretLine = ns.lineRange(for: NSRange(location: caret, length: 0))
+        return diagnostics.first { diagnostic in
+            guard diagnostic.range.location <= ns.length else { return false }
+            let safe = NSRange(
+                location: diagnostic.range.location,
+                length: min(diagnostic.range.length, ns.length - diagnostic.range.location)
+            )
+            return NSIntersectionRange(caretLine, ns.lineRange(for: safe)).length > 0
+        }
     }
 
     private func mergeDiagnostics(_ diagnostics: [TypstSourceDiagnostic]) {
@@ -2625,7 +2621,6 @@ struct TypesetWorkspaceView: View {
         guard didReconcile else { return }
         clearCompletions()
         hoverInfo = nil
-        hoverDiagnosticSeverity = nil
         signatureHelp = nil
         syncLanguageServiceWorkspace()
         refreshPreview()

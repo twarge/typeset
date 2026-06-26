@@ -33,10 +33,15 @@ public protocol TypstRendering: Sendable {
 public struct PDFPreview: Equatable, Sendable {
     public var data: Data
     public var sourceRects: [PreviewSourceRect]
+    /// Compiler diagnostics from this render, formatted as
+    /// `file:line:column: severity: message` lines (empty when there were none).
+    /// Carried so warnings surface even when the compile succeeds.
+    public var diagnosticsMessage: String
 
-    public init(data: Data, sourceRects: [PreviewSourceRect] = []) {
+    public init(data: Data, sourceRects: [PreviewSourceRect] = [], diagnosticsMessage: String = "") {
         self.data = data
         self.sourceRects = sourceRects
+        self.diagnosticsMessage = diagnosticsMessage
     }
 }
 
@@ -194,7 +199,7 @@ public struct TypstRenderer: TypstRendering {
         let sourceRects = response.sourceRects.compactMap { sourceRect in
             previewSourceRect(from: sourceRect, package: package)
         }
-        return PDFPreview(data: data, sourceRects: sourceRects)
+        return PDFPreview(data: data, sourceRects: sourceRects, diagnosticsMessage: response.diagnosticsMessage)
         #elseif os(macOS)
         let workspace = try TemporaryPackageWriter().write(package: package)
         defer { try? FileManager.default.removeItem(at: workspace) }
@@ -371,14 +376,19 @@ private struct EmbeddedTypstRenderResponse: Decodable, Sendable {
         sourceRects = try container.decodeIfPresent([EmbeddedTypstSourceRect].self, forKey: .sourceRects) ?? []
     }
 
+    /// All diagnostics formatted as `file:line:column: severity: message` lines,
+    /// regardless of `ok` — so warnings can be surfaced on a successful compile.
+    var diagnosticsMessage: String {
+        diagnostics
+            .map { "\($0.file):\($0.line):\($0.column): \($0.severity): \($0.message)" }
+            .joined(separator: "\n")
+    }
+
     func failureMessage(fallback: String) -> String {
         if let message, !message.isEmpty {
             return message
         }
-        let diagnosticMessage = diagnostics
-            .map { "\($0.file):\($0.line):\($0.column): \($0.severity): \($0.message)" }
-            .joined(separator: "\n")
-        return diagnosticMessage.isEmpty ? fallback : diagnosticMessage
+        return diagnosticsMessage.isEmpty ? fallback : diagnosticsMessage
     }
 }
 
