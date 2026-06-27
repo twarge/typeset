@@ -299,12 +299,22 @@ extension View {
     }
 
     @ViewBuilder
-    func platformTransparentToolbarBackground() -> some View {
+    func platformToolbarChrome(_ preference: WindowChromePreference) -> some View {
         #if os(macOS)
-        self.toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        switch preference {
+        case .heavy:
+            self
+                .toolbarBackground(.bar, for: .windowToolbar)
+                .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
+        case .none:
+            self.toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        }
         #else
+        // Use the native translucent (blurred) navigation and tab bar backgrounds.
+        // Forcing `.bar` + `.visible` painted a solid bar over the system blur, and
+        // distraction-free hiding on iOS is handled separately via toolbar
+        // visibility, so the chrome preference doesn't need to alter the material.
         self
         #endif
     }
 }
-

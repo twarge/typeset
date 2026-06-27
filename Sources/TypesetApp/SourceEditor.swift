@@ -80,6 +80,7 @@ struct SourceEditor: View {
     var selectedCompletionIndex = 0
     var showLineNumbers = false
     var spellCheckingEnabled = false
+    var fixedTopContentInset: CGFloat?
     var onTextChange: (String, NSRange) -> Void = { _, _ in }
     var onSelectionChange: (NSRange) -> Void = { _ in }
     var onCompletionSelected: (TypstCompletionItem) -> Void = { _ in }
@@ -113,6 +114,7 @@ struct SourceEditor: View {
             proseRanges: proseRanges,
             showLineNumbers: showLineNumbers,
             spellCheckingEnabled: spellCheckingEnabled,
+            fixedTopContentInset: fixedTopContentInset,
             onTextChange: onTextChange,
             onSelectionChange: onSelectionChange,
             isCompletionPresented: !completions.isEmpty,
@@ -851,4 +853,3 @@ enum SourceEditorDropSnippet {
             .replacingOccurrences(of: "\"", with: "\\\"")
     }
 }
-

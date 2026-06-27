@@ -28,6 +28,8 @@ struct WorkspaceSettingsPane: View {
     @Binding var autoExportPDFOnClose: Bool
     @Binding var updateReferencesOnRename: Bool
     @Binding var previewRenderWarmupDelay: Double
+    @Binding var previewAutoRetriggerDelay: Double
+    @Binding var windowChromePreference: WindowChromePreference
     @Binding var lspDebugLoggingEnabled: Bool
     // Shares the editor's persisted font-size key, so this control and any
     // open editor stay in sync.
@@ -94,6 +96,17 @@ struct WorkspaceSettingsPane: View {
             #endif
 
             VStack(alignment: .leading, spacing: 10) {
+                Text("Editor")
+                    .font(.subheadline.weight(.semibold))
+
+                Toggle("Show Line Numbers", isOn: $showLineNumbers)
+                Toggle("Check Spelling in Prose", isOn: $spellCheckingEnabled)
+                Toggle("Ignore Typst Commands and Arguments", isOn: $spellCheckingIgnoresCommands)
+                    .disabled(!spellCheckingEnabled)
+                Toggle("Update References When Renaming or Moving Files", isOn: $updateReferencesOnRename)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
                 Text("New Documents")
                     .font(.subheadline.weight(.semibold))
 
@@ -107,47 +120,61 @@ struct WorkspaceSettingsPane: View {
             #if os(macOS)
             // Theme and split-orientation controls are macOS-only. iOS follows
             // the system appearance and always shows panes side by side.
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Theme")
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Application")
                     .font(.subheadline.weight(.semibold))
 
-                Picker("Theme", selection: $themePreference) {
-                    ForEach(ThemePreference.allCases) { preference in
-                        Text(preference.title)
-                            .tag(preference)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Theme")
+                        .font(.subheadline)
+                    Picker("Theme", selection: $themePreference) {
+                        ForEach(ThemePreference.allCases) { preference in
+                            Text(preference.title)
+                                .tag(preference)
+                        }
                     }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
                 }
-                .pickerStyle(.segmented)
-            }
 
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Split Layout")
-                    .font(.subheadline.weight(.semibold))
-
-                Picker("Split Layout", selection: $splitBehavior) {
-                    ForEach(SplitBehavior.allCases) { behavior in
-                        Label(behavior.title, systemImage: behavior.symbolName)
-                            .tag(behavior)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Split Layout")
+                        .font(.subheadline)
+                    Picker("Split Layout", selection: $splitBehavior) {
+                        ForEach(SplitBehavior.allCases) { behavior in
+                            Label(behavior.title, systemImage: behavior.symbolName)
+                                .tag(behavior)
+                        }
                     }
-                }
-                .pickerStyle(.segmented)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Tall Window Threshold")
-                        .font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Text(tallSplitThreshold, format: .number.precision(.fractionLength(2)))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
                 }
 
-                Slider(value: $tallSplitThreshold, in: 0.8...1.8, step: 0.02)
-                    .disabled(splitBehavior != .automatic)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Tall Window Threshold")
+                            .font(.subheadline)
+                        Spacer()
+                        Text(tallSplitThreshold, format: .number.precision(.fractionLength(2)))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Slider(value: $tallSplitThreshold, in: 0.8...1.8, step: 0.02)
+                        .disabled(splitBehavior != .automatic)
+                }
+                .opacity(splitBehavior == .automatic ? 1 : 0.45)
             }
-            .opacity(splitBehavior == .automatic ? 1 : 0.45)
             #endif
+
+            VStack(alignment: .leading, spacing: 10) {
+                Toggle("Distraction-Free Mode", isOn: distractionFreeModeBinding)
+
+                Text("Hide the toolbar and title bar until you move the pointer to the top of the window.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
@@ -207,17 +234,6 @@ struct WorkspaceSettingsPane: View {
                     .foregroundStyle(.secondary)
             }
 
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Editor")
-                    .font(.subheadline.weight(.semibold))
-
-                Toggle("Show Line Numbers", isOn: $showLineNumbers)
-                Toggle("Check Spelling in Prose", isOn: $spellCheckingEnabled)
-                Toggle("Ignore Typst Commands and Arguments", isOn: $spellCheckingIgnoresCommands)
-                    .disabled(!spellCheckingEnabled)
-                Toggle("Update References When Renaming or Moving Files", isOn: $updateReferencesOnRename)
-            }
-
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("Preview Buffer Delay")
@@ -229,6 +245,29 @@ struct WorkspaceSettingsPane: View {
                 }
 
                 Slider(value: $previewRenderWarmupDelay, in: 0...1, step: 0.05)
+
+                Text("How long to wait after you stop typing before recompiling the preview. Higher values recompile less often while you edit.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Recompile Delay")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Text("\(previewAutoRetriggerDelay, specifier: "%.2f")s")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+
+                Slider(value: $previewAutoRetriggerDelay, in: 0...1, step: 0.05)
+
+                Text("When Auto Preview is on, how long to wait after each compile before automatically recompiling again.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             #if os(macOS)
@@ -239,13 +278,6 @@ struct WorkspaceSettingsPane: View {
                 Toggle("Export PDF on Close", isOn: $autoExportPDFOnClose)
             }
             #endif
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Developer")
-                    .font(.subheadline.weight(.semibold))
-
-                Toggle("Log LSP Requests", isOn: $lspDebugLoggingEnabled)
-            }
 
             #if os(macOS)
             folderAccessSection
@@ -260,6 +292,13 @@ struct WorkspaceSettingsPane: View {
                     .font(.footnote)
             }
         }
+    }
+
+    private var distractionFreeModeBinding: Binding<Bool> {
+        Binding(
+            get: { windowChromePreference.usesDistractionFreeChrome },
+            set: { windowChromePreference = $0 ? .none : .heavy }
+        )
     }
 
     #if os(macOS)
@@ -316,4 +355,3 @@ struct WorkspaceSettingsPane: View {
     }
     #endif
 }
-

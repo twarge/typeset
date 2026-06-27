@@ -30,6 +30,7 @@ struct PlatformTextView: UIViewRepresentable {
     var proseRanges: [TypstProseRange]
     var showLineNumbers: Bool
     var spellCheckingEnabled: Bool
+    var fixedTopContentInset: CGFloat?
     var onTextChange: (String, NSRange) -> Void
     var onSelectionChange: (NSRange) -> Void
     var isCompletionPresented: Bool
@@ -106,6 +107,7 @@ struct PlatformTextView: UIViewRepresentable {
         context.coordinator.isPackageDropTargeted = $isPackageDropTargeted
         context.coordinator.updateFontSize(fontSize, in: textView)
         textView.textContainerInset = UIEdgeInsets(top: 18, left: 14, bottom: 18, right: 14)
+        (textView as? PackageTextView)?.fixedTopContentInset = fixedTopContentInset ?? 0
         let annotationsChanged = context.coordinator.consumeAnnotationChanges(
             diagnostics: diagnostics,
             proseRanges: proseRanges,
@@ -922,6 +924,15 @@ struct PlatformTextView: UIViewRepresentable {
         private var diagnosticBadgeViews: [UIView] = []
         private var lastDecorationLayoutWidth: CGFloat = 0
 
+        /// A floor applied over the safe-area top inset, so distraction-free mode
+        /// pushes the code below the windowed-app controls overlaying the top.
+        var fixedTopContentInset: CGFloat = 0 {
+            didSet {
+                guard fixedTopContentInset != oldValue else { return }
+                applySafeAreaScrollInsets()
+            }
+        }
+
         override init(frame: CGRect, textContainer: NSTextContainer?) {
             super.init(frame: frame, textContainer: textContainer)
             // Manage the top scroll inset ourselves. UIKit's automatic
@@ -1127,7 +1138,7 @@ struct PlatformTextView: UIViewRepresentable {
         }
 
         private func applySafeAreaScrollInsets() {
-            let desiredTop = safeAreaInsets.top
+            let desiredTop = max(safeAreaInsets.top, fixedTopContentInset)
             let desiredBottom = safeAreaInsets.bottom
 
             if abs(contentInset.top - desiredTop) > 0.5 ||

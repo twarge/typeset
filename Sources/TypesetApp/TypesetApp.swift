@@ -18,6 +18,7 @@ struct TypesetApp: App {
             "sourceEditor.spellCheckingIgnoresCommands": true,
             "export.autoPDFOnClose": false,
             "preview.renderWarmupDelay": 0.5,
+            "preview.autoRetriggerDelay": 0.5,
             "developer.lspDebugLogging": false
         ])
     }

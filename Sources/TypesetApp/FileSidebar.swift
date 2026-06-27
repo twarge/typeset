@@ -1066,11 +1066,7 @@ private extension View {
 
     @ViewBuilder
     func platformSidebarToolbarBackground() -> some View {
-        #if os(macOS)
-        self
-        #else
         self.background(.bar)
-        #endif
     }
 
     @ViewBuilder

@@ -50,14 +50,26 @@ struct TypesetWorkspaceView: View {
     @State private var exportDocument = PDFExportDocument()
     @State private var exportDefaultFilename = "Typeset Export.pdf"
     @State private var isExportPresented = false
+    #if os(macOS)
+    // Mirrors the AppKit chrome auto-hide state so the toolbar's SwiftUI contents
+    // fade with it. The toolbar itself stays present (keeping the system document
+    // title suppressed); only its contents dim to transparent.
+    @State private var distractionFreeChromeHidden = false
+    #endif
     #if os(iOS)
     @State private var pdfShareItem: PDFShareItem?
+    @State private var hasSeenIOSDistractionFreePointer = false
+    @State private var isIOSDistractionFreePointerInRevealArea = false
+    @State private var iosDistractionFreeLastHoverY: CGFloat?
+    @State private var iosDistractionFreeHideTask: Task<Void, Never>?
     #endif
     @State private var isLogPresented = false
     @State private var diagnosticRunID = UUID()
     @State private var isPreviewCompiling = false
     @State private var previewNeedsRefresh = false
     @State private var previewCompileTask: Task<Void, Never>?
+    @State private var previewAutoRetriggerTask: Task<Void, Never>?
+    @State private var isAutoPreviewEnabled = false
     // Bumped whenever a compile is superseded or stopped; an in-flight compile
     // whose token no longer matches has its result discarded.
     @State private var previewCompileToken = 0
@@ -136,11 +148,30 @@ struct TypesetWorkspaceView: View {
     @AppStorage("sourceEditor.updateReferencesOnRename") private var updateReferencesOnRename = true
     @AppStorage("export.autoPDFOnClose") private var autoExportPDFOnClose = false
     @AppStorage("preview.renderWarmupDelay") private var previewRenderWarmupDelay = 0.5
+    @AppStorage("preview.autoRetriggerDelay") private var previewAutoRetriggerDelay = 0.5
     @AppStorage("developer.lspDebugLogging") private var lspDebugLoggingEnabled = false
+    @AppStorage("workspace.windowChrome") private var windowChromeRaw = WindowChromePreference.heavy.rawValue
+    @AppStorage("workspace.distractionFreeWindowChrome") private var legacyDistractionFreeWindowChrome = false
 
     private let renderer = TypstRenderer()
     private let languageService = TypstLanguageServiceFactory.make()
     private let tinymistWorkspaceStore = TinymistWorkspaceStore()
+    #if os(macOS)
+    // Title-bar + toolbar height. The editor pane reaches the top of the window
+    // (it ignores the top safe area), so this pins how far down the code starts:
+    // it clears the toolbar in normal mode and is used identically in
+    // distraction-free, so the code never shifts as the toolbar auto-hides.
+    private static let macOSEditorTopInset: CGFloat = 52
+    #endif
+    #if os(iOS)
+    private static let iosDistractionFreeRevealHeight: CGFloat = 112
+    private static let iosDistractionFreeHideHeight: CGFloat = 152
+    private static let iosDistractionFreeHideDelay: UInt64 = 220_000_000
+    // Distraction-free hides the navigation bar, so the editor reaches the top of
+    // the window where the (windowed) iPad controls overlay it. Float the content
+    // down at least this far to clear them.
+    private static let iosDistractionFreeEditorTopInset: CGFloat = 50
+    #endif
 
     private var hasErrorLogs: Bool {
         logEntries.contains { $0.isError }
@@ -152,6 +183,10 @@ struct TypesetWorkspaceView: View {
             #if os(macOS)
             .background(AppAppearanceConfigurator(themePreference: themePreference))
             .background(SplitViewStateConfigurator())
+            .background(DistractionFreeWindowChromeConfigurator(
+                isEnabled: isDistractionFreeWindowChrome,
+                onChromeHiddenChange: { distractionFreeChromeHidden = $0 }
+            ))
             #endif
             .platformPreferredColorScheme(themePreference.colorScheme)
     }
@@ -164,15 +199,36 @@ struct TypesetWorkspaceView: View {
             fileSidebar(dismissAfterSelect: false)
                 .navigationTitle("Package")
                 .navigationSplitViewColumnWidth(min: 160, ideal: 320, max: 480)
+                // The sidebar toggle is owned by the sidebar column, so this only
+                // takes effect here (not on the detail). The sidebar still toggles
+                // from the View menu / ⌃⌘S (SidebarCommands).
+                .toolbar(removing: .sidebarToggle)
         } detail: {
             detailContent
-                .navigationTitle(selectedPath.isEmpty ? "Typeset" : selectedPath)
+                .navigationSubtitle(documentSubtitle)
                 .toolbar { workspaceToolbarContent }
+                // Hide the whole window toolbar (title, items, background) while
+                // distraction-free has auto-hidden. This is a *value* change rather
+                // than a structural `if/else`, so the editor's NSScrollView isn't
+                // torn down and rebuilt — which is what was snapping the scroll
+                // position on each reveal/hide.
+                .toolbar(macOSChromeHidden ? .hidden : .visible, for: .windowToolbar)
         }
         #else
         NavigationStack {
             detailContent
                 .toolbar { workspaceToolbarContent }
+                .toolbar(iosToolbarVisibility, for: .navigationBar)
+                .onContinuousHover { phase in
+                    handleIOSDistractionFreeHover(phase)
+                }
+                .overlay(alignment: .top) {
+                    iosDistractionFreeRevealTouchTarget
+                }
+                .animation(.easeInOut(duration: 0.18), value: shouldHideIOSDistractionFreeChrome)
+                .onChange(of: isDistractionFreeWindowChrome) { _, enabled in
+                    handleIOSDistractionFreePreferenceChange(enabled)
+                }
         }
         #endif
     }
@@ -180,7 +236,17 @@ struct TypesetWorkspaceView: View {
     @ViewBuilder
     private var detailContent: some View {
         detailCore
-            .platformTransparentToolbarBackground()
+            #if os(macOS)
+            // Let the standard NavigationSplitView toolbar render — its unified
+            // material extends the sidebar's vibrancy up into the title bar. Forcing
+            // `.toolbarBackground(.bar)` painted a uniform bar that overrode that
+            // sidebar-extending look, so we only push the background to `.hidden`
+            // while distraction-free has auto-hidden, and leave it `.automatic`
+            // (the system default) otherwise.
+            .toolbarBackgroundVisibility(macOSChromeHidden ? .hidden : .automatic, for: .windowToolbar)
+            #else
+            .platformToolbarChrome(windowChromePreference)
+            #endif
             .sheet(isPresented: $isSettingsPresented) {
                 WorkspaceSettingsPane(
                     themePreference: themePreferenceBinding,
@@ -195,6 +261,8 @@ struct TypesetWorkspaceView: View {
                     autoExportPDFOnClose: $autoExportPDFOnClose,
                     updateReferencesOnRename: $updateReferencesOnRename,
                     previewRenderWarmupDelay: $previewRenderWarmupDelay,
+                    previewAutoRetriggerDelay: $previewAutoRetriggerDelay,
+                    windowChromePreference: windowChromePreferenceBinding,
                     lspDebugLoggingEnabled: $lspDebugLoggingEnabled,
                     onDismiss: { isSettingsPresented = false }
                 )
@@ -263,6 +331,7 @@ struct TypesetWorkspaceView: View {
                 #if os(macOS)
                 stopDirectoryWatcher()
                 #endif
+                cancelPreviewAutoRetrigger()
                 loadedTypstDirectoryFileURL = nil
                 didAutoExportPDFOnDisappear = false
                 didForceInitialPreviewRecompile = false
@@ -293,6 +362,10 @@ struct TypesetWorkspaceView: View {
                 flushPendingEditorState()
                 flushPendingScrollFraction()
                 flushPendingPreviewViewport()
+                #if os(iOS)
+                cancelIOSDistractionFreeHide()
+                #endif
+                setAutoPreviewEnabled(false)
                 // Flush any pending folder writes before the view goes away.
                 syncDirectoryToDisk()
                 #if os(macOS)
@@ -301,7 +374,7 @@ struct TypesetWorkspaceView: View {
                 exportPDFOnCloseIfNeeded()
             }
             #if os(macOS)
-            .background(DocumentProxyConfigurator(fileURL: fileURL, editedPath: selectedPath))
+            .background(DocumentProxyConfigurator(fileURL: fileURL))
             #endif
             .alert(
                 "“\(pendingConflict?.fileName ?? "")” was changed on disk",
@@ -349,8 +422,12 @@ struct TypesetWorkspaceView: View {
     @ViewBuilder
     private var contentPane: some View {
         #if os(macOS)
-        contentView
-            .ignoresSafeArea(.container, edges: .top)
+        if isDistractionFreeWindowChrome {
+            contentView
+                .ignoresSafeArea(.container, edges: .top)
+        } else {
+            contentView
+        }
         #else
         contentView
         #endif
@@ -360,7 +437,7 @@ struct TypesetWorkspaceView: View {
     private var workspaceToolbarContent: some ToolbarContent {
         #if os(iOS)
         ToolbarItem(placement: .principal) {
-            iosDocumentToolbarTitle
+            documentToolbarTitle
         }
         // The view controls live alongside the document actions on the right.
         // In compact width they collapse to a single full-screen preview button.
@@ -381,6 +458,12 @@ struct TypesetWorkspaceView: View {
             logsToolbarButton
         }
         #else
+        // The whole window toolbar is shown/hidden by value in the detail
+        // (`.toolbar(_:for: .windowToolbar)`), so these items stay unconditional —
+        // no per-item structural toggling that would perturb the editor.
+        ToolbarItem(placement: .navigation) {
+            macOSSidebarToggle
+        }
         ToolbarItemGroup(placement: .primaryAction) {
             sourceVisibilityToggle
             previewVisibilityToggle
@@ -389,6 +472,38 @@ struct TypesetWorkspaceView: View {
         }
         #endif
     }
+
+    #if os(macOS)
+    // True while the distraction-free chrome is auto-hidden. The toolbar stays
+    // present (its title is removed via `.toolbar(removing: .title)`), but its
+    // items are dropped so nothing — ghosts or an overflow chevron — lingers.
+    private var macOSChromeHidden: Bool {
+        isDistractionFreeWindowChrome && distractionFreeChromeHidden
+    }
+
+    // Our own sidebar toggle, replacing the default one removed from the sidebar
+    // column. Because it's a regular toolbar item it rides with the rest of the
+    // chrome — present whenever the toolbar is shown, gone when it auto-hides.
+    private var macOSSidebarToggle: some View {
+        Button {
+            withAnimation {
+                columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+            }
+        } label: {
+            Label("Toggle Sidebar", systemImage: "sidebar.left")
+        }
+        .help("Toggle Sidebar")
+    }
+
+    // Shown under the document title, but only when editing a file other than the
+    // package's compile target (the "main" file the sidebar marks). Empty when
+    // editing the main file, so the title bar stays clean for the common case.
+    private var documentSubtitle: String {
+        guard !selectedPath.isEmpty,
+              selectedPath != document.package.compileTargetPath else { return "" }
+        return selectedPath
+    }
+    #endif
 
     // A pair of toolbar toggles controlling which panes are visible. They
     // drive `selectedView`; the bindings refuse to hide the last visible pane,
@@ -480,6 +595,23 @@ struct TypesetWorkspaceView: View {
         .help("Settings")
     }
 
+    private var autoPreviewBinding: Binding<Bool> {
+        Binding {
+            isAutoPreviewEnabled
+        } set: { enabled in
+            setAutoPreviewEnabled(enabled)
+        }
+    }
+
+    private var autoPreviewToggle: some View {
+        Toggle(isOn: autoPreviewBinding) {
+            Label("Auto", systemImage: "arrow.triangle.2.circlepath")
+        }
+        .toggleStyle(.button)
+        .help(isAutoPreviewEnabled ? "Disable Auto Preview" : "Enable Auto Preview")
+        .accessibilityLabel(isAutoPreviewEnabled ? "Disable Auto Preview" : "Enable Auto Preview")
+    }
+
     private var logsToolbarButton: some View {
         Button(action: performStatusToolbarAction) {
             ToolbarStatusIcon(
@@ -533,21 +665,35 @@ struct TypesetWorkspaceView: View {
         }
     }
 
-    #if os(iOS)
-    private var iosDocumentToolbarTitle: some View {
+    // The document breadcrumb shown as the toolbar's principal item on iOS. macOS
+    // uses the standard system document title (name + proxy + "Edited") instead,
+    // so this is no longer placed there.
+    private var documentToolbarTitle: some View {
         HStack(spacing: 6) {
             Text(documentToolbarFilename)
+                #if os(iOS)
                 .font(.headline)
+                #else
+                .font(.system(size: 13, weight: .semibold))
+                #endif
                 .lineLimit(1)
                 .truncationMode(.middle)
 
             if !selectedPath.isEmpty {
                 Image(systemName: "chevron.right")
+                    #if os(iOS)
                     .font(.caption2.weight(.semibold))
+                    #else
+                    .font(.system(size: 9, weight: .semibold))
+                    #endif
                     .foregroundStyle(.tertiary)
 
                 Text(selectedPath)
+                    #if os(iOS)
                     .font(.subheadline)
+                    #else
+                    .font(.system(size: 13))
+                    #endif
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -561,6 +707,90 @@ struct TypesetWorkspaceView: View {
 
     private var toolbarAccessibilityTitle: String {
         documentEditedTitle
+    }
+
+    #if os(iOS)
+    private var shouldHideIOSDistractionFreeChrome: Bool {
+        isDistractionFreeWindowChrome && hasSeenIOSDistractionFreePointer && !isIOSDistractionFreePointerInRevealArea
+    }
+
+    private var iosToolbarVisibility: Visibility {
+        shouldHideIOSDistractionFreeChrome ? .hidden : .visible
+    }
+
+    @ViewBuilder
+    private var iosDistractionFreeRevealTouchTarget: some View {
+        if shouldHideIOSDistractionFreeChrome {
+            Color.clear
+                .contentShape(Rectangle())
+                .frame(height: Self.iosDistractionFreeRevealHeight)
+                .ignoresSafeArea(.container, edges: .top)
+                .onTapGesture {
+                    revealIOSDistractionFreeChrome()
+                }
+                .onContinuousHover { phase in
+                    handleIOSDistractionFreeHover(phase)
+                }
+        }
+    }
+
+    private func handleIOSDistractionFreeHover(_ phase: HoverPhase) {
+        guard isDistractionFreeWindowChrome else { return }
+        switch phase {
+        case .active(let location):
+            hasSeenIOSDistractionFreePointer = true
+            iosDistractionFreeLastHoverY = location.y
+            if location.y <= Self.iosDistractionFreeRevealHeight {
+                cancelIOSDistractionFreeHide()
+                setIOSDistractionFreeChromeRevealed(true)
+            } else if location.y >= Self.iosDistractionFreeHideHeight {
+                scheduleIOSDistractionFreeHide()
+            }
+        case .ended:
+            // Moving across toolbar buttons can emit transient `.ended` phases
+            // even though the pointer is still in the chrome reveal region.
+            // Only hide after we have actually seen the pointer below the
+            // hysteresis band; otherwise leave the toolbar stable.
+            if let iosDistractionFreeLastHoverY,
+               iosDistractionFreeLastHoverY >= Self.iosDistractionFreeHideHeight {
+                scheduleIOSDistractionFreeHide()
+            }
+        }
+    }
+
+    private func revealIOSDistractionFreeChrome() {
+        hasSeenIOSDistractionFreePointer = true
+        iosDistractionFreeLastHoverY = 0
+        cancelIOSDistractionFreeHide()
+        setIOSDistractionFreeChromeRevealed(true)
+    }
+
+    private func handleIOSDistractionFreePreferenceChange(_ enabled: Bool) {
+        guard !enabled else { return }
+        cancelIOSDistractionFreeHide()
+        hasSeenIOSDistractionFreePointer = false
+        iosDistractionFreeLastHoverY = nil
+        setIOSDistractionFreeChromeRevealed(false)
+    }
+
+    private func setIOSDistractionFreeChromeRevealed(_ isRevealed: Bool) {
+        guard isIOSDistractionFreePointerInRevealArea != isRevealed else { return }
+        isIOSDistractionFreePointerInRevealArea = isRevealed
+    }
+
+    private func scheduleIOSDistractionFreeHide() {
+        guard isIOSDistractionFreePointerInRevealArea else { return }
+        cancelIOSDistractionFreeHide()
+        iosDistractionFreeHideTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: Self.iosDistractionFreeHideDelay)
+            guard !Task.isCancelled else { return }
+            setIOSDistractionFreeChromeRevealed(false)
+        }
+    }
+
+    private func cancelIOSDistractionFreeHide() {
+        iosDistractionFreeHideTask?.cancel()
+        iosDistractionFreeHideTask = nil
     }
     #endif
 
@@ -817,8 +1047,12 @@ struct TypesetWorkspaceView: View {
                 }
             }
         }
-        .ignoresSafeArea(.container, edges: .vertical)
         .animation(.snappy(duration: 0.18), value: isFindReplacePresented)
+        // Carry the top-edge extension directly (like the preview does), so
+        // StableSourcePane's clip reaches into the title-bar region in
+        // distraction-free mode instead of cutting the editor there and leaving
+        // the surface behind it showing as an opaque strip.
+        .ignoresSafeArea(.container, edges: .top)
     }
 
     @ViewBuilder
@@ -846,6 +1080,7 @@ struct TypesetWorkspaceView: View {
                     selectedCompletionIndex: selectedCompletionIndex,
                     showLineNumbers: showLineNumbers,
                     spellCheckingEnabled: spellCheckingEnabled,
+                    fixedTopContentInset: fixedEditorTopContentInset,
                     onTextChange: { text, range in
                         updateSource(text, selectionRange: range)
                     },
@@ -869,6 +1104,26 @@ struct TypesetWorkspaceView: View {
         } else {
             ContentUnavailableView("No File Selected", systemImage: "doc")
         }
+    }
+
+    /// `nil` lets the editor auto-inset its content under the toolbar (normal
+    /// mode). In distraction-free mode we pin a fixed inset equal to the title-bar
+    /// height so the code fills the window without the first line being clipped
+    /// behind the top edge; the toolbar, when revealed, overlays the top rather
+    /// than pushing the content down.
+    private var fixedEditorTopContentInset: CGFloat? {
+        #if os(macOS)
+        // One fixed inset for both modes. The source pane ignores the top safe
+        // area (so its surface reaches the top edge), which makes SwiftUI disable
+        // the scroll view's automatic toolbar inset — so the code would otherwise
+        // sit under the toolbar. Pin it to the chrome height instead; distraction-
+        // free uses the same value, so the code never shifts as the toolbar hides.
+        Self.macOSEditorTopInset
+        #else
+        // The iOS editor applies this as a floor over the safe area, so the code
+        // clears the windowed-app controls that overlay the top in this mode.
+        isDistractionFreeWindowChrome ? Self.iosDistractionFreeEditorTopInset : nil
+        #endif
     }
 
     private var preview: some View {
@@ -908,6 +1163,18 @@ struct TypesetWorkspaceView: View {
         ThemePreference(rawValue: themePreferenceRaw) ?? .system
     }
 
+    private var windowChromePreference: WindowChromePreference {
+        if UserDefaults.standard.object(forKey: "workspace.windowChrome") == nil,
+           legacyDistractionFreeWindowChrome {
+            return .none
+        }
+        return WindowChromePreference(rawValue: windowChromeRaw) ?? .heavy
+    }
+
+    private var isDistractionFreeWindowChrome: Bool {
+        windowChromePreference.usesDistractionFreeChrome
+    }
+
     private var canSetCompileTarget: Bool {
         fileURL?.pathExtension.lowercased() != "typ"
     }
@@ -925,6 +1192,15 @@ struct TypesetWorkspaceView: View {
             splitBehavior
         } set: { behavior in
             splitBehaviorRaw = behavior.rawValue
+        }
+    }
+
+    private var windowChromePreferenceBinding: Binding<WindowChromePreference> {
+        Binding {
+            windowChromePreference
+        } set: { preference in
+            windowChromeRaw = preference.rawValue
+            legacyDistractionFreeWindowChrome = preference.usesDistractionFreeChrome
         }
     }
 
@@ -1365,6 +1641,7 @@ struct TypesetWorkspaceView: View {
     }
 
     private func refreshPreview() {
+        cancelPreviewAutoRetrigger()
         previewNeedsRefresh = true
         startPreviewCompileIfNeeded()
     }
@@ -1402,6 +1679,7 @@ struct TypesetWorkspaceView: View {
     /// UI returns to the idle "run" state immediately.
     private func stopPreviewCompile() {
         guard isPreviewCompiling else { return }
+        setAutoPreviewEnabled(false)
         previewCompileToken += 1
         previewCompileTask?.cancel()
         previewCompileTask = nil
@@ -1440,7 +1718,44 @@ struct TypesetWorkspaceView: View {
 
         previewCompileTask = nil
         isPreviewCompiling = false
-        startPreviewCompileIfNeeded()
+        if previewNeedsRefresh {
+            startPreviewCompileIfNeeded()
+        } else {
+            schedulePreviewAutoRetriggerIfNeeded()
+        }
+    }
+
+    private func setAutoPreviewEnabled(_ enabled: Bool) {
+        guard isAutoPreviewEnabled != enabled else { return }
+        isAutoPreviewEnabled = enabled
+        if enabled {
+            if !isPreviewCompiling {
+                refreshPreview()
+            }
+        } else {
+            cancelPreviewAutoRetrigger()
+        }
+    }
+
+    private func schedulePreviewAutoRetriggerIfNeeded() {
+        cancelPreviewAutoRetrigger()
+        guard isAutoPreviewEnabled, !isPreviewCompiling, !previewNeedsRefresh else { return }
+        let delay = Self.clampedPreviewAutoRetriggerDelay(previewAutoRetriggerDelay)
+        previewAutoRetriggerTask = Task { @MainActor in
+            let nanoseconds = UInt64((delay * 1_000_000_000).rounded())
+            try? await Task.sleep(nanoseconds: nanoseconds)
+            guard !Task.isCancelled, isAutoPreviewEnabled, !isPreviewCompiling else { return }
+            refreshPreview()
+        }
+    }
+
+    private func cancelPreviewAutoRetrigger() {
+        previewAutoRetriggerTask?.cancel()
+        previewAutoRetriggerTask = nil
+    }
+
+    private static func clampedPreviewAutoRetriggerDelay(_ delay: Double) -> Double {
+        min(10, max(0, delay.isFinite ? delay : 0.5))
     }
 
     private func syncLanguageServiceWorkspace() {
@@ -3365,4 +3680,5 @@ struct TypesetWorkspaceView: View {
     }
 
 }
+
 

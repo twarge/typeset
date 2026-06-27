@@ -107,3 +107,22 @@ enum ThemePreference: String, CaseIterable, Identifiable {
     }
 }
 
+enum WindowChromePreference: String, CaseIterable, Identifiable {
+    case heavy
+    case none
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .heavy:
+            return "Heavy"
+        case .none:
+            return "None"
+        }
+    }
+
+    var usesDistractionFreeChrome: Bool {
+        self == .none
+    }
+}

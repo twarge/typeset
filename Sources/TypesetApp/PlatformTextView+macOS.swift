@@ -30,6 +30,7 @@ struct PlatformTextView: NSViewRepresentable {
     var proseRanges: [TypstProseRange]
     var showLineNumbers: Bool
     var spellCheckingEnabled: Bool
+    var fixedTopContentInset: CGFloat?
     var onTextChange: (String, NSRange) -> Void
     var onSelectionChange: (NSRange) -> Void
     var isCompletionPresented: Bool
@@ -74,15 +75,14 @@ struct PlatformTextView: NSViewRepresentable {
         context.coordinator.configureDropHandling(for: textView)
         context.coordinator.applyHighlighting(to: textView, text: text)
 
-        // Plain NSScrollView with default `automaticallyAdjustsContentInsets`.
-        // Combined with the SwiftUI `.ignoresSafeArea(.container, edges: .top)`
-        // on the source pane, AppKit positions content below the toolbar at
-        // rest AND installs the macOS 26 top-edge scroll-edge effect (the
-        // pocket + variable blur) so content scrolling under the toolbar
-        // fades into it instead of meeting a hard edge.
+        // In normal mode AppKit owns the toolbar/safe-area inset. In
+        // distraction-free mode the toolbar itself is transient, so AppKit's
+        // automatic inset changes as the toolbar shows/hides and fights the
+        // fixed editor margin. Then the editor owns that top inset explicitly.
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
+        applyEditorContentInsets(to: scrollView)
         scrollView.documentView = textView
         scrollView.contentView.postsBoundsChangedNotifications = true
         context.coordinator.observeScrollView(scrollView)
@@ -119,6 +119,7 @@ struct PlatformTextView: NSViewRepresentable {
         context.coordinator.isPackageDropTargeted = $isPackageDropTargeted
         context.coordinator.updateFontSize(fontSize, in: textView)
         textView.textContainerInset = NSSize(width: 18, height: 18)
+        applyEditorContentInsets(to: scrollView)
         scrollView.hasVerticalRuler = showLineNumbers
         scrollView.rulersVisible = showLineNumbers
         (scrollView.verticalRulerView as? LineNumberRulerView)?.invalidateLineNumbers()
@@ -172,6 +173,21 @@ struct PlatformTextView: NSViewRepresentable {
             onLanguageOverlayAnchorChange: onLanguageOverlayAnchorChange,
             isPackageDropTargeted: $isPackageDropTargeted
         )
+    }
+
+    private func applyEditorContentInsets(to scrollView: NSScrollView) {
+        if let fixedTopContentInset {
+            scrollView.automaticallyAdjustsContentInsets = false
+            scrollView.contentInsets = NSEdgeInsets(
+                top: fixedTopContentInset,
+                left: 0,
+                bottom: 0,
+                right: 0
+            )
+        } else {
+            scrollView.automaticallyAdjustsContentInsets = true
+            scrollView.contentInsets = NSEdgeInsetsZero
+        }
     }
 
     @MainActor
