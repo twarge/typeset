@@ -107,20 +107,11 @@ enum ThemePreference: String, CaseIterable, Identifiable {
     }
 }
 
-enum WindowChromePreference: String, CaseIterable, Identifiable {
+/// Window chrome behavior, persisted by raw value. Exposed in Settings as the
+/// single "Distraction-Free Mode" toggle (`none` = distraction-free).
+enum WindowChromePreference: String {
     case heavy
     case none
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .heavy:
-            return "Heavy"
-        case .none:
-            return "None"
-        }
-    }
 
     var usesDistractionFreeChrome: Bool {
         self == .none

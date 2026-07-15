@@ -536,7 +536,10 @@ private struct SourceEditorLanguageOverlay: View {
     }
 }
 
-private struct PopoverBubbleShape: Shape {
+// `Shape.path(in:)` can be called off the main actor, so the conformance must be
+// nonisolated — this is a pure value type, so that's safe. (Required because the
+// project compiles with default MainActor isolation.)
+private nonisolated struct PopoverBubbleShape: Shape {
     static let arrowHeight: CGFloat = 9
     private static let arrowWidth: CGFloat = 18
     private static let cornerRadius: CGFloat = 10

@@ -205,6 +205,7 @@ struct PlatformTextView: UIViewRepresentable {
         private var renderedSpellCheckingEnabled = false
         private var lastSentSelection = NSRange(location: NSNotFound, length: 0)
         private var lastLanguageOverlayAnchor: CGPoint?
+        private var isLanguageOverlayAnchorUpdatePending = false
 
         init(
             text: Binding<String>,
@@ -254,7 +255,7 @@ struct PlatformTextView: UIViewRepresentable {
             let range = textView.selectedRange
             scheduleRepaint(in: textView)
             sendTextChange(nextText, selectedRange: range)
-            updateLanguageOverlayAnchor(in: textView, selectedRange: range)
+            updateLanguageOverlayAnchor(in: textView)
         }
 
         func focusIfNeeded(_ focusRequest: Int, textView: UITextView) {
@@ -279,7 +280,7 @@ struct PlatformTextView: UIViewRepresentable {
             textView.replace(textRange, withText: edit.replacementText)
             textView.selectedRange = edit.selectedRange
             textView.scrollRangeToVisible(edit.selectedRange)
-            updateLanguageOverlayAnchor(in: textView, selectedRange: edit.selectedRange)
+            updateLanguageOverlayAnchor(in: textView)
         }
 
         func insertSnippetIfNeeded(_ request: EditorSnippetInsertion?, in textView: UITextView) {
@@ -307,7 +308,7 @@ struct PlatformTextView: UIViewRepresentable {
             )
             textView.selectedRange = newSelection
             textView.scrollRangeToVisible(newSelection)
-            updateLanguageOverlayAnchor(in: textView, selectedRange: newSelection)
+            updateLanguageOverlayAnchor(in: textView)
         }
 
         private func focus(_ textView: UITextView, remainingAttempts: Int) {
@@ -327,7 +328,7 @@ struct PlatformTextView: UIViewRepresentable {
             guard !isApplyingHighlighting else { return }
             let range = textView.selectedRange
             sendSelectionChange(range)
-            updateLanguageOverlayAnchor(in: textView, selectedRange: range)
+            updateLanguageOverlayAnchor(in: textView)
             (textView as? PackageTextView)?.rebuildDiagnosticDecorations()
         }
 
@@ -362,7 +363,7 @@ struct PlatformTextView: UIViewRepresentable {
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             onScrollOffsetChange(scrollView.contentOffset.y)
             if let textView = scrollView as? UITextView {
-                updateLanguageOverlayAnchor(in: textView, selectedRange: textView.selectedRange)
+                updateLanguageOverlayAnchor(in: textView)
             }
             if !isRestoringScroll {
                 let maxScroll = max(0, scrollView.contentSize.height - scrollView.bounds.height)
@@ -476,18 +477,31 @@ struct PlatformTextView: UIViewRepresentable {
             return true
         }
 
-        private func updateLanguageOverlayAnchor(in textView: UITextView, selectedRange: NSRange) {
-            guard let start = textView.position(from: textView.beginningOfDocument, offset: selectedRange.location) else { return }
-            let rect = textView.caretRect(for: start)
-            let anchor = CGPoint(
-                x: rect.minX - textView.contentOffset.x,
-                y: rect.maxY - textView.contentOffset.y
-            )
-            if let lastLanguageOverlayAnchor, lastLanguageOverlayAnchor.distance(to: anchor) <= 0.5 {
-                return
+        private func updateLanguageOverlayAnchor(in textView: UITextView) {
+            // The text/selection delegates fire while the edit transaction is
+            // still open — TextKit 2 hasn't absorbed the edit into layout yet, so
+            // a caret frame computed here can be lines off. Defer one turn,
+            // coalesced, and read the selection live once layout has settled.
+            guard !isLanguageOverlayAnchorUpdatePending else { return }
+            isLanguageOverlayAnchorUpdatePending = true
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self else { return }
+                self.isLanguageOverlayAnchorUpdatePending = false
+                guard let textView, let layoutManager = textView.textLayoutManager else { return }
+                let textLength = (textView.text as NSString).length
+                let caretOffset = min(textView.selectedRange.location, max(0, textLength))
+                guard let rect = EditorTextGeometry.caretRect(atCharacterOffset: caretOffset, in: layoutManager) else { return }
+                // Container coordinates → content coordinates → viewport coordinates.
+                let anchor = CGPoint(
+                    x: rect.minX + textView.textContainerInset.left - textView.contentOffset.x,
+                    y: rect.maxY + textView.textContainerInset.top - textView.contentOffset.y
+                )
+                if let last = self.lastLanguageOverlayAnchor, last.distance(to: anchor) <= 0.5 {
+                    return
+                }
+                self.lastLanguageOverlayAnchor = anchor
+                self.onLanguageOverlayAnchorChange(anchor)
             }
-            lastLanguageOverlayAnchor = anchor
-            onLanguageOverlayAnchorChange(anchor)
         }
 
         func consumeAnnotationChanges(
@@ -534,7 +548,7 @@ struct PlatformTextView: UIViewRepresentable {
         fileprivate func repaintSyntaxOnly(in textView: UITextView) {
             let size = appliedFontSize > 0 ? appliedFontSize : fontSize
             let font = SourceEditorFont.regular(size: size)
-            TypstSyntaxHighlighter.applyTemporaryTokens(to: textView, text: textView.text, font: font)
+            TypstSyntaxHighlighter.applyTokenStyling(to: textView, text: textView.text, font: font)
             applyDiagnosticsAndSpelling(to: textView)
         }
 
@@ -555,7 +569,7 @@ struct PlatformTextView: UIViewRepresentable {
                 )
             }
 
-            TypstSyntaxHighlighter.applyTemporaryTokens(to: textView, text: text, font: font)
+            TypstSyntaxHighlighter.applyTokenStyling(to: textView, text: text, font: font)
             applyDiagnosticsAndSpelling(to: textView)
             let textLength = (textView.text as NSString).length
             textView.selectedRange = NSRange(
@@ -578,11 +592,20 @@ struct PlatformTextView: UIViewRepresentable {
         }
 
         private func applyDiagnosticsAndSpelling(to textView: UITextView) {
-            guard textView.textStorage.length > 0 else { return }
-            let fullRange = NSRange(location: 0, length: textView.textStorage.length)
-            textView.textStorage.beginEditing()
-            textView.textStorage.removeAttribute(.underlineStyle, range: fullRange)
-            textView.textStorage.removeAttribute(.underlineColor, range: fullRange)
+            guard let layoutManager = textView.textLayoutManager, textView.textStorage.length > 0 else { return }
+            // Underlines are display-only decorations, so they live in TextKit 2's
+            // rendering attributes, mirroring macOS — they never touch the text
+            // storage, so typing can't inherit an underline and rehighlighting
+            // doesn't churn the storage.
+            let documentRange = layoutManager.documentRange
+            layoutManager.removeRenderingAttribute(.underlineStyle, for: documentRange)
+            layoutManager.removeRenderingAttribute(.underlineColor, for: documentRange)
+
+            func addUnderline(_ style: Int, color: UIColor, range: NSRange) {
+                guard let textRange = EditorTextGeometry.textRange(forCharacterRange: range, in: layoutManager) else { return }
+                layoutManager.addRenderingAttribute(.underlineStyle, value: style, for: textRange)
+                layoutManager.addRenderingAttribute(.underlineColor, value: color, for: textRange)
+            }
 
             if spellCheckingEnabled {
                 let checker = UITextChecker()
@@ -595,10 +618,11 @@ struct PlatformTextView: UIViewRepresentable {
                         language: ""
                     )
                     if misspelled.location != NSNotFound {
-                        textView.textStorage.addAttributes([
-                            .underlineStyle: NSUnderlineStyle.patternDot.rawValue | NSUnderlineStyle.single.rawValue,
-                            .underlineColor: UIColor.systemBlue,
-                        ], range: misspelled)
+                        addUnderline(
+                            NSUnderlineStyle.patternDot.rawValue | NSUnderlineStyle.single.rawValue,
+                            color: .systemBlue,
+                            range: misspelled
+                        )
                     }
                 }
             }
@@ -606,13 +630,12 @@ struct PlatformTextView: UIViewRepresentable {
             // Underline only for a real span (>1 char); point diagnostics get a
             // triangle marker in `rebuildDiagnosticDecorations` instead.
             for diagnostic in diagnostics where diagnostic.range.length > 1 && NSMaxRange(diagnostic.range) <= textView.textStorage.length {
-                let color: UIColor = diagnostic.severity == .error ? .systemRed : .systemYellow
-                textView.textStorage.addAttributes([
-                    .underlineStyle: NSUnderlineStyle.patternDot.rawValue | NSUnderlineStyle.thick.rawValue,
-                    .underlineColor: color,
-                ], range: diagnostic.range)
+                addUnderline(
+                    NSUnderlineStyle.patternDot.rawValue | NSUnderlineStyle.thick.rawValue,
+                    color: diagnostic.severity == .error ? .systemRed : .systemYellow,
+                    range: diagnostic.range
+                )
             }
-            textView.textStorage.endEditing()
         }
 
         func textDroppableView(_ textDroppableView: UIView & UITextDroppable, proposalForDrop drop: UITextDropRequest) -> UITextDropProposal {
@@ -1071,10 +1094,13 @@ struct PlatformTextView: UIViewRepresentable {
         private func diagnosticPointMarkerRect(for diagnostic: TypstSourceDiagnostic) -> CGRect? {
             let location = diagnostic.range.location
             guard location >= 0, location < textStorage.length,
-                  let start = position(from: beginningOfDocument, offset: location),
-                  let end = position(from: start, offset: 1),
-                  let range = textRange(from: start, to: end) else { return nil }
-            let rect = firstRect(for: range)
+                  let layoutManager = textLayoutManager,
+                  var rect = EditorTextGeometry.boundingRect(
+                      forCharacterRange: NSRange(location: location, length: 1),
+                      in: layoutManager
+                  ) else { return nil }
+            rect.origin.x += textContainerInset.left
+            rect.origin.y += textContainerInset.top
             guard rect.width.isFinite, rect.height > 0, rect.minY.isFinite else { return nil }
             return rect
         }
@@ -1102,10 +1128,11 @@ struct PlatformTextView: UIViewRepresentable {
             return marker
         }
 
-        /// Full-width rects for every line the diagnostic spans plus the first
-        /// line's rect (badge anchor), in content coordinates. Uses UITextInput
-        /// geometry, so it works whether the view is backed by TextKit 1 or 2.
+        /// Full-width rects for every line the diagnostic spans plus the
+        /// badge-anchor line rect, in content coordinates — computed via the
+        /// shared TextKit 2 geometry, matching the macOS editor.
         private func diagnosticGeometry(for diagnostic: TypstSourceDiagnostic) -> (lines: [CGRect], badgeLine: CGRect)? {
+            guard let layoutManager = textLayoutManager else { return nil }
             let length = textStorage.length
             guard length > 0, diagnostic.range.location >= 0, diagnostic.range.location < length else { return nil }
             let baseLen = min(diagnostic.range.length == 0 ? 1 : diagnostic.range.length, length - diagnostic.range.location)
@@ -1121,19 +1148,16 @@ struct PlatformTextView: UIViewRepresentable {
                 ? NSRange(location: lineStart, length: contentsEnd - lineStart)
                 : charRange
 
-            guard let start = position(from: beginningOfDocument, offset: highlightRange.location),
-                  let end = position(from: start, offset: highlightRange.length),
-                  let range = textRange(from: start, to: end) else { return nil }
-            let rects = selectionRects(for: range)
-                .map(\.rect)
+            let frames = EditorTextGeometry.visualLineFrames(forCharacterRange: highlightRange, in: layoutManager)
+                .map { $0.offsetBy(dx: textContainerInset.left, dy: textContainerInset.top) }
                 .filter { $0.height > 0 && $0.minY.isFinite && $0.width.isFinite }
-            guard !rects.isEmpty else { return nil }
+            guard !frames.isEmpty else { return nil }
             var lines: [CGRect] = []
-            for rect in rects where !lines.contains(where: { abs($0.minY - rect.minY) < 1 }) {
-                lines.append(CGRect(x: 0, y: rect.minY, width: bounds.width, height: rect.height))
+            for frame in frames where !lines.contains(where: { abs($0.minY - frame.minY) < 1 }) {
+                lines.append(CGRect(x: 0, y: frame.minY, width: bounds.width, height: frame.height))
             }
             // Badge on the last (bottom-most) visual line.
-            guard let badgeLine = rects.max(by: { $0.minY < $1.minY }) else { return nil }
+            guard let badgeLine = frames.max(by: { $0.minY < $1.minY }) else { return nil }
             return (lines, badgeLine)
         }
 

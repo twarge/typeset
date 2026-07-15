@@ -161,10 +161,10 @@ struct SplitViewStateConfigurator: NSViewRepresentable {
 
 struct DistractionFreeWindowChromeConfigurator: NSViewRepresentable {
     var isEnabled: Bool
-    // Fires whenever the auto-hide state flips, so SwiftUI can fade the toolbar
-    // contents to match. The toolbar itself is deliberately never hidden — doing
-    // so lets the system document title fall back into the title bar — so the
-    // chrome is faded to transparent in place instead.
+    // Fires whenever the auto-hide state flips. SwiftUI reacts by toggling the
+    // whole window toolbar by value (`.toolbar(_:for: .windowToolbar)`) — a
+    // value change, not a structural one, so the editor's scroll view isn't
+    // rebuilt and its position holds.
     var onChromeHiddenChange: (Bool) -> Void
 
     func makeNSView(context: Context) -> NSView {
@@ -373,11 +373,11 @@ struct DistractionFreeWindowChromeConfigurator: NSViewRepresentable {
         private func setWindowChromeHidden(_ hidden: Bool) {
             guard isChromeHidden != hidden else { return }
             isChromeHidden = hidden
-            // Publish to SwiftUI, which conditionally removes the toolbar's own
-            // items. The traffic lights are deliberately left untouched: hiding them
-            // — even with alpha, not just `isHidden` — makes ⌘W/⌘M silently no-op,
-            // because `performClose:`/`performMiniaturize:` work by simulating a
-            // click on those buttons. Leaving them visible keeps the commands working.
+            // Publish to SwiftUI, which hides/shows the whole window toolbar by
+            // value. The traffic lights are deliberately left untouched: hiding
+            // them — even with alpha, not just `isHidden` — makes ⌘W/⌘M silently
+            // no-op, because `performClose:`/`performMiniaturize:` work by
+            // simulating a click on those buttons.
             onChromeHiddenChange(hidden)
         }
 

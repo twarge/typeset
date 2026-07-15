@@ -58,6 +58,7 @@
 		100000000000000000000F01 /* PlatformTextView+macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000E01 /* PlatformTextView+macOS.swift */; };
 		100000000000000000000F02 /* PlatformTextView+iOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000E02 /* PlatformTextView+iOS.swift */; };
 		100000000000000000000F03 /* TypstSyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000E03 /* TypstSyntaxHighlighter.swift */; };
+		100000000000000000000F90 /* EditorTextGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000E90 /* EditorTextGeometry.swift */; };
 		300000000000000000000001 /* PreviewViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000101 /* PreviewViewController.swift */; };
 		300000000000000000000002 /* TypesetCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; };
 		300000000000000000000003 /* TypesetQuickLook.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 300000000000000000000201 /* TypesetQuickLook.appex */; platformFilters = (macos, ); settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -179,6 +180,7 @@
 		100000000000000000000E01 /* PlatformTextView+macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PlatformTextView+macOS.swift"; sourceTree = "<group>"; };
 		100000000000000000000E02 /* PlatformTextView+iOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PlatformTextView+iOS.swift"; sourceTree = "<group>"; };
 		100000000000000000000E03 /* TypstSyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstSyntaxHighlighter.swift; sourceTree = "<group>"; };
+		100000000000000000000E90 /* EditorTextGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextGeometry.swift; sourceTree = "<group>"; };
 		300000000000000000000101 /* PreviewViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewViewController.swift; sourceTree = "<group>"; };
 		300000000000000000000102 /* TypesetQuickLook-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "TypesetQuickLook-Info.plist"; sourceTree = "<group>"; };
 		300000000000000000000201 /* TypesetQuickLook.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TypesetQuickLook.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -264,6 +266,7 @@
 				100000000000000000000E01 /* PlatformTextView+macOS.swift */,
 				100000000000000000000E02 /* PlatformTextView+iOS.swift */,
 				100000000000000000000E03 /* TypstSyntaxHighlighter.swift */,
+				100000000000000000000E90 /* EditorTextGeometry.swift */,
 				100000000000000000000C01 /* WorkspaceModels.swift */,
 				100000000000000000000C02 /* WorkspaceSettingsPane.swift */,
 				100000000000000000000C03 /* FindReplacePanel.swift */,
@@ -583,6 +586,7 @@
 				100000000000000000000F01 /* PlatformTextView+macOS.swift in Sources */,
 				100000000000000000000F02 /* PlatformTextView+iOS.swift in Sources */,
 				100000000000000000000F03 /* TypstSyntaxHighlighter.swift in Sources */,
+				100000000000000000000F90 /* EditorTextGeometry.swift in Sources */,
 				100000000000000000000D01 /* WorkspaceModels.swift in Sources */,
 				100000000000000000000D02 /* WorkspaceSettingsPane.swift in Sources */,
 				100000000000000000000D03 /* FindReplacePanel.swift in Sources */,

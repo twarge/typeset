@@ -30,7 +30,6 @@ struct WorkspaceSettingsPane: View {
     @Binding var previewRenderWarmupDelay: Double
     @Binding var previewAutoRetriggerDelay: Double
     @Binding var windowChromePreference: WindowChromePreference
-    @Binding var lspDebugLoggingEnabled: Bool
     // Shares the editor's persisted font-size key, so this control and any
     // open editor stay in sync.
     @AppStorage("sourceEditor.fontSize") private var editorFontSize = SourceEditorFont.defaultSize
@@ -246,7 +245,7 @@ struct WorkspaceSettingsPane: View {
 
                 Slider(value: $previewRenderWarmupDelay, in: 0...1, step: 0.05)
 
-                Text("How long to wait after you stop typing before recompiling the preview. Higher values recompile less often while you edit.")
+                Text("How long a freshly compiled page renders off-screen before it replaces the visible preview. Newer compiles restart the wait, so the preview updates when you pause typing.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

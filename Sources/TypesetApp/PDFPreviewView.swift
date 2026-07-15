@@ -1,9 +1,14 @@
 // Copyright (c) 2026 Twarge LLC.
 // SPDX-License-Identifier: Apache-2.0
 
+import OSLog
 import PDFKit
 import SwiftUI
 import TypesetCore
+
+/// Signposts for the preview double-buffer pipeline (staging → warmup → swap),
+/// for diagnosing early swaps / mispositioned reveals with `log stream`.
+let previewBufferLog = Logger(subsystem: "com.twarge.app.typeset", category: "PreviewBuffer")
 
 /// The exact location the user was viewing in the preview: a zoom `scale`
 /// (`0` = automatic fit-to-width) plus the top-left of the visible area as a
@@ -144,6 +149,7 @@ extension PDFPreviewView {
                 stagedSourceRects = []
                 isSwapScheduled = false
                 preparationToken += 1
+                previewBufferLog.debug("preview nil — clearing container")
                 container.clear()
                 return
             }
@@ -151,6 +157,7 @@ extension PDFPreviewView {
             guard revision != activeRevision, revision != stagedRevision else { return }
 
             guard let document = PDFDocument(data: preview.data) else { return }
+            previewBufferLog.debug("stage revision \(revision) (delay \(renderWarmupDelay, format: .fixed(precision: 2)))")
             stagedData = preview.data
             stagedDocument = document
             stagedRevision = revision
@@ -189,12 +196,21 @@ extension PDFPreviewView {
             // during the warmup window, so the swap is seamless.
             restoreZoom(in: container, document: document)
 
-            guard !isSwapScheduled else { return }
-
+            // ALWAYS restart the warmup, even when a swap is already scheduled:
+            // `prepareInactiveView` just reassigned the off-screen view's document,
+            // which resets PDFKit's async tile rendering. Letting an earlier
+            // timer's deadline stand would promote that view before it re-rendered
+            // — a partially blank frame on every mid-warmup recompile, which is
+            // exactly the flicker seen while typing. Bumping the token invalidates
+            // the in-flight commit; the freshly staged document gets its full
+            // warmup, so during sustained typing the visible swap simply waits
+            // for a pause.
             isSwapScheduled = true
             preparationToken += 1
             let currentToken = preparationToken
-            container.finishPreparingInactiveView(after: Self.clampedWarmupDelay(renderWarmupDelay)) {
+            let warmup = Self.clampedWarmupDelay(renderWarmupDelay)
+            previewBufferLog.debug("schedule commit token \(currentToken) after \(warmup, format: .fixed(precision: 2))s (staged rev \(self.stagedRevision ?? -1))")
+            container.finishPreparingInactiveView(after: warmup) {
                 self.commitStagedPreview(in: container, token: currentToken)
             }
         }
@@ -224,7 +240,11 @@ extension PDFPreviewView {
         }
 
         private static func clampedWarmupDelay(_ delay: TimeInterval) -> TimeInterval {
-            min(1, max(0, delay.isFinite ? delay : 0.5))
+            // Floor at 0.12s: PDFKit tiles the new document asynchronously, so a
+            // zero warmup would swap in a not-yet-rendered view (guaranteed white
+            // flash). ~120ms is below perception for a preview refresh but enough
+            // for a page of tiles.
+            min(1, max(0.12, delay.isFinite ? delay : 0.5))
         }
 
         /// Matches the off-screen (inactive) view's zoom and scroll position to
@@ -255,10 +275,14 @@ extension PDFPreviewView {
         }
 
         private func commitStagedPreview(in container: BufferedPDFPreviewContainer, token: Int) {
-            guard isSwapScheduled, preparationToken == token else { return }
+            guard isSwapScheduled, preparationToken == token else {
+                previewBufferLog.debug("commit token \(token) superseded (current \(self.preparationToken))")
+                return
+            }
             isSwapScheduled = false
 
             guard let data = stagedData else { return }
+            previewBufferLog.debug("commit token \(token): swapping in rev \(self.stagedRevision ?? -1) (animated \(container.hasVisibleDocument))")
 
             // The off-screen view was already populated and zoom-restored in
             // `applyStagedPreview`; committing just promotes it to the front.
@@ -414,7 +438,12 @@ extension PDFPreviewView {
     func prepareInactiveView(document: PDFDocument?) {
         presentationRevision += 1
         let pdfView = inactivePDFView
-        pdfView.alphaValue = 1
+        // Near-invisible, not hidden: Core Animation still composites (so PDFKit
+        // tiles and lays out during the warmup), but the staged document can't
+        // bleed through the front view's transparent page-break gaps — both
+        // views draw no background, so an alpha-1 view below IS visible around
+        // the pages, which read as the preview updating instantly.
+        pdfView.alphaValue = 0.02
         pdfView.isHidden = false
         addSubview(pdfView, positioned: .below, relativeTo: activePDFView)
         pdfView.frame = bounds
@@ -435,6 +464,7 @@ extension PDFPreviewView {
     }
 
     func showInactiveView(animated: Bool) {
+        previewBufferLog.debug("showInactiveView animated=\(animated)")
         isApplyingViewport = true
         let oldView = activePDFView
         let newView = inactivePDFView
@@ -442,6 +472,9 @@ extension PDFPreviewView {
         observeActiveScroll()
         presentationRevision += 1
         let currentRevision = presentationRevision
+        // The warmup kept the incoming view near-invisible; reveal it fully
+        // before the old view above it fades out.
+        newView.alphaValue = 1
 
         let finish: @Sendable () -> Void = { [weak self, oldView, newView] in
             MainActor.assumeIsolated {
@@ -506,8 +539,11 @@ extension PDFPreviewView {
     private static func configure(_ pdfView: PDFView) {
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
+        // Visible page breaks with PDFKit's default (non-zero) margins. Don't
+        // set `pageBreakMargins = .zero`: zero-size break geometry fed PDFKit's
+        // Metal renderer degenerate draws (instanceCount 0) that crashed under
+        // API validation when pinch-zooming.
         pdfView.displaysPageBreaks = true
-        pdfView.pageBreakMargins = NSEdgeInsetsZero
         pdfView.pageShadowsEnabled = false
         pdfView.autoScales = true
         pdfView.minScaleFactor = 0.25
@@ -630,7 +666,10 @@ extension PDFPreviewView {
         presentationRevision += 1
         let pdfView = inactivePDFView
         let previousResponder = window?.findFirstResponderInTree
-        pdfView.alpha = 1
+        // Near-invisible, not hidden — still composited (so PDFKit tiles during
+        // warmup) but the staged document can't bleed through the front view's
+        // transparent page-break gaps. See the macOS container's note.
+        pdfView.alpha = 0.02
         pdfView.isHidden = false
         insertSubview(pdfView, belowSubview: activePDFView)
         pdfView.frame = bounds
@@ -652,6 +691,7 @@ extension PDFPreviewView {
     }
 
     func showInactiveView(animated: Bool) {
+        previewBufferLog.debug("showInactiveView animated=\(animated)")
         isApplyingViewport = true
         let oldView = activePDFView
         let newView = inactivePDFView
@@ -659,6 +699,9 @@ extension PDFPreviewView {
         observeActiveScroll()
         presentationRevision += 1
         let currentRevision = presentationRevision
+        // The warmup kept the incoming view near-invisible; reveal it fully
+        // before the old view above it fades out.
+        newView.alpha = 1
         let previousResponder = window?.findFirstResponderInTree
 
         let finish: @Sendable () -> Void = { [weak self, oldView, newView] in
@@ -741,8 +784,10 @@ extension PDFPreviewView {
     private static func configure(_ pdfView: PDFView) {
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
+        // Visible page breaks with PDFKit's default (non-zero) margins — see the
+        // macOS configure() note: zero-size break geometry triggers degenerate
+        // Metal draws under API validation.
         pdfView.displaysPageBreaks = true
-        pdfView.pageBreakMargins = .zero
         pdfView.pageShadowsEnabled = false
         pdfView.autoScales = true
         pdfView.minScaleFactor = 0.25

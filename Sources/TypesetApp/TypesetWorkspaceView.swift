@@ -51,9 +51,9 @@ struct TypesetWorkspaceView: View {
     @State private var exportDefaultFilename = "Typeset Export.pdf"
     @State private var isExportPresented = false
     #if os(macOS)
-    // Mirrors the AppKit chrome auto-hide state so the toolbar's SwiftUI contents
-    // fade with it. The toolbar itself stays present (keeping the system document
-    // title suppressed); only its contents dim to transparent.
+    // Mirrors the AppKit chrome auto-hide state; drives the value-based
+    // `.toolbar(_:for: .windowToolbar)` toggle and the toolbar background
+    // visibility while distraction-free is on.
     @State private var distractionFreeChromeHidden = false
     #endif
     #if os(iOS)
@@ -149,6 +149,8 @@ struct TypesetWorkspaceView: View {
     @AppStorage("export.autoPDFOnClose") private var autoExportPDFOnClose = false
     @AppStorage("preview.renderWarmupDelay") private var previewRenderWarmupDelay = 0.5
     @AppStorage("preview.autoRetriggerDelay") private var previewAutoRetriggerDelay = 0.5
+    // No Settings UI for this; toggle with:
+    //   defaults write com.twarge.app.typeset developer.lspDebugLogging -bool YES
     @AppStorage("developer.lspDebugLogging") private var lspDebugLoggingEnabled = false
     @AppStorage("workspace.windowChrome") private var windowChromeRaw = WindowChromePreference.heavy.rawValue
     @AppStorage("workspace.distractionFreeWindowChrome") private var legacyDistractionFreeWindowChrome = false
@@ -244,8 +246,6 @@ struct TypesetWorkspaceView: View {
             // while distraction-free has auto-hidden, and leave it `.automatic`
             // (the system default) otherwise.
             .toolbarBackgroundVisibility(macOSChromeHidden ? .hidden : .automatic, for: .windowToolbar)
-            #else
-            .platformToolbarChrome(windowChromePreference)
             #endif
             .sheet(isPresented: $isSettingsPresented) {
                 WorkspaceSettingsPane(
@@ -263,7 +263,6 @@ struct TypesetWorkspaceView: View {
                     previewRenderWarmupDelay: $previewRenderWarmupDelay,
                     previewAutoRetriggerDelay: $previewAutoRetriggerDelay,
                     windowChromePreference: windowChromePreferenceBinding,
-                    lspDebugLoggingEnabled: $lspDebugLoggingEnabled,
                     onDismiss: { isSettingsPresented = false }
                 )
             }
@@ -649,6 +648,7 @@ struct TypesetWorkspaceView: View {
         }
     }
 
+    #if os(iOS)
     private var documentToolbarFilename: String {
         guard let fileURL else { return "Typeset" }
         if fileURL.pathExtension.lowercased() == "typeset" {
@@ -665,35 +665,22 @@ struct TypesetWorkspaceView: View {
         }
     }
 
-    // The document breadcrumb shown as the toolbar's principal item on iOS. macOS
-    // uses the standard system document title (name + proxy + "Edited") instead,
-    // so this is no longer placed there.
+    // The document breadcrumb shown as the toolbar's principal item. macOS uses
+    // the standard system document title (name + proxy + "Edited") instead.
     private var documentToolbarTitle: some View {
         HStack(spacing: 6) {
             Text(documentToolbarFilename)
-                #if os(iOS)
                 .font(.headline)
-                #else
-                .font(.system(size: 13, weight: .semibold))
-                #endif
                 .lineLimit(1)
                 .truncationMode(.middle)
 
             if !selectedPath.isEmpty {
                 Image(systemName: "chevron.right")
-                    #if os(iOS)
                     .font(.caption2.weight(.semibold))
-                    #else
-                    .font(.system(size: 9, weight: .semibold))
-                    #endif
                     .foregroundStyle(.tertiary)
 
                 Text(selectedPath)
-                    #if os(iOS)
                     .font(.subheadline)
-                    #else
-                    .font(.system(size: 13))
-                    #endif
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -708,6 +695,7 @@ struct TypesetWorkspaceView: View {
     private var toolbarAccessibilityTitle: String {
         documentEditedTitle
     }
+    #endif
 
     #if os(iOS)
     private var shouldHideIOSDistractionFreeChrome: Bool {

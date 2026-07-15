@@ -217,6 +217,10 @@ extension TypstSyntaxHighlighter {
         return attributed
     }
 
+    // The macOS editor deliberately runs TextKit 1 (TextKit 2's NSTextView has
+    // architecturally unstable height estimation/scrolling — see the parked
+    // "macOS editor TextKit 2 migration" stash), so token styling uses
+    // NSLayoutManager temporary attributes: display-only, no storage churn.
     @MainActor
     static func applyTemporaryTokens(to textView: NSTextView, text: String, font: NSFont) {
         guard let layoutManager = textView.layoutManager, let textStorage = textView.textStorage else { return }
@@ -294,7 +298,7 @@ extension TypstSyntaxHighlighter {
     }
 
     @MainActor
-    static func applyTemporaryTokens(to textView: UITextView, text: String, font: UIFont) {
+    static func applyTokenStyling(to textView: UITextView, text: String, font: UIFont) {
         textView.textStorage.beginEditing()
         textView.textStorage.setAttributes(baseAttributes(font: font), range: NSRange(location: 0, length: textView.textStorage.length))
         applyTokens(to: textView.textStorage, text: text, font: font)
