@@ -48,6 +48,12 @@ struct PlatformTextView: UIViewRepresentable {
         let textView = PackageTextView()
         textView.autocorrectionType = .no
         textView.autocapitalizationType = .none
+        // Literal characters only: Typst does its own smart-quote/dash
+        // substitution at compile time, and bracket pairing needs to see
+        // straight quotes. (The macOS editor disables the equivalents.)
+        textView.smartQuotesType = .no
+        textView.smartDashesType = .no
+        textView.smartInsertDeleteType = .no
         textView.font = context.coordinator.font()
         textView.delegate = context.coordinator
         textView.textDropDelegate = context.coordinator
@@ -192,6 +198,7 @@ struct PlatformTextView: UIViewRepresentable {
         var onLanguageOverlayAnchorChange: (CGPoint) -> Void
         var isPackageDropTargeted: Binding<Bool>
         private var isApplyingHighlighting = false
+        private var isApplyingPairEdit = false
         private var gestureStartFontSize = SourceEditorFont.defaultSize
         private var gestureCurrentFontSize = SourceEditorFont.defaultSize
         private var appliedFontSize = 0.0
@@ -247,6 +254,43 @@ struct PlatformTextView: UIViewRepresentable {
             self.onScrollOffsetChange = onScrollOffsetChange
             self.onLanguageOverlayAnchorChange = onLanguageOverlayAnchorChange
             self.isPackageDropTargeted = isPackageDropTargeted
+        }
+
+        func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText replacement: String) -> Bool {
+            guard !isApplyingPairEdit, textView.isEditable, textView.markedTextRange == nil else { return true }
+            let text = textView.text ?? ""
+            let selectedRange = textView.selectedRange
+
+            let pairEdit: SourceEditorTextEdit?
+            if replacement.isEmpty,
+               selectedRange.length == 0,
+               selectedRange.location > 0,
+               range == NSRange(location: selectedRange.location - 1, length: 1) {
+                // Plain backspace at a caret.
+                pairEdit = SourceEditorBracketPairing.editForBackspace(in: text, selectedRange: selectedRange)
+            } else if range == selectedRange {
+                // Plain typing at the live selection.
+                pairEdit = SourceEditorBracketPairing.edit(forTyping: replacement, in: text, selectedRange: selectedRange)
+            } else {
+                pairEdit = nil
+            }
+            guard let pairEdit else { return true }
+
+            if pairEdit.isCaretMoveOnly {
+                textView.selectedRange = pairEdit.selectedRange
+                return false
+            }
+            guard let start = textView.position(from: textView.beginningOfDocument, offset: pairEdit.replacementRange.location),
+                  let end = textView.position(from: start, offset: pairEdit.replacementRange.length),
+                  let textRange = textView.textRange(from: start, to: end) else { return true }
+            // `replace` goes through the system input pipeline (undo, then
+            // textViewDidChange -> binding sync); the flag stops the nested
+            // shouldChangeText callback from re-pairing.
+            isApplyingPairEdit = true
+            textView.replace(textRange, withText: pairEdit.replacementText)
+            textView.selectedRange = pairEdit.selectedRange
+            isApplyingPairEdit = false
+            return false
         }
 
         func textViewDidChange(_ textView: UITextView) {

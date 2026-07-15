@@ -594,18 +594,27 @@ private nonisolated struct PopoverBubbleShape: Shape {
     }
 }
 
-struct SourceEditorCommentEdit {
+/// A pending text change produced by an editing engine (comment toggle,
+/// bracket pairing): replace `replacementRange` with `replacementText`,
+/// then select `selectedRange` (absolute, post-edit).
+struct SourceEditorTextEdit {
     var replacementRange: NSRange
     var replacementText: String
     var selectedRange: NSRange
+
+    /// True when the edit changes no text and only moves the caret (typing a
+    /// closer that steps over an identical character).
+    var isCaretMoveOnly: Bool {
+        replacementRange.length == 0 && replacementText.isEmpty
+    }
 }
 
 enum SourceEditorCommentToggle {
-    static func edit(for text: String, selectedRange: NSRange) -> SourceEditorCommentEdit? {
+    static func edit(for text: String, selectedRange: NSRange) -> SourceEditorTextEdit? {
         let nsText = text as NSString
         let textLength = nsText.length
         if textLength == 0 {
-            return SourceEditorCommentEdit(
+            return SourceEditorTextEdit(
                 replacementRange: NSRange(location: 0, length: 0),
                 replacementText: "// ",
                 selectedRange: NSRange(location: 3, length: 0)
@@ -670,7 +679,7 @@ enum SourceEditorCommentToggle {
             )
         }
 
-        return SourceEditorCommentEdit(
+        return SourceEditorTextEdit(
             replacementRange: targetRange,
             replacementText: replacement,
             selectedRange: nextSelection
@@ -854,5 +863,90 @@ enum SourceEditorDropSnippet {
     private static func escapedStringPath(_ path: String) -> String {
         path.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+}
+
+/// Shared (macOS + iOS) auto-closing for Typst source: typing `(`, `[`, `{`,
+/// `$`, or `"` inserts the matching delimiter (or wraps the selection); typing
+/// a closer directly before an identical character skips over it; backspacing
+/// the opener of an empty pair deletes both halves. Pure text logic — each
+/// platform's text-view delegate applies the returned edit.
+enum SourceEditorBracketPairing {
+    private static let closers: [Character: Character] = ["(": ")", "[": "]", "{": "}", "$": "$", "\"": "\""]
+    private static let closingSet: Set<Character> = [")", "]", "}", "$", "\""]
+    private static let symmetric: Set<Character> = ["$", "\""]
+
+    /// The edit for typing `typed` at `selectedRange`, or nil to let the text
+    /// view handle the keystroke natively.
+    static func edit(forTyping typed: String, in text: String, selectedRange: NSRange) -> SourceEditorTextEdit? {
+        guard typed.count == 1, let char = typed.first else { return nil }
+        let nsText = text as NSString
+        guard selectedRange.location >= 0, NSMaxRange(selectedRange) <= nsText.length else { return nil }
+
+        // Wrap a selection in the pair, keeping it selected inside.
+        if selectedRange.length > 0, let closer = closers[char] {
+            let selected = nsText.substring(with: selectedRange)
+            return SourceEditorTextEdit(
+                replacementRange: selectedRange,
+                replacementText: "\(char)\(selected)\(closer)",
+                selectedRange: NSRange(location: selectedRange.location + 1, length: selectedRange.length)
+            )
+        }
+        guard selectedRange.length == 0 else { return nil }
+        let caret = selectedRange.location
+        let next = character(in: nsText, at: caret)
+
+        // Typing a closer (or symmetric delimiter) directly before an identical
+        // character steps over it instead of inserting a duplicate.
+        if closingSet.contains(char), next == char {
+            return SourceEditorTextEdit(
+                replacementRange: NSRange(location: caret, length: 0),
+                replacementText: "",
+                selectedRange: NSRange(location: caret + 1, length: 0)
+            )
+        }
+
+        // Auto-close an opener — unless it's gluing onto a word: typing `(`
+        // before `word` shouldn't produce `(|)word`, and a quote/dollar right
+        // after a word is a manual close, not an opener.
+        guard let closer = closers[char] else { return nil }
+        if let next, isWordCharacter(next) { return nil }
+        if symmetric.contains(char), caret > 0,
+           let previous = character(in: nsText, at: caret - 1),
+           isWordCharacter(previous) {
+            return nil
+        }
+        return SourceEditorTextEdit(
+            replacementRange: NSRange(location: caret, length: 0),
+            replacementText: "\(char)\(closer)",
+            selectedRange: NSRange(location: caret + 1, length: 0)
+        )
+    }
+
+    /// The edit for a plain backspace at a caret: deleting the opener of an
+    /// empty pair removes both halves. nil = normal single-character delete.
+    static func editForBackspace(in text: String, selectedRange: NSRange) -> SourceEditorTextEdit? {
+        guard selectedRange.length == 0, selectedRange.location > 0 else { return nil }
+        let nsText = text as NSString
+        let caret = selectedRange.location
+        guard caret < nsText.length,
+              let previous = character(in: nsText, at: caret - 1),
+              let closer = closers[previous],
+              character(in: nsText, at: caret) == closer else { return nil }
+        return SourceEditorTextEdit(
+            replacementRange: NSRange(location: caret - 1, length: 2),
+            replacementText: "",
+            selectedRange: NSRange(location: caret - 1, length: 0)
+        )
+    }
+
+    private static func character(in text: NSString, at index: Int) -> Character? {
+        guard index >= 0, index < text.length else { return nil }
+        let range = text.rangeOfComposedCharacterSequence(at: index)
+        return Character(text.substring(with: range))
+    }
+
+    private static func isWordCharacter(_ char: Character) -> Bool {
+        char.isLetter || char.isNumber
     }
 }

@@ -311,6 +311,7 @@ struct PlatformTextView: NSViewRepresentable {
         var onLanguageOverlayAnchorChange: (CGPoint) -> Void
         var isPackageDropTargeted: Binding<Bool>
         private var isApplyingHighlighting = false
+        private var isApplyingPairEdit = false
         private var gestureStartFontSize = SourceEditorFont.defaultSize
         private var gestureCurrentFontSize = SourceEditorFont.defaultSize
         private var appliedFontSize = 0.0
@@ -572,6 +573,42 @@ struct PlatformTextView: NSViewRepresentable {
             sendSelectionChange(range)
             updateLanguageOverlayAnchor(in: textView, selectedRange: range)
             (textView as? PackagePathTextView)?.diagnosticCaretDidChange()
+        }
+
+        func textView(_ textView: NSTextView, shouldChangeTextIn affectedRange: NSRange, replacementString: String?) -> Bool {
+            guard !isApplyingPairEdit, textView.isEditable, !textView.hasMarkedText(),
+                  let replacementString else { return true }
+            let selectedRange = textView.selectedRange()
+
+            let pairEdit: SourceEditorTextEdit?
+            if replacementString.isEmpty,
+               selectedRange.length == 0,
+               selectedRange.location > 0,
+               affectedRange == NSRange(location: selectedRange.location - 1, length: 1) {
+                // Plain backspace at a caret.
+                pairEdit = SourceEditorBracketPairing.editForBackspace(in: textView.string, selectedRange: selectedRange)
+            } else if affectedRange == selectedRange {
+                // Plain typing at the live selection — pastes and drops replace
+                // other ranges and pass through untouched.
+                pairEdit = SourceEditorBracketPairing.edit(forTyping: replacementString, in: textView.string, selectedRange: selectedRange)
+            } else {
+                pairEdit = nil
+            }
+            guard let pairEdit else { return true }
+
+            if pairEdit.isCaretMoveOnly {
+                textView.setSelectedRange(pairEdit.selectedRange)
+                return false
+            }
+            // `insertText(_:replacementRange:)` runs the standard editing
+            // pipeline (undo registration, delegate callbacks, binding sync via
+            // textDidChange); the flag stops the nested shouldChangeText
+            // callback from re-pairing.
+            isApplyingPairEdit = true
+            defer { isApplyingPairEdit = false }
+            textView.insertText(pairEdit.replacementText, replacementRange: pairEdit.replacementRange)
+            textView.setSelectedRange(pairEdit.selectedRange)
+            return false
         }
 
         private func sendTextChange(_ nextText: String, selectedRange range: NSRange) {
