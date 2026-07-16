@@ -607,37 +607,51 @@ public actor EmbeddedTinymistLanguageService: TypstLanguageService {
     }
 
     public func hover(path: String, utf16Offset: Int) async -> TypstHoverInfo? {
+        await ensurePackageStorageConfigured()
         let text = files[path] ?? ""
         let offset = TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: utf16Offset, in: text)
-        guard let data = await call({ session in
+        TypstLanguageDebug.log("hover request path=\(path) utf16=\(utf16Offset) utf8=\(offset)")
+        let rawResponse = await call({ session in
             typeset_tinymist_hover(session, path, UInt32(max(0, offset)))
-        }).data(using: .utf8),
-              let response = try? JSONDecoder().decode(FFIHoverResponse.self, from: data),
-              let hover = response.hover else {
+        })
+        guard let data = rawResponse.data(using: .utf8),
+              let response = try? JSONDecoder().decode(FFIHoverResponse.self, from: data) else {
+            TypstLanguageDebug.log("hover Rust decode failed responsePrefix=\(String(rawResponse.prefix(240)))")
             return nil
         }
-        return TypstHoverInfo(
+        guard let hover = response.hover else {
+            TypstLanguageDebug.log("hover Rust result=none")
+            return nil
+        }
+        let result = TypstHoverInfo(
             range: TypstSourceOffsetConverter.utf16Range(fromUTF8Start: hover.startUtf8, endUTF8: hover.endUtf8, in: text),
             text: hover.text
         )
+        TypstLanguageDebug.log("hover Rust result range=\(result.range.location)..<\(NSMaxRange(result.range)) textPrefix=\(result.text.prefix(120))")
+        return result
     }
 
     public func signatureHelp(path: String, utf16Offset: Int) async -> TypstSignatureHelp? {
         await ensurePackageStorageConfigured()
         let text = files[path] ?? ""
-        let offset = TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: utf16Offset, in: text)
-        TypstLanguageDebug.log("signature request path=\(path) utf16=\(utf16Offset) utf8=\(offset)")
+        // A caret sitting on a callee name (`#im|age(...)`) has no unclosed paren
+        // in its prefix, so the engine reports "no call context". Remap such
+        // offsets to just inside the call's opening paren — placing the cursor
+        // anywhere on the function then shows its signature.
+        let queryOffset = Self.signatureQueryOffset(in: text, utf16Offset: utf16Offset)
+        let offset = TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: queryOffset, in: text)
+        TypstLanguageDebug.log("signature request path=\(path) utf16=\(utf16Offset) query=\(queryOffset) utf8=\(offset)")
         let rawResponse = await call({ session in
             typeset_tinymist_signature_help(session, path, UInt32(max(0, offset)))
         })
         guard let data = rawResponse.data(using: .utf8),
               let response = try? JSONDecoder().decode(FFISignatureHelpResponse.self, from: data) else {
-            let fallback = TypstSignatureHelpProvider.signatureHelp(in: text, utf16Offset: utf16Offset)
+            let fallback = TypstSignatureHelpProvider.signatureHelp(in: text, utf16Offset: queryOffset)
             TypstLanguageDebug.log("signature Rust decode failed; fallback=\(fallback?.signatures.first?.label ?? "none") responsePrefix=\(String(rawResponse.prefix(240)))")
             return fallback
         }
         guard let signatureHelp = response.signatureHelp else {
-            let fallback = TypstSignatureHelpProvider.signatureHelp(in: text, utf16Offset: utf16Offset)
+            let fallback = TypstSignatureHelpProvider.signatureHelp(in: text, utf16Offset: queryOffset)
             TypstLanguageDebug.log("signature Rust none; fallback=\(fallback?.signatures.first?.label ?? "none")")
             return fallback
         }
@@ -656,6 +670,38 @@ public actor EmbeddedTinymistLanguageService: TypstLanguageService {
         )
         TypstLanguageDebug.log("signature Rust result=\(result.signatures.first?.label ?? "none") activeParameter=\(result.activeParameter)")
         return result
+    }
+
+    /// The offset to query signature help at. When the caret touches an
+    /// identifier that runs directly into `(` — the callee name of a call —
+    /// the query moves to just inside that paren: the caret's own prefix has
+    /// no unclosed paren there, so the engine would otherwise report no call
+    /// context. Any other position is returned unchanged. ASCII identifiers
+    /// only (letters, digits, `_`, `-`, and `.` for method chains).
+    static func signatureQueryOffset(in text: String, utf16Offset: Int) -> Int {
+        let ns = text as NSString
+        let length = ns.length
+        let caret = min(max(0, utf16Offset), length)
+
+        func isIdentifier(_ character: unichar) -> Bool {
+            (character >= 97 && character <= 122)
+                || (character >= 65 && character <= 90)
+                || (character >= 48 && character <= 57)
+                || character == 95 // _
+                || character == 45 // -
+                || character == 46 // . (method chains)
+        }
+
+        let touchesIdentifier = (caret < length && isIdentifier(ns.character(at: caret)))
+            || (caret > 0 && isIdentifier(ns.character(at: caret - 1)))
+        guard touchesIdentifier else { return utf16Offset }
+
+        var end = caret
+        while end < length, isIdentifier(ns.character(at: end)) {
+            end += 1
+        }
+        guard end < length, ns.character(at: end) == unichar(UInt8(ascii: "(")) else { return utf16Offset }
+        return end + 1
     }
 
     private func ensurePackageStorageConfigured() async {
@@ -1013,15 +1059,18 @@ private enum TypstSignatureHelpProvider {
 
     private static let signatures: [String: TypstSignatureInformation] = [
         "image": TypstSignatureInformation(
-            label: "image(path, width: auto, height: auto, alt: none, fit: \"contain\", scaling: \"auto\")",
-            documentation: "Embeds an image from the package.",
+            label: "image(source: image, alt: none | str, fit: \"contain\" | \"cover\" | \"stretch\", format: \"gif\" | \"jpg\" | \"pdf\" | \"png\" | \"svg\" | \"webp\" | auto | dictionary, height: auto | fraction | relative, icc: auto | bytes | str, page: int, scaling: \"pixelated\" | \"smooth\" | auto, width: auto | relative) -> image",
+            documentation: "A raster or vector graphic.",
             parameters: [
-                TypstParameterInformation(label: "path", documentation: "A package-relative image path."),
-                TypstParameterInformation(label: "width", documentation: "The displayed width."),
-                TypstParameterInformation(label: "height", documentation: "The displayed height."),
-                TypstParameterInformation(label: "alt", documentation: "Alternative text for accessibility."),
-                TypstParameterInformation(label: "fit", documentation: "How the image is fit into its box."),
-                TypstParameterInformation(label: "scaling", documentation: "The image scaling mode."),
+                TypstParameterInformation(label: "source", documentation: "A path to an image file or raw bytes making up an image in one of the supported formats."),
+                TypstParameterInformation(label: "alt", documentation: "An alternative description of the image."),
+                TypstParameterInformation(label: "fit", documentation: "How the image should adjust itself to the area defined by width and height."),
+                TypstParameterInformation(label: "format", documentation: "The image format. It is detected automatically by default."),
+                TypstParameterInformation(label: "height", documentation: "The height of the image."),
+                TypstParameterInformation(label: "icc", documentation: "An ICC profile that defines how to interpret the image's colors."),
+                TypstParameterInformation(label: "page", documentation: "The page number embedded from a PDF image."),
+                TypstParameterInformation(label: "scaling", documentation: "A hint to viewers for scaling the image."),
+                TypstParameterInformation(label: "width", documentation: "The width of the image."),
             ]
         ),
         "include": TypstSignatureInformation(
@@ -1392,8 +1441,7 @@ public actor BasicTypstLanguageService: TypstLanguageService {
         ) { _, lineRange, enclosingRange, _ in
             let line = nsText.substring(with: lineRange)
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !(ignoringCommandsAndArguments && trimmed.hasPrefix("#")),
-                  !trimmed.hasPrefix("//"),
+            guard !trimmed.hasPrefix("//"),
                   !trimmed.hasPrefix("```") else {
                 return
             }
@@ -1415,12 +1463,23 @@ public actor BasicTypstLanguageService: TypstLanguageService {
         lineOffset: Int,
         ignoringCommandsAndArguments: Bool
     ) -> [NSRange] {
+        mutableProseSegments(
+            in: Array(line.unicodeScalars),
+            lineOffset: lineOffset,
+            ignoringCommandsAndArguments: ignoringCommandsAndArguments
+        )
+    }
+
+    private static func mutableProseSegments(
+        in scalars: [Unicode.Scalar],
+        lineOffset: Int,
+        ignoringCommandsAndArguments: Bool
+    ) -> [NSRange] {
         var ranges: [NSRange] = []
         var segmentStart: Int?
         var inString = false
         var inBacktick = false
         var inMath = false
-        let scalars = Array(line.unicodeScalars)
         var index = 0
 
         func closeSegment(at index: Int) {
@@ -1433,9 +1492,21 @@ public actor BasicTypstLanguageService: TypstLanguageService {
         while index < scalars.count {
             let scalar = scalars[index]
             let isBlocked: Bool
-            if ignoringCommandsAndArguments && scalar == "#" && !inString && !inBacktick && !inMath {
+            if scalar == "#" && !inString && !inBacktick && !inMath,
+               isModuleDirective(in: scalars, from: index) {
                 closeSegment(at: index)
-                index = scanTypstCommand(in: scalars, from: index)
+                break
+            } else if ignoringCommandsAndArguments && scalar == "#" && !inString && !inBacktick && !inMath {
+                closeSegment(at: index)
+                let command = scanTypstCommand(in: scalars, from: index)
+                for contentRange in command.contentRanges {
+                    ranges.append(contentsOf: mutableProseSegments(
+                        in: Array(scalars[contentRange]),
+                        lineOffset: lineOffset + contentRange.lowerBound,
+                        ignoringCommandsAndArguments: true
+                    ))
+                }
+                index = command.end
                 continue
             } else if scalar == "\"" && !inBacktick {
                 inString.toggle()
@@ -1464,39 +1535,128 @@ public actor BasicTypstLanguageService: TypstLanguageService {
         return ranges
     }
 
-    private static func scanTypstCommand(in scalars: [Unicode.Scalar], from hashIndex: Int) -> Int {
+    private struct TypstCommandScan {
+        var end: Int
+        var contentRanges: [Range<Int>]
+    }
+
+    private static func isModuleDirective(in scalars: [Unicode.Scalar], from hashIndex: Int) -> Bool {
         var index = skipWhitespace(in: scalars, from: hashIndex + 1)
-        guard index < scalars.count else { return min(hashIndex + 1, scalars.count) }
+        let nameStart = index
+        while index < scalars.count, isCommandNameScalar(scalars[index]) {
+            index += 1
+        }
+        let name = scalars[nameStart..<index]
+        return name.elementsEqual("import".unicodeScalars)
+            || name.elementsEqual("include".unicodeScalars)
+    }
+
+    private static func scanTypstCommand(in scalars: [Unicode.Scalar], from hashIndex: Int) -> TypstCommandScan {
+        var index = skipWhitespace(in: scalars, from: hashIndex + 1)
+        guard index < scalars.count else {
+            return TypstCommandScan(end: min(hashIndex + 1, scalars.count), contentRanges: [])
+        }
 
         if scalars[index] == "{" {
-            return scanBalanced(in: scalars, from: index, open: "{", close: "}")
+            return scanTypstCodeContainer(in: scalars, from: index, close: "}")
         }
 
         let nameStart = index
         while index < scalars.count, isCommandNameScalar(scalars[index]) {
             index += 1
         }
-        guard index > nameStart else { return min(hashIndex + 1, scalars.count) }
+        guard index > nameStart else {
+            return TypstCommandScan(end: min(hashIndex + 1, scalars.count), contentRanges: [])
+        }
+
+        let commandName = String(String.UnicodeScalarView(scalars[nameStart..<index]))
+        if commandName == "let" || commandName == "set" || commandName == "show" {
+            return scanTypstCodeTail(in: scalars, from: index)
+        }
+
+        var contentRanges: [Range<Int>] = []
 
         while true {
             index = skipWhitespace(in: scalars, from: index)
-            guard index < scalars.count else { return index }
+            guard index < scalars.count else {
+                return TypstCommandScan(end: index, contentRanges: contentRanges)
+            }
 
             switch scalars[index] {
             case "(":
-                index = scanBalanced(in: scalars, from: index, open: "(", close: ")")
+                let nested = scanTypstCodeContainer(in: scalars, from: index, close: ")")
+                contentRanges.append(contentsOf: nested.contentRanges)
+                index = nested.end
             case "[":
-                index = scanBalanced(in: scalars, from: index, open: "[", close: "]")
+                let end = scanBalanced(in: scalars, from: index, open: "[", close: "]")
+                if end > index + 1 {
+                    contentRanges.append((index + 1)..<(end - 1))
+                }
+                index = end
             case "{":
-                index = scanBalanced(in: scalars, from: index, open: "{", close: "}")
+                let nested = scanTypstCodeContainer(in: scalars, from: index, close: "}")
+                contentRanges.append(contentsOf: nested.contentRanges)
+                index = nested.end
             case "\"":
                 index = scanQuotedString(in: scalars, from: index)
             case "`":
                 index = scanBacktickString(in: scalars, from: index)
             default:
-                return index
+                return TypstCommandScan(end: index, contentRanges: contentRanges)
             }
         }
+    }
+
+    private static func scanTypstCodeTail(in scalars: [Unicode.Scalar], from start: Int) -> TypstCommandScan {
+        scanTypstCode(in: scalars, from: start, close: nil)
+    }
+
+    private static func scanTypstCodeContainer(
+        in scalars: [Unicode.Scalar],
+        from start: Int,
+        close: Unicode.Scalar
+    ) -> TypstCommandScan {
+        scanTypstCode(in: scalars, from: start + 1, close: close)
+    }
+
+    private static func scanTypstCode(
+        in scalars: [Unicode.Scalar],
+        from start: Int,
+        close: Unicode.Scalar?
+    ) -> TypstCommandScan {
+        var index = start
+        var contentRanges: [Range<Int>] = []
+
+        while index < scalars.count {
+            if let close, scalars[index] == close {
+                return TypstCommandScan(end: index + 1, contentRanges: contentRanges)
+            }
+
+            switch scalars[index] {
+            case "\"":
+                index = scanQuotedString(in: scalars, from: index)
+            case "`":
+                index = scanBacktickString(in: scalars, from: index)
+            case "[":
+                let end = scanBalanced(in: scalars, from: index, open: "[", close: "]")
+                if end > index + 1 {
+                    contentRanges.append((index + 1)..<(end - 1))
+                }
+                index = end
+            case "(":
+                let nested = scanTypstCodeContainer(in: scalars, from: index, close: ")")
+                contentRanges.append(contentsOf: nested.contentRanges)
+                index = nested.end
+            case "{":
+                let nested = scanTypstCodeContainer(in: scalars, from: index, close: "}")
+                contentRanges.append(contentsOf: nested.contentRanges)
+                index = nested.end
+            default:
+                index += 1
+            }
+        }
+
+        return TypstCommandScan(end: scalars.count, contentRanges: contentRanges)
     }
 
     private static func scanBalanced(in scalars: [Unicode.Scalar], from start: Int, open: Unicode.Scalar, close: Unicode.Scalar) -> Int {

@@ -15,10 +15,12 @@ struct TypesetApp: App {
         UserDefaults.standard.register(defaults: [
             "newDocument.includesSampleContent": true,
             "sourceEditor.showLineNumbers": false,
+            "sourceEditor.spellChecking": true,
             "sourceEditor.spellCheckingIgnoresCommands": true,
             "export.autoPDFOnClose": false,
             "preview.renderWarmupDelay": 0.5,
             "preview.autoRetriggerDelay": 0.5,
+            "editor.holdErrorPopupWhileEditing": true,
             "developer.lspDebugLogging": false
         ])
     }

@@ -28,6 +28,7 @@ struct PlatformTextView: UIViewRepresentable {
     var onImportPastedImage: @MainActor (Data, String) -> String?
     var diagnostics: [TypstSourceDiagnostic]
     var proseRanges: [TypstProseRange]
+    var proseRangesAreCurrent: Bool
     var showLineNumbers: Bool
     var spellCheckingEnabled: Bool
     var fixedTopContentInset: CGFloat?
@@ -37,6 +38,9 @@ struct PlatformTextView: UIViewRepresentable {
     var onCompletionMove: (Int) -> Void
     var onCompletionAccept: () -> Void
     var onCompletionDismiss: () -> Void
+    var onShowFunctionHelp: (NSRange, CGPoint) -> Void
+    var onShowSignatureHelp: (NSRange, CGPoint) -> Void
+    var onEditorInteraction: () -> Void
     var onScrollOffsetChange: (CGFloat) -> Void
     var onLanguageOverlayAnchorChange: (CGPoint) -> Void
     var onScrollFractionChange: (Double) -> Void = { _ in }
@@ -47,6 +51,7 @@ struct PlatformTextView: UIViewRepresentable {
     func makeUIView(context: Context) -> UITextView {
         let textView = PackageTextView()
         textView.autocorrectionType = .no
+        textView.spellCheckingType = .no
         textView.autocapitalizationType = .none
         // Literal characters only: Typst does its own smart-quote/dash
         // substitution at compile time, and bracket pairing needs to see
@@ -88,7 +93,11 @@ struct PlatformTextView: UIViewRepresentable {
         context.coordinator.onImportPastedImage = onImportPastedImage
         context.coordinator.diagnostics = diagnostics
         (textView as? PackageTextView)?.inlineDiagnostics = diagnostics
-        context.coordinator.proseRanges = proseRanges
+        context.coordinator.updateProseRanges(
+            proseRanges,
+            isCurrent: proseRangesAreCurrent,
+            representedText: text
+        )
         context.coordinator.spellCheckingEnabled = spellCheckingEnabled
         context.coordinator.onTextChange = onTextChange
         context.coordinator.onSelectionChange = onSelectionChange
@@ -96,6 +105,7 @@ struct PlatformTextView: UIViewRepresentable {
         context.coordinator.onCompletionMove = onCompletionMove
         context.coordinator.onCompletionAccept = onCompletionAccept
         context.coordinator.onCompletionDismiss = onCompletionDismiss
+        context.coordinator.onEditorInteraction = onEditorInteraction
         context.coordinator.onScrollOffsetChange = onScrollOffsetChange
         context.coordinator.onLanguageOverlayAnchorChange = onLanguageOverlayAnchorChange
         if let packageTextView = textView as? PackageTextView {
@@ -116,7 +126,7 @@ struct PlatformTextView: UIViewRepresentable {
         (textView as? PackageTextView)?.fixedTopContentInset = fixedTopContentInset ?? 0
         let annotationsChanged = context.coordinator.consumeAnnotationChanges(
             diagnostics: diagnostics,
-            proseRanges: proseRanges,
+            proseRanges: context.coordinator.proseRanges,
             spellCheckingEnabled: spellCheckingEnabled
         )
 
@@ -159,6 +169,7 @@ struct PlatformTextView: UIViewRepresentable {
             onImportPastedImage: onImportPastedImage,
             diagnostics: diagnostics,
             proseRanges: proseRanges,
+            proseRangesAreCurrent: proseRangesAreCurrent,
             spellCheckingEnabled: spellCheckingEnabled,
             onTextChange: onTextChange,
             onSelectionChange: onSelectionChange,
@@ -166,6 +177,7 @@ struct PlatformTextView: UIViewRepresentable {
             onCompletionMove: onCompletionMove,
             onCompletionAccept: onCompletionAccept,
             onCompletionDismiss: onCompletionDismiss,
+            onEditorInteraction: onEditorInteraction,
             onScrollOffsetChange: onScrollOffsetChange,
             onLanguageOverlayAnchorChange: onLanguageOverlayAnchorChange,
             isPackageDropTargeted: $isPackageDropTargeted
@@ -187,6 +199,7 @@ struct PlatformTextView: UIViewRepresentable {
         var onImportPastedImage: @MainActor (Data, String) -> String?
         var diagnostics: [TypstSourceDiagnostic]
         var proseRanges: [TypstProseRange]
+        var proseRangesAreCurrent: Bool
         var spellCheckingEnabled: Bool
         var onTextChange: (String, NSRange) -> Void
         var onSelectionChange: (NSRange) -> Void
@@ -194,11 +207,15 @@ struct PlatformTextView: UIViewRepresentable {
         var onCompletionMove: (Int) -> Void
         var onCompletionAccept: () -> Void
         var onCompletionDismiss: () -> Void
+        var onEditorInteraction: () -> Void
         var onScrollOffsetChange: (CGFloat) -> Void
         var onLanguageOverlayAnchorChange: (CGPoint) -> Void
         var isPackageDropTargeted: Binding<Bool>
         private var isApplyingHighlighting = false
         private var isApplyingPairEdit = false
+        private var isApplyingAutocorrectionEdit = false
+        private var autocorrectionProseRanges: [TypstProseRange]
+        private var autocorrectionTextLength: Int
         private var gestureStartFontSize = SourceEditorFont.defaultSize
         private var gestureCurrentFontSize = SourceEditorFont.defaultSize
         private var appliedFontSize = 0.0
@@ -210,6 +227,7 @@ struct PlatformTextView: UIViewRepresentable {
         private var renderedDiagnostics: [TypstSourceDiagnostic] = []
         private var renderedProseRanges: [TypstProseRange] = []
         private var renderedSpellCheckingEnabled = false
+        private let spellChecker = UITextChecker()
         private var lastSentSelection = NSRange(location: NSNotFound, length: 0)
         private var lastLanguageOverlayAnchor: CGPoint?
         private var isLanguageOverlayAnchorUpdatePending = false
@@ -224,6 +242,7 @@ struct PlatformTextView: UIViewRepresentable {
             onImportPastedImage: @escaping @MainActor (Data, String) -> String?,
             diagnostics: [TypstSourceDiagnostic],
             proseRanges: [TypstProseRange],
+            proseRangesAreCurrent: Bool,
             spellCheckingEnabled: Bool,
             onTextChange: @escaping (String, NSRange) -> Void,
             onSelectionChange: @escaping (NSRange) -> Void,
@@ -231,6 +250,7 @@ struct PlatformTextView: UIViewRepresentable {
             onCompletionMove: @escaping (Int) -> Void,
             onCompletionAccept: @escaping () -> Void,
             onCompletionDismiss: @escaping () -> Void,
+            onEditorInteraction: @escaping () -> Void,
             onScrollOffsetChange: @escaping (CGFloat) -> Void,
             onLanguageOverlayAnchorChange: @escaping (CGPoint) -> Void,
             isPackageDropTargeted: Binding<Bool>
@@ -244,22 +264,56 @@ struct PlatformTextView: UIViewRepresentable {
             self.onImportPastedImage = onImportPastedImage
             self.diagnostics = diagnostics
             self.proseRanges = proseRanges
+            self.proseRangesAreCurrent = proseRangesAreCurrent
             self.spellCheckingEnabled = spellCheckingEnabled
+            self.autocorrectionProseRanges = proseRangesAreCurrent ? proseRanges : []
+            self.autocorrectionTextLength = (text.wrappedValue as NSString).length
             self.onTextChange = onTextChange
             self.onSelectionChange = onSelectionChange
             self.isCompletionPresented = isCompletionPresented
             self.onCompletionMove = onCompletionMove
             self.onCompletionAccept = onCompletionAccept
             self.onCompletionDismiss = onCompletionDismiss
+            self.onEditorInteraction = onEditorInteraction
             self.onScrollOffsetChange = onScrollOffsetChange
             self.onLanguageOverlayAnchorChange = onLanguageOverlayAnchorChange
             self.isPackageDropTargeted = isPackageDropTargeted
         }
 
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText replacement: String) -> Bool {
-            guard !isApplyingPairEdit, textView.isEditable, textView.markedTextRange == nil else { return true }
+            onEditorInteraction()
+            guard !isApplyingPairEdit, !isApplyingAutocorrectionEdit,
+                  textView.isEditable, textView.markedTextRange == nil else { return true }
             let text = textView.text ?? ""
             let selectedRange = textView.selectedRange
+
+            if let autocorrectionEdit = autocorrectionEdit(
+                forTyping: replacement,
+                in: text,
+                affectedRange: range,
+                selectedRange: selectedRange
+            ),
+               let start = textView.position(
+                from: textView.beginningOfDocument,
+                offset: autocorrectionEdit.replacementRange.location
+               ),
+               let end = textView.position(
+                from: start,
+                offset: autocorrectionEdit.replacementRange.length
+               ),
+               let textRange = textView.textRange(from: start, to: end) {
+                trackProseEdit(
+                    replacing: autocorrectionEdit.replacementRange,
+                    with: autocorrectionEdit.replacementText,
+                    in: text
+                )
+                isApplyingAutocorrectionEdit = true
+                textView.replace(textRange, withText: autocorrectionEdit.replacementText)
+                textView.selectedRange = autocorrectionEdit.selectedRange
+                isApplyingAutocorrectionEdit = false
+                textViewDidChange(textView)
+                return false
+            }
 
             let pairEdit: SourceEditorTextEdit?
             if replacement.isEmpty,
@@ -274,7 +328,10 @@ struct PlatformTextView: UIViewRepresentable {
             } else {
                 pairEdit = nil
             }
-            guard let pairEdit else { return true }
+            guard let pairEdit else {
+                trackProseEdit(replacing: range, with: replacement, in: text)
+                return true
+            }
 
             if pairEdit.isCaretMoveOnly {
                 textView.selectedRange = pairEdit.selectedRange
@@ -283,23 +340,142 @@ struct PlatformTextView: UIViewRepresentable {
             guard let start = textView.position(from: textView.beginningOfDocument, offset: pairEdit.replacementRange.location),
                   let end = textView.position(from: start, offset: pairEdit.replacementRange.length),
                   let textRange = textView.textRange(from: start, to: end) else { return true }
-            // `replace` goes through the system input pipeline (undo, then
-            // textViewDidChange -> binding sync); the flag stops the nested
-            // shouldChangeText callback from re-pairing.
+            // `replace` goes through the system input pipeline (undo included);
+            // the flag stops the nested shouldChangeText callback from re-pairing
+            // and holds the textViewDidChange report until the caret is placed
+            // inside the pair — the language pipeline reuses the selection
+            // captured with the text change for its post-sync signature-help
+            // request, so reporting the caret after the inserted closer would
+            // kill the parameter tooltip.
             isApplyingPairEdit = true
+            trackProseEdit(
+                replacing: pairEdit.replacementRange,
+                with: pairEdit.replacementText,
+                in: text
+            )
             textView.replace(textRange, withText: pairEdit.replacementText)
             textView.selectedRange = pairEdit.selectedRange
             isApplyingPairEdit = false
+            textViewDidChange(textView)
             return false
         }
 
         func textViewDidChange(_ textView: UITextView) {
-            guard !isApplyingHighlighting else { return }
+            guard !isApplyingHighlighting, !isApplyingPairEdit, !isApplyingAutocorrectionEdit else { return }
             let nextText = textView.text ?? ""
+            let nextLength = (nextText as NSString).length
+            if nextLength != autocorrectionTextLength {
+                proseRanges = []
+                autocorrectionProseRanges = []
+                autocorrectionTextLength = nextLength
+            }
             let range = textView.selectedRange
             scheduleRepaint(in: textView)
             sendTextChange(nextText, selectedRange: range)
             updateLanguageOverlayAnchor(in: textView)
+        }
+
+        func updateProseRanges(
+            _ ranges: [TypstProseRange],
+            isCurrent: Bool,
+            representedText: String
+        ) {
+            proseRangesAreCurrent = isCurrent
+            guard isCurrent else {
+                let nativeText = textView?.text
+                let nativeEditIsPending = nativeText.map { nativeTextAwaitingBinding == $0 } ?? false
+                if let nativeText, nativeText != representedText, !nativeEditIsPending {
+                    proseRanges = []
+                    autocorrectionProseRanges = []
+                    autocorrectionTextLength = (representedText as NSString).length
+                }
+                return
+            }
+            proseRanges = ranges
+            autocorrectionProseRanges = ranges
+            autocorrectionTextLength = (representedText as NSString).length
+        }
+
+        private func autocorrectionEdit(
+            forTyping replacement: String,
+            in text: String,
+            affectedRange: NSRange,
+            selectedRange: NSRange
+        ) -> SourceEditorTextEdit? {
+            guard spellCheckingEnabled,
+                  autocorrectionTextLength == (text as NSString).length,
+                  let candidate = SourceEditorAutocorrection.candidate(
+                    forTyping: replacement,
+                    in: text,
+                    affectedRange: affectedRange,
+                    selectedRange: selectedRange,
+                    proseRanges: autocorrectionProseRanges
+                  )
+            else { return nil }
+
+            let language = Locale.preferredLanguages.first ?? "en-US"
+            let wordRange = NSRange(location: 0, length: (candidate.word as NSString).length)
+            let misspelled = spellChecker.rangeOfMisspelledWord(
+                in: candidate.word,
+                range: wordRange,
+                startingAt: 0,
+                wrap: false,
+                language: language
+            )
+            guard NSEqualRanges(misspelled, wordRange),
+                  let correction = spellChecker.guesses(
+                    forWordRange: wordRange,
+                    in: candidate.word,
+                    language: language
+                  )?.first,
+                  !correction.isEmpty,
+                  correction != candidate.word
+            else { return nil }
+
+            let replacementText = correction + replacement
+            return SourceEditorTextEdit(
+                replacementRange: candidate.range,
+                replacementText: replacementText,
+                selectedRange: NSRange(
+                    location: candidate.range.location + (replacementText as NSString).length,
+                    length: 0
+                )
+            )
+        }
+
+        private func trackProseEdit(replacing range: NSRange, with replacement: String, in text: String) {
+            let textLength = (text as NSString).length
+            guard range.location != NSNotFound,
+                  range.location >= 0,
+                  NSMaxRange(range) <= textLength,
+                  autocorrectionTextLength == textLength
+            else {
+                proseRanges = []
+                autocorrectionProseRanges = []
+                autocorrectionTextLength = max(0, textLength - max(0, range.length)) + (replacement as NSString).length
+                return
+            }
+            let nextLength = textLength - range.length + (replacement as NSString).length
+            guard SourceEditorAutocorrection.preservesSemanticClassification(
+                replacing: range,
+                with: replacement,
+                in: text
+            ) else {
+                proseRanges = []
+                autocorrectionProseRanges = []
+                autocorrectionTextLength = nextLength
+                return
+            }
+            let updatedRanges = SourceEditorAutocorrection.updating(
+                autocorrectionProseRanges,
+                replacing: range,
+                with: replacement,
+                textLength: textLength
+            )
+            proseRanges = updatedRanges
+            proseRangesAreCurrent = false
+            autocorrectionProseRanges = updatedRanges
+            autocorrectionTextLength = nextLength
         }
 
         func focusIfNeeded(_ focusRequest: Int, textView: UITextView) {
@@ -607,6 +783,11 @@ struct PlatformTextView: UIViewRepresentable {
             textView.typingAttributes = TypstSyntaxHighlighter.baseAttributes(font: font)
 
             if textView.text != text {
+                if !proseRangesAreCurrent {
+                    proseRanges = []
+                }
+                autocorrectionProseRanges = proseRangesAreCurrent ? proseRanges : []
+                autocorrectionTextLength = (text as NSString).length
                 textView.attributedText = NSAttributedString(
                     string: text,
                     attributes: TypstSyntaxHighlighter.baseAttributes(font: font)
@@ -652,21 +833,29 @@ struct PlatformTextView: UIViewRepresentable {
             }
 
             if spellCheckingEnabled {
-                let checker = UITextChecker()
                 for proseRange in proseRanges where NSMaxRange(proseRange.range) <= textView.textStorage.length {
-                    let misspelled = checker.rangeOfMisspelledWord(
-                        in: textView.text,
-                        range: proseRange.range,
-                        startingAt: proseRange.range.location,
-                        wrap: false,
-                        language: ""
-                    )
-                    if misspelled.location != NSNotFound {
+                    let rangeEnd = NSMaxRange(proseRange.range)
+                    var searchLocation = proseRange.range.location
+                    while searchLocation < rangeEnd {
+                        let misspelled = spellChecker.rangeOfMisspelledWord(
+                            in: textView.text,
+                            range: proseRange.range,
+                            startingAt: searchLocation,
+                            wrap: false,
+                            language: ""
+                        )
+                        guard misspelled.location != NSNotFound,
+                              misspelled.location >= proseRange.range.location,
+                              NSMaxRange(misspelled) <= rangeEnd
+                        else { break }
                         addUnderline(
                             NSUnderlineStyle.patternDot.rawValue | NSUnderlineStyle.single.rawValue,
                             color: .systemBlue,
                             range: misspelled
                         )
+                        let nextLocation = NSMaxRange(misspelled)
+                        guard nextLocation > searchLocation else { break }
+                        searchLocation = nextLocation
                     }
                 }
             }
@@ -684,7 +873,6 @@ struct PlatformTextView: UIViewRepresentable {
 
         func textDroppableView(_ textDroppableView: UIView & UITextDroppable, proposalForDrop drop: UITextDropRequest) -> UITextDropProposal {
             guard canInsertPackagePath(from: drop) else {
-                sourceDropLogger.debug("iOS drop proposal rejected. item count=\(drop.dropSession.items.count)")
                 isPackageDropTargeted.wrappedValue = false
                 return UITextDropProposal(operation: .cancel)
             }
@@ -692,7 +880,6 @@ struct PlatformTextView: UIViewRepresentable {
             if let textView = textDroppableView as? UITextView {
                 updateInsertionPoint(at: drop.dropPosition, in: textView)
             }
-            sourceDropLogger.debug("iOS drop proposal accepted. item count=\(drop.dropSession.items.count)")
             isPackageDropTargeted.wrappedValue = true
             let proposal = UITextDropProposal(operation: .copy)
             proposal.dropAction = .insert
@@ -701,25 +888,20 @@ struct PlatformTextView: UIViewRepresentable {
 
         func textDroppableView(_ textDroppableView: UIView & UITextDroppable, willPerformDrop drop: UITextDropRequest) {
             guard let textView = textDroppableView as? UITextView else {
-                sourceDropLogger.debug("iOS willPerformDrop: target was not UITextView")
                 return
             }
 
-            sourceDropLogger.debug("iOS willPerformDrop with \(drop.dropSession.items.count) item(s)")
             for item in drop.dropSession.items {
                 loadPackageDrop(from: item.itemProvider) { [weak self, weak textView] dropItem in
                     guard let dropItem else {
-                        sourceDropLogger.debug("iOS drop item produced no path")
                         return
                     }
 
                     Task { @MainActor in
                         guard let self, let textView else { return }
                         guard let snippet = self.snippet(for: dropItem) else {
-                            sourceDropLogger.debug("iOS drop rejected: no snippet for path '\(dropItem.path, privacy: .public)'. imagePaths=\(self.insertableImagePaths.count), typstPaths=\(self.insertableTypstPaths.count)")
                             return
                         }
-                        sourceDropLogger.debug("iOS inserting snippet for path '\(dropItem.path, privacy: .public)'. snippet='\(snippet, privacy: .public)'")
                         self.insertSnippet(snippet, at: drop.dropPosition, in: textView)
                         self.isPackageDropTargeted.wrappedValue = false
                     }
@@ -759,10 +941,8 @@ struct PlatformTextView: UIViewRepresentable {
                 provider.loadDataRepresentation(forTypeIdentifier: UTType.typesetPackageFileDrag.identifier) { data, _ in
                     let item = data.flatMap { try? JSONDecoder().decode(PackageFileDragItem.self, from: $0) }
                     if let path = item?.path {
-                        sourceDropLogger.debug("iOS decoded package payload path '\(path, privacy: .public)'")
                         completion(.packagePath(path))
                     } else {
-                        sourceDropLogger.debug("iOS failed to decode package payload")
                         completion(nil)
                     }
                 }
@@ -771,8 +951,7 @@ struct PlatformTextView: UIViewRepresentable {
 
             if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
                 provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
-                    if let error {
-                        sourceDropLogger.debug("iOS failed to decode file URL: \(error.localizedDescription, privacy: .public)")
+                    if error != nil {
                         completion(nil)
                         return
                     }
@@ -791,10 +970,8 @@ struct PlatformTextView: UIViewRepresentable {
                     }
 
                     if let url {
-                        sourceDropLogger.debug("iOS decoded external file URL '\(url.path, privacy: .public)'")
                         completion(.externalFile(url))
                     } else {
-                        sourceDropLogger.debug("iOS failed to decode external file URL")
                         completion(nil)
                     }
                 }
@@ -805,7 +982,6 @@ struct PlatformTextView: UIViewRepresentable {
                 provider.loadDataRepresentation(forTypeIdentifier: imageTypeIdentifier) { data, _ in
                     guard let data,
                           let url = Self.writeDroppedImageToTempFile(data: data, typeIdentifier: imageTypeIdentifier) else {
-                        sourceDropLogger.debug("iOS failed to materialize dropped image data")
                         completion(nil)
                         return
                     }
@@ -815,7 +991,6 @@ struct PlatformTextView: UIViewRepresentable {
             }
 
             guard provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) else {
-                sourceDropLogger.debug("iOS provider has no package or plain text representation")
                 completion(nil)
                 return
             }
@@ -823,10 +998,8 @@ struct PlatformTextView: UIViewRepresentable {
             provider.loadDataRepresentation(forTypeIdentifier: UTType.plainText.identifier) { data, _ in
                 let path = data.flatMap { String(data: $0, encoding: .utf8) }
                 if let path {
-                    sourceDropLogger.debug("iOS decoded fallback text path '\(path, privacy: .public)'")
                     completion(.packagePath(path))
                 } else {
-                    sourceDropLogger.debug("iOS failed to decode fallback text path")
                     completion(nil)
                 }
             }
@@ -884,13 +1057,11 @@ struct PlatformTextView: UIViewRepresentable {
             for item in session.items {
                 loadPackageDrop(from: item.itemProvider) { [weak self, weak textView] dropItem in
                     guard let dropItem else {
-                        sourceDropLogger.debug("iOS drop: item produced no path")
                         return
                     }
                     Task { @MainActor in
                         guard let self, let textView else { return }
                         guard let snippet = self.snippet(for: dropItem) else {
-                            sourceDropLogger.debug("iOS drop: no snippet for '\(dropItem.path, privacy: .public)'")
                             return
                         }
                         if let position = textView.closestPosition(to: dropPoint) {
@@ -918,7 +1089,6 @@ struct PlatformTextView: UIViewRepresentable {
         private func insertSnippet(_ snippet: String, at position: UITextPosition, in textView: UITextView) {
             let offset = textView.offset(from: textView.beginningOfDocument, to: position)
             let range = NSRange(location: max(0, offset), length: 0)
-            sourceDropLogger.debug("iOS inserting at offset \(range.location)")
             textView.selectedRange = range
             textView.insertText(snippet)
         }
@@ -948,7 +1118,6 @@ struct PlatformTextView: UIViewRepresentable {
 
         fileprivate func snippetForExternalFile(_ url: URL) -> String? {
             guard let packagePath = onImportExternalFile(url) else {
-                sourceDropLogger.debug("iOS external file rejected: failed to import '\(url.path, privacy: .public)'")
                 return nil
             }
             return SourceEditorDropSnippet.snippetForKnownPackagePath(packagePath, imageTemplate: imageInsertTemplate)
@@ -956,7 +1125,6 @@ struct PlatformTextView: UIViewRepresentable {
 
         fileprivate func snippetForPastedImage(data: Data, suggestedName: String) -> String? {
             guard let packagePath = onImportPastedImage(data, suggestedName) else {
-                sourceDropLogger.debug("iOS paste rejected: failed to import pasted image '\(suggestedName, privacy: .public)'")
                 return nil
             }
             return SourceEditorDropSnippet.snippetForKnownPackagePath(packagePath, imageTemplate: imageInsertTemplate)

@@ -155,9 +155,7 @@ struct PackageDropDelegate: DropDelegate {
     var onTargetedChanged: (Bool) -> Void
 
     func validateDrop(info: DropInfo) -> Bool {
-        let isValid = info.hasItemsConforming(to: Self.supportedTypes)
-        typesetDropDebug("validate destination=\(destinationDescription) valid=\(isValid) registered=\(registeredTypeIdentifiers(in: info).joined(separator: ","))")
-        return isValid
+        info.hasItemsConforming(to: Self.supportedTypes)
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
@@ -205,7 +203,6 @@ struct PackageDropDelegate: DropDelegate {
     func performDrop(info: DropInfo) -> Bool {
         let isPackageDrop = Self.isPackageDrop(info: info)
         let providers = info.itemProviders(for: Self.supportedTypes)
-        typesetDropDebug("perform destination=\(destinationDescription) providers=\(providers.count) packageDrop=\(isPackageDrop)")
 
         Task { @MainActor in
             do {
@@ -224,7 +221,6 @@ struct PackageDropDelegate: DropDelegate {
                     payload = activePayload
                 }
                 ActivePackageDrag.clear()
-                typesetDropDebug("decoded destination=\(destinationDescription) files=\(payload.packageFilePaths) folders=\(payload.packageFolderPaths) external=\(payload.externalFileURLs.map(\.lastPathComponent))")
                 for path in payload.packageFilePaths {
                     onMoveFile(path, destinationFolder)
                 }
@@ -236,7 +232,6 @@ struct PackageDropDelegate: DropDelegate {
                 }
             } catch {
                 ActivePackageDrag.clear()
-                typesetDropDebug("failed destination=\(destinationDescription) error=\(error.localizedDescription)")
                 onError("Drop failed", error.localizedDescription)
             }
         }
@@ -245,22 +240,6 @@ struct PackageDropDelegate: DropDelegate {
         return true
     }
 
-    private var destinationDescription: String {
-        destinationFolder ?? "package root"
-    }
-
-    private func registeredTypeIdentifiers(in info: DropInfo) -> [String] {
-        info.itemProviders(for: Self.supportedTypes)
-            .flatMap(\.registeredTypeIdentifiers)
-            .uniqued()
-    }
-}
-
-private extension Sequence where Element: Hashable {
-    func uniqued() -> [Element] {
-        var seen = Set<Element>()
-        return filter { seen.insert($0).inserted }
-    }
 }
 
 @MainActor
@@ -542,4 +521,3 @@ private extension PackageFile {
         UTType(filenameExtension: URL(fileURLWithPath: path).pathExtension) ?? .data
     }
 }
-

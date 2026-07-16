@@ -22,10 +22,9 @@ func typesetLSPDebug(_ message: @autoclosure () -> String) {
     #endif
 }
 
-func typesetDropDebug(_ message: @autoclosure () -> String) {
-    #if DEBUG
-    print("[Typeset Drop] \(message())")
-    #endif
+private struct ProseRangeSnapshot: Equatable {
+    let source: String
+    let ranges: [TypstProseRange]
 }
 
 struct TypesetWorkspaceView: View {
@@ -75,12 +74,13 @@ struct TypesetWorkspaceView: View {
     @State private var previewCompileToken = 0
     @State private var logEntries: [DiagnosticLogEntry] = []
     @State private var sourceDiagnostics: [String: [TypstSourceDiagnostic]] = [:]
-    @State private var sourceProseRanges: [String: [TypstProseRange]] = [:]
+    @State private var sourceProseRanges: [String: ProseRangeSnapshot] = [:]
     @State private var documentSymbols: TypstDocumentSymbols = .empty
     @State private var completionItems: [TypstCompletionItem] = []
     @State private var selectedCompletionIndex = 0
     @State private var hoverInfo: TypstHoverInfo?
     @State private var signatureHelp: TypstSignatureHelp?
+    @State private var isManualLanguageHelpPresented = false
     @State private var languageRequestID = UUID()
     @State private var languageRequestTask: Task<Void, Never>?
     @State private var languageSyncTask: Task<Void, Never>?
@@ -143,7 +143,7 @@ struct TypesetWorkspaceView: View {
     @AppStorage("sourceEditor.figureInsertTemplate") private var figureInsertTemplate = SourceEditorDropSnippet.defaultFigureTemplate
     @AppStorage("sourceEditor.tableInsertTemplate") private var tableInsertTemplate = SourceEditorDropSnippet.defaultTableTemplate
     @AppStorage("sourceEditor.showLineNumbers") private var showLineNumbers = false
-    @AppStorage("sourceEditor.spellChecking") private var spellCheckingEnabled = false
+    @AppStorage("sourceEditor.spellChecking") private var spellCheckingEnabled = true
     @AppStorage("sourceEditor.spellCheckingIgnoresCommands") private var spellCheckingIgnoresCommands = true
     @AppStorage("sourceEditor.updateReferencesOnRename") private var updateReferencesOnRename = true
     @AppStorage("export.autoPDFOnClose") private var autoExportPDFOnClose = false
@@ -152,6 +152,13 @@ struct TypesetWorkspaceView: View {
     // No Settings UI for this; toggle with:
     //   defaults write com.twarge.app.typeset developer.lspDebugLogging -bool YES
     @AppStorage("developer.lspDebugLogging") private var lspDebugLoggingEnabled = false
+    // Hold the caret-line error callout while its paragraph is being edited
+    // (Settings > Editor). The line tint and underline still mark the error;
+    // the message pops up once the caret leaves the paragraph.
+    @AppStorage("editor.holdErrorPopupWhileEditing") private var holdErrorPopupWhileEditing = true
+    // While non-nil, the caret has stayed inside this paragraph since it was
+    // last edited — its error callout is held back.
+    @State private var activeEditParagraph: NSRange?
     @AppStorage("workspace.windowChrome") private var windowChromeRaw = WindowChromePreference.heavy.rawValue
     @AppStorage("workspace.distractionFreeWindowChrome") private var legacyDistractionFreeWindowChrome = false
 
@@ -263,6 +270,7 @@ struct TypesetWorkspaceView: View {
                     previewRenderWarmupDelay: $previewRenderWarmupDelay,
                     previewAutoRetriggerDelay: $previewAutoRetriggerDelay,
                     windowChromePreference: windowChromePreferenceBinding,
+                    holdErrorPopupWhileEditing: $holdErrorPopupWhileEditing,
                     onDismiss: { isSettingsPresented = false }
                 )
             }
@@ -1060,7 +1068,10 @@ struct TypesetWorkspaceView: View {
                     onImportExternalFile: importExternalFileForSourceDrop,
                     onImportPastedImage: importPastedImageForSourcePaste,
                     diagnostics: sourceDiagnostics[selectedPath] ?? [],
-                    proseRanges: sourceProseRanges[selectedPath] ?? [],
+                    proseRanges: sourceProseRanges[selectedPath]?.source == sourceText
+                        ? sourceProseRanges[selectedPath]?.ranges ?? []
+                        : [],
+                    proseRangesAreCurrent: sourceProseRanges[selectedPath]?.source == sourceText,
                     completions: completionItems,
                     hoverInfo: hoverInfo,
                     cursorDiagnostic: cursorLineDiagnostic,
@@ -1077,6 +1088,9 @@ struct TypesetWorkspaceView: View {
                     onCompletionMove: moveCompletionSelection,
                     onCompletionAccept: acceptSelectedCompletion,
                     onCompletionDismiss: clearCompletions,
+                    onShowFunctionHelp: showFunctionHelp,
+                    onShowSignatureHelp: showSignatureHelp,
+                    onEditorInteraction: dismissManualLanguageHelp,
                     onScrollFractionChange: handleEditorScrollFraction,
                     scrollRestore: SourceEditorScrollRestore(
                         token: scrollRestoreToken,
@@ -1290,15 +1304,15 @@ struct TypesetWorkspaceView: View {
             sourceText = document.package.text(for: path)
             languageRequestTask?.cancel()
             languageSyncTask?.cancel()
-            let ignoreCommands = spellCheckingIgnoresCommands
-            Task {
-                let prose = await languageService.proseRanges(
-                    path: path,
-                    ignoringCommandsAndArguments: ignoreCommands
-                )
-                await MainActor.run {
-                    sourceProseRanges[path] = prose
-                }
+            // Feed the opened file's text to the language service immediately —
+            // its store is otherwise fed only by edits, so signature help and
+            // hover on a freshly opened file would query empty text until the
+            // first keystroke.
+            let openedText = sourceText
+            languageSyncTask = Task {
+                await languageService.updateFile(path: path, text: openedText)
+                guard !Task.isCancelled else { return }
+                await refreshLanguageServiceAnnotations(path: path, source: openedText)
             }
             // Restore only from state that was actually loaded from a
             // persisted state file; live `state` may already carry cursor
@@ -1335,6 +1349,7 @@ struct TypesetWorkspaceView: View {
             clearCompletions()
             hoverInfo = nil
             signatureHelp = nil
+            activeEditParagraph = nil
         } catch {
             recordLog("Selection failed", message: error.localizedDescription, level: .error, present: true)
         }
@@ -1355,6 +1370,13 @@ struct TypesetWorkspaceView: View {
         DispatchQueue.main.async {
             guard selectedPath == path else { return }
             sourceCaretLocation = range.location
+            if let paragraph = activeEditParagraph {
+                let ns = sourceText as NSString
+                let caret = min(max(0, range.location), ns.length)
+                if ns.lineRange(for: NSRange(location: caret, length: 0)) != paragraph {
+                    activeEditParagraph = nil
+                }
+            }
             applyEditorSelection(range, for: path, allowAutomaticCompletion: false)
         }
     }
@@ -1378,26 +1400,25 @@ struct TypesetWorkspaceView: View {
             cursorLength: range.length
         )
 
-        if documentEditorStateMatches(nextState) {
-            cancelPendingEditorStateSave()
-            if requestIntelligence {
-                requestLanguageIntelligence(
-                    allowAutomaticCompletion: allowAutomaticCompletion,
-                    selectionRange: range
-                )
-            }
-            return
-        }
-        guard pendingEditorState != nextState else { return }
-
-        pendingEditorState = nextState
-        scheduleEditorStateSave()
+        // Cursor persistence and language intelligence have different notions
+        // of duplication. A repeated click at an unchanged caret does not need
+        // another .typesetstate write, but it is a fresh request to reopen
+        // signature help or hover documentation.
         if requestIntelligence {
             requestLanguageIntelligence(
                 allowAutomaticCompletion: allowAutomaticCompletion,
                 selectionRange: range
             )
         }
+
+        if documentEditorStateMatches(nextState) {
+            cancelPendingEditorStateSave()
+            return
+        }
+        guard pendingEditorState != nextState else { return }
+
+        pendingEditorState = nextState
+        scheduleEditorStateSave()
     }
 
     /// Asks the editor to restore its scroll to `fraction` (0...1) and, when
@@ -1591,7 +1612,13 @@ struct TypesetWorkspaceView: View {
 
     private func updateSource(_ text: String, selectionRange: NSRange? = nil) {
         guard selectedFile?.isTextEditable == true else { return }
+        dismissManualLanguageHelp()
         let path = selectedPath
+        // Remember which paragraph this edit touched: its error callout is held
+        // back until the caret leaves the paragraph.
+        let editedText = text as NSString
+        let editCaret = min(max(0, selectionRange?.location ?? sourceCaretLocation), editedText.length)
+        activeEditParagraph = editedText.lineRange(for: NSRange(location: editCaret, length: 0))
         if let selectionRange {
             applyEditorSelection(
                 selectionRange,
@@ -1798,24 +1825,31 @@ struct TypesetWorkspaceView: View {
                 selectionRange: selectionRange
             )
             guard !Task.isCancelled else { return }
-            await refreshLanguageServiceAnnotations()
+            await refreshLanguageServiceAnnotations(path: path, source: text)
         }
     }
 
-    private func refreshLanguageServiceAnnotations() async {
+    private func refreshLanguageServiceAnnotations(path: String? = nil, source: String? = nil) async {
         // Inline diagnostics come solely from the preview compile — the
         // authoritative Typst output, which persists until the next compile.
         // The language server's diagnostics were merged here too, but it runs on
         // every keystroke and returns an empty set while re-analyzing, so it
         // wiped the compile's diagnostics between compiles: the badges flashed
         // in and out instead of persisting.
+        let annotationPath = path ?? selectedPath
+        let annotationSource = source ?? sourceText
+        let ignoreCommands = spellCheckingIgnoresCommands
         let selectedProse = await languageService.proseRanges(
-            path: selectedPath,
-            ignoringCommandsAndArguments: spellCheckingIgnoresCommands
+            path: annotationPath,
+            ignoringCommandsAndArguments: ignoreCommands
         )
-        let symbols = await languageService.documentSymbols(path: selectedPath)
+        let symbols = await languageService.documentSymbols(path: annotationPath)
         await MainActor.run {
-            sourceProseRanges[selectedPath] = selectedProse
+            guard selectedPath == annotationPath, sourceText == annotationSource else { return }
+            sourceProseRanges[annotationPath] = ProseRangeSnapshot(
+                source: annotationSource,
+                ranges: selectedProse
+            )
             documentSymbols = symbols
         }
     }
@@ -1908,7 +1942,16 @@ struct TypesetWorkspaceView: View {
         allowAutomaticCompletion: Bool = true,
         selectionRange: NSRange? = nil
     ) {
+        guard !isManualLanguageHelpPresented else {
+            typesetLSPDebug("passive request suppressed while manual help is presented")
+            return
+        }
+        // Selection notifications are intentionally deferred by the native text
+        // views. Capture the current generation so an already-queued passive
+        // request cannot cancel a newer explicit Help menu request.
+        let scheduledAgainstRequestID = languageRequestID
         DispatchQueue.main.async {
+            guard languageRequestID == scheduledAgainstRequestID else { return }
             performLanguageIntelligenceRequest(
                 forceCompletion: forceCompletion,
                 allowAutomaticCompletion: allowAutomaticCompletion,
@@ -1943,11 +1986,20 @@ struct TypesetWorkspaceView: View {
             let rawCompletions = shouldComplete ? await languageService.completions(path: path, utf16Offset: range.location) : []
             let completions = Self.filteredCompletions(rawCompletions, in: text, at: range.location)
             typesetLSPDebug("async completions raw=\(rawCompletions.count) filtered=\(completions.count)")
-            let signature = completions.isEmpty ? await languageService.signatureHelp(path: path, utf16Offset: range.location) : nil
+            let prefersHover = Self.isFunctionCallee(at: range.location, in: text)
+            let signature = completions.isEmpty && !prefersHover
+                ? await languageService.signatureHelp(path: path, utf16Offset: range.location)
+                : nil
             typesetLSPDebug("async signature=\(signature?.signatures.first?.label ?? "none")")
             let hover: TypstHoverInfo?
             if forceCompletion || !completions.isEmpty || signature != nil {
                 hover = nil
+            } else if prefersHover {
+                // A deliberate caret placement on a callable is the keyboard
+                // equivalent of hovering it. Its reference already begins with
+                // the function signature, so do not make the user wait through
+                // the additional passive-hover delay.
+                hover = await languageService.hover(path: path, utf16Offset: range.location)
             } else {
                 try? await Task.sleep(for: .milliseconds(260))
                 guard !Task.isCancelled else { return }
@@ -1969,6 +2021,10 @@ struct TypesetWorkspaceView: View {
         allowAutomaticCompletion: Bool,
         selectionRange: NSRange? = nil
     ) async {
+        guard !isManualLanguageHelpPresented else {
+            typesetLSPDebug("direct passive request suppressed while manual help is presented")
+            return
+        }
         let path = selectedPath
         let range = clampedRange(
             selectionRange ?? selectedRange ?? NSRange(location: document.package.state.cursorLocation, length: document.package.state.cursorLength),
@@ -1986,7 +2042,10 @@ struct TypesetWorkspaceView: View {
         let rawCompletions = shouldComplete ? await languageService.completions(path: path, utf16Offset: range.location) : []
         let completions = Self.filteredCompletions(rawCompletions, in: text, at: range.location)
         typesetLSPDebug("direct completions raw=\(rawCompletions.count) filtered=\(completions.count)")
-        let signature = completions.isEmpty ? await languageService.signatureHelp(path: path, utf16Offset: range.location) : nil
+        let prefersHover = Self.isFunctionCallee(at: range.location, in: text)
+        let signature = completions.isEmpty && !prefersHover
+            ? await languageService.signatureHelp(path: path, utf16Offset: range.location)
+            : nil
         typesetLSPDebug("direct signature=\(signature?.signatures.first?.label ?? "none")")
         let hover = completions.isEmpty && signature == nil && !forceCompletion ? await languageService.hover(path: path, utf16Offset: range.location) : nil
         typesetLSPDebug("direct hover=\(hover?.text ?? "none")")
@@ -1999,12 +2058,107 @@ struct TypesetWorkspaceView: View {
         }
     }
 
-    private static func filteredHover(_ hover: TypstHoverInfo?, in text: String) -> TypstHoverInfo? {
-        guard let hover else { return nil }
-        guard hover.text.hasPrefix("Typst symbol `") else {
-            return hover
+    private func showFunctionHelp(at range: NSRange) {
+        requestFunctionInformation(at: range, showSignature: false)
+    }
+
+    private func showSignatureHelp(at range: NSRange) {
+        requestFunctionInformation(at: range, showSignature: true)
+    }
+
+    private func requestFunctionInformation(at range: NSRange, showSignature: Bool) {
+        guard selectedFile?.isTextEditable == true else { return }
+        languageRequestTask?.cancel()
+        let path = selectedPath
+        let text = sourceText
+        let range = clampedRange(range, in: text)
+        let offset = min(
+            (text as NSString).length,
+            range.location + max(0, range.length - 1)
+        )
+        let requestID = UUID()
+        isManualLanguageHelpPresented = true
+        languageRequestID = requestID
+        sourceCaretLocation = offset
+        completionItems = []
+        selectedCompletionIndex = 0
+        hoverInfo = nil
+        signatureHelp = nil
+        typesetLSPDebug(
+            "manual \(showSignature ? "signature" : "hover") request path=\(path) range=\(range.location)..<\(NSMaxRange(range)) offset=\(offset)"
+        )
+        languageRequestTask = Task {
+            // Context-menu help should describe the editor snapshot that
+            // produced the clicked range. A pending debounced file sync can
+            // otherwise leave the language session one edit behind.
+            await languageService.updateFile(path: path, text: text)
+            guard !Task.isCancelled else { return }
+            if showSignature {
+                let result = await languageService.signatureHelp(path: path, utf16Offset: offset)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard isManualLanguageHelpPresented,
+                          languageRequestID == requestID,
+                          selectedPath == path else { return }
+                    typesetLSPDebug("manual signature result=\(result?.signatures.first?.label ?? "none")")
+                    signatureHelp = result
+                    if result == nil {
+                        isManualLanguageHelpPresented = false
+                    }
+                }
+            } else {
+                var result = await languageService.hover(path: path, utf16Offset: offset)
+                if result == nil {
+                    let fallback = await languageService.signatureHelp(path: path, utf16Offset: offset)
+                    result = Self.hoverInfo(from: fallback, range: range)
+                }
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard isManualLanguageHelpPresented,
+                          languageRequestID == requestID,
+                          selectedPath == path else { return }
+                    let hover = Self.filteredHover(result, in: text)
+                    typesetLSPDebug("manual hover result=\(hover?.text.prefix(120) ?? "none")")
+                    hoverInfo = hover
+                    if hover == nil {
+                        isManualLanguageHelpPresented = false
+                    }
+                }
+            }
         }
-        return isCodeContext(for: hover.range, in: text) ? hover : nil
+    }
+
+    private func dismissManualLanguageHelp() {
+        guard isManualLanguageHelpPresented else { return }
+        typesetLSPDebug("manual help dismissed by editor interaction")
+        isManualLanguageHelpPresented = false
+        languageRequestTask?.cancel()
+        hoverInfo = nil
+        signatureHelp = nil
+    }
+
+    private static func filteredHover(_ hover: TypstHoverInfo?, in _: String) -> TypstHoverInfo? {
+        // Semantic filtering belongs to the language service. Rechecking with a
+        // same-line Swift heuristic dropped legitimate symbols inside multiline
+        // code blocks even after Tinymist had identified them as code.
+        hover
+    }
+
+    private static func hoverInfo(
+        from help: TypstSignatureHelp?,
+        range: NSRange
+    ) -> TypstHoverInfo? {
+        guard let help, !help.signatures.isEmpty else { return nil }
+        let index = min(max(0, help.activeSignature), help.signatures.count - 1)
+        let signature = help.signatures[index]
+        var sections = ["```typst\n\(signature.label)\n```"]
+        if !signature.documentation.isEmpty {
+            sections.append(signature.documentation)
+        }
+        for parameter in signature.parameters where !parameter.documentation.isEmpty {
+            sections.append("**\(parameter.label)**\n\(parameter.documentation)")
+        }
+        return TypstHoverInfo(range: range, text: sections.joined(separator: "\n\n"))
     }
 
 
@@ -2185,6 +2339,7 @@ struct TypesetWorkspaceView: View {
 
     private func clearCompletions() {
         languageRequestTask?.cancel()
+        isManualLanguageHelpPresented = false
         completionItems = []
         selectedCompletionIndex = 0
         signatureHelp = nil
@@ -2275,6 +2430,41 @@ struct TypesetWorkspaceView: View {
             return true
         }
         return isMarkupCompletionContext(for: prefixRange, in: text)
+    }
+
+    /// A caret on a function's name requests reference hover; a caret inside
+    /// its parentheses requests signature help. This mirrors editor LSP clients
+    /// and keeps the compact signature from masking the full function docs.
+    private static func isFunctionCallee(at location: Int, in text: String) -> Bool {
+        let nsText = text as NSString
+        let length = nsText.length
+        guard length > 0 else { return false }
+        let location = min(max(0, location), length)
+        var probe = location
+        if probe == length || !isCompletionCharacter(nsText.character(at: probe)) {
+            guard probe > 0, isCompletionCharacter(nsText.character(at: probe - 1)) else {
+                return false
+            }
+            probe -= 1
+        }
+
+        var start = probe
+        while start > 0, isCompletionCharacter(nsText.character(at: start - 1)) {
+            start -= 1
+        }
+        var end = probe + 1
+        while end < length, isCompletionCharacter(nsText.character(at: end)) {
+            end += 1
+        }
+        var next = end
+        while next < length, CharacterSet.whitespacesAndNewlines.contains(UnicodeScalar(nsText.character(at: next)) ?? "\0") {
+            next += 1
+        }
+        guard next < length, nsText.character(at: next) == 40 else { return false }
+        // Whether this syntactic call-shaped token is actually Typst code is a
+        // semantic question. Let the language service decide; its syntax tree
+        // correctly handles multiline code blocks, strings, and markup prose.
+        return true
     }
 
     private static func completionPrefixLength(in nsText: NSString, endingAt location: Int) -> Int {
@@ -2379,6 +2569,9 @@ struct TypesetWorkspaceView: View {
     /// the badge never sits behind the caret. The text view suppresses the matching
     /// badge using the same caret-line test.
     private var cursorLineDiagnostic: TypstSourceDiagnostic? {
+        // While the caret stays inside the paragraph it's editing, hold the
+        // callout back — the line tint and underline still mark the error.
+        if holdErrorPopupWhileEditing, activeEditParagraph != nil { return nil }
         let diagnostics = sourceDiagnostics[selectedPath] ?? []
         guard !diagnostics.isEmpty else { return nil }
         let ns = sourceText as NSString
@@ -2925,6 +3118,7 @@ struct TypesetWorkspaceView: View {
         clearCompletions()
         hoverInfo = nil
         signatureHelp = nil
+        activeEditParagraph = nil
         syncLanguageServiceWorkspace()
         refreshPreview()
     }
@@ -3668,5 +3862,3 @@ struct TypesetWorkspaceView: View {
     }
 
 }
-
-

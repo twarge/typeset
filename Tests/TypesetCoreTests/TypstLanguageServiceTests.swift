@@ -47,7 +47,7 @@ import Testing
     #expect(!checkedText.contains("mispelled raw"))
 }
 
-@Test func languageServiceProseRangesExcludeCommandInvocations() async {
+@Test func languageServiceProseRangesExcludeCommandSyntaxButIncludeContentArguments() async {
     let service = BasicTypstLanguageService()
     let text = "Spell prose #link(\"https://example.com\")[mispelled argument] and catch typoo"
 
@@ -60,7 +60,21 @@ import Testing
     #expect(checkedText.contains("Spell prose"))
     #expect(checkedText.contains("and catch typoo"))
     #expect(!checkedText.contains("link"))
-    #expect(!checkedText.contains("mispelled argument"))
+    #expect(!checkedText.contains("https://example.com"))
+    #expect(checkedText.contains("mispelled argument"))
+}
+
+@Test func languageServiceProseRangesIncludeFigureContentArgument() async {
+    let service = BasicTypstLanguageService()
+    let text = "#figure([This is bhad rheally.])"
+
+    await service.updateFile(path: "main.typ", text: text)
+    let ranges = await service.proseRanges(path: "main.typ", ignoringCommandsAndArguments: true)
+    let checkedText = ranges
+        .map { (text as NSString).substring(with: $0.range) }
+        .joined()
+
+    #expect(checkedText == "This is bhad rheally.")
 }
 
 @Test func languageServiceProseRangesCanIncludeCommandInvocations() async {
@@ -77,6 +91,20 @@ import Testing
     #expect(checkedText.contains("link"))
     #expect(checkedText.contains("mispelled argument"))
     #expect(checkedText.contains("and catch typoo"))
+}
+
+@Test func languageServiceProseRangesAlwaysExcludeSelectiveImports() async {
+    let service = BasicTypstLanguageService()
+    let text = "#import \"@preview/unify:0.8.1\": num,qty,numrange,qtyrange"
+
+    await service.updateFile(path: "main.typ", text: text)
+    for ignoreCommands in [false, true] {
+        let ranges = await service.proseRanges(
+            path: "main.typ",
+            ignoringCommandsAndArguments: ignoreCommands
+        )
+        #expect(ranges.isEmpty)
+    }
 }
 
 @Test func basicLanguageServiceCompletesImagePaths() async {

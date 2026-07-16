@@ -30,6 +30,7 @@ struct WorkspaceSettingsPane: View {
     @Binding var previewRenderWarmupDelay: Double
     @Binding var previewAutoRetriggerDelay: Double
     @Binding var windowChromePreference: WindowChromePreference
+    @Binding var holdErrorPopupWhileEditing: Bool
     // Shares the editor's persisted font-size key, so this control and any
     // open editor stay in sync.
     @AppStorage("sourceEditor.fontSize") private var editorFontSize = SourceEditorFont.defaultSize
@@ -99,10 +100,16 @@ struct WorkspaceSettingsPane: View {
                     .font(.subheadline.weight(.semibold))
 
                 Toggle("Show Line Numbers", isOn: $showLineNumbers)
-                Toggle("Check Spelling in Prose", isOn: $spellCheckingEnabled)
+                Toggle("Spelling and Autocorrect in Prose", isOn: $spellCheckingEnabled)
                 Toggle("Ignore Typst Commands and Arguments", isOn: $spellCheckingIgnoresCommands)
                     .disabled(!spellCheckingEnabled)
                 Toggle("Update References When Renaming or Moving Files", isOn: $updateReferencesOnRename)
+                Toggle("Hold Error Popups While Editing", isOn: $holdErrorPopupWhileEditing)
+
+                Text("Errors in the paragraph you're editing keep their line tint, but the message popup waits until the caret leaves the paragraph.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             VStack(alignment: .leading, spacing: 10) {

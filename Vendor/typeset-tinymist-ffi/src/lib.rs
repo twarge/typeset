@@ -11,15 +11,18 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use typst::diag::{FileError, FileResult, Severity, SourceDiagnostic};
-use typst::foundations::{Bytes, Datetime, Duration, Smart};
+use typst::foundations::{Bytes, CastInfo, Datetime, Duration, Func, ParamInfo, Repr, Smart, Value};
 use typst::layout::{Abs, Frame, FrameItem, Point, Size, Transform};
 use typst::syntax::{
-    DiagSpan, DiagSpanKind, FileId, RootedPath, Source, Span, VirtualPath, VirtualRoot,
+    DiagSpan, DiagSpanKind, FileId, RootedPath, Side, Source, Span, VirtualPath, VirtualRoot,
 };
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::{Feature, Library, LibraryExt, World, WorldExt};
-use typst_ide::{Completion as IdeCompletion, CompletionKind as IdeCompletionKind, IdeWorld, autocomplete};
+use typst_ide::{
+    Completion as IdeCompletion, CompletionKind as IdeCompletionKind, IdeWorld,
+    Tooltip as IdeTooltip, autocomplete, tooltip,
+};
 use typst_kit::datetime::Time;
 use typst_kit::downloader::SystemDownloader;
 use typst_kit::files::{FileLoader, FileStore, FsRoot};
@@ -354,7 +357,14 @@ pub extern "C" fn typeset_tinymist_hover(
         let path = read_c_string(path)?;
         let text = session.files.get(&path).cloned().unwrap_or_default();
         Ok(to_json(&HoverResponse {
-            hover: hover_for(&text, utf8_offset as usize),
+            hover: hover_for(
+                &text,
+                utf8_offset as usize,
+                &session.package_path,
+                &session.package_cache_path,
+                &session.files,
+                &path,
+            ),
         }))
     })
 }
@@ -2045,12 +2055,14 @@ fn collect_exports_from_module(
 
     let mut lines = text.lines().peekable();
     while let Some(line) = lines.next() {
-        let stripped = strip_line_comment(line);
-        let trimmed = stripped.trim_start();
-        if let Some(doc) = trimmed.strip_prefix("///") {
+        let unstripped = line.trim_start();
+        if let Some(doc) = unstripped.strip_prefix("///") {
             docs.push(doc.trim().to_string());
             continue;
         }
+
+        let stripped = strip_line_comment(line);
+        let trimmed = stripped.trim_start();
 
         if let Some(relative_import) = relative_import_from_line(trimmed) {
             let target = current_dir.join(&relative_import.path);
@@ -2478,41 +2490,130 @@ fn clamp_to_char_boundary(text: &str, utf8_offset: usize) -> usize {
     offset
 }
 
-fn hover_for(text: &str, utf8_offset: usize) -> Option<Hover> {
-    let bytes = text.as_bytes();
-    if utf8_offset > bytes.len() {
+fn hover_for(
+    text: &str,
+    utf8_offset: usize,
+    package_path: &str,
+    package_cache_path: &str,
+    session_files: &HashMap<String, String>,
+    main_path: &str,
+) -> Option<Hover> {
+    let (start, end) = hover_symbol_range(text, utf8_offset)?;
+    if !is_hover_code_context(text, start, end) {
         return None;
     }
 
-    let mut start = utf8_offset;
-    while start > 0 && is_word_byte(bytes[start - 1]) {
-        start -= 1;
+    let symbol = &text[start..end];
+    let hover_text = native_function_help(symbol)
+        .or_else(|| {
+            package_export_for_function(text, symbol, package_path, package_cache_path)
+                .map(|export| package_export_help(symbol, &export))
+        })
+        .or_else(|| ide_tooltip_for(session_files, main_path, text, utf8_offset))
+        .unwrap_or_else(|| format!("Typst symbol `{symbol}`"));
+    Some(Hover {
+        start_utf8: start,
+        end_utf8: end,
+        text: hover_text,
+    })
+}
+
+fn hover_symbol_range(text: &str, utf8_offset: usize) -> Option<(usize, usize)> {
+    let offset = clamp_to_char_boundary(text, utf8_offset);
+    let mut start = offset;
+    while let Some((index, character)) = text.get(..start)?.char_indices().next_back() {
+        if !is_typst_identifier_char(character) {
+            break;
+        }
+        start = index;
     }
 
-    let mut end = utf8_offset;
-    while end < bytes.len() && is_word_byte(bytes[end]) {
-        end += 1;
+    let mut end = offset;
+    while let Some(character) = text.get(end..)?.chars().next() {
+        if !is_typst_identifier_char(character) {
+            break;
+        }
+        end += character.len_utf8();
     }
-
     if start == end {
         return None;
     }
 
-    if !is_hover_code_context(text, start) {
-        return None;
+    // Include module receivers so `fletcher.diagram` resolves against the
+    // imported package rather than looking like an unrelated `diagram` symbol.
+    loop {
+        let Some(before_dot) = start.checked_sub(1) else {
+            break;
+        };
+        if text.as_bytes().get(before_dot) != Some(&b'.') {
+            break;
+        }
+        let mut receiver_start = before_dot;
+        while let Some((index, character)) = text.get(..receiver_start)?.char_indices().next_back() {
+            if !is_typst_identifier_char(character) {
+                break;
+            }
+            receiver_start = index;
+        }
+        if receiver_start == before_dot {
+            break;
+        }
+        start = receiver_start;
     }
 
-    let word = &text[start..end];
-    Some(Hover {
-        start_utf8: start,
-        end_utf8: end,
-        text: format!("Typst symbol `{word}`"),
+    Some((start, end))
+}
+
+fn package_export_help(symbol: &str, export: &PackageExport) -> String {
+    let display_name = symbol.rsplit_once('.').map_or(symbol, |(_, member)| member);
+    let declaration = export
+        .signature
+        .as_ref()
+        .map(|signature| signature.label.as_str())
+        .unwrap_or(display_name);
+    let mut output = format!("```typst\nlet {declaration};\n```");
+    if !export.documentation.trim().is_empty() {
+        output.push_str("\n\n");
+        output.push_str(export.documentation.trim());
+    }
+    output
+}
+
+fn ide_tooltip_for(
+    session_files: &HashMap<String, String>,
+    main_path: &str,
+    text: &str,
+    utf8_offset: usize,
+) -> Option<String> {
+    let world = build_completion_world(session_files, main_path, text)?;
+    let source = world.source(world.main()).ok()?;
+    let cursor = clamp_to_char_boundary(text, utf8_offset);
+    let tooltip = tooltip(
+        &world,
+        None::<&PagedDocument>,
+        &source,
+        cursor,
+        Side::After,
+    )
+    .or_else(|| {
+        tooltip(
+            &world,
+            None::<&PagedDocument>,
+            &source,
+            cursor,
+            Side::Before,
+        )
+    })?;
+    Some(match tooltip {
+        IdeTooltip::Text(text) => text.to_string(),
+        IdeTooltip::Code(code) => format!("```typst\n{code}\n```"),
     })
 }
 
 struct FunctionCallContext {
     function_name: String,
     active_parameter: usize,
+    active_parameter_name: Option<String>,
 }
 
 fn signature_help_for(
@@ -2529,6 +2630,15 @@ fn signature_help_for(
         "signature function='{}' active_parameter={}",
         context.function_name, context.active_parameter
     ));
+    if let Some(signature) = native_function_signature(&context.function_name) {
+        let active_parameter = active_parameter_index(&signature, &context);
+        return Some(SignatureHelp {
+            signatures: vec![signature],
+            active_signature: 0,
+            active_parameter,
+        });
+    }
+
     let export = package_export_for_function(
         text,
         &context.function_name,
@@ -2542,30 +2652,47 @@ fn signature_help_for(
         ));
         return None;
     };
-    let active_parameter = context
-        .active_parameter
-        .min(signature.parameters.len().saturating_sub(1));
+    let signature = SignatureInformation {
+        label: signature.label,
+        documentation: export.documentation,
+        parameters: signature
+            .parameters
+            .into_iter()
+            .map(|label| ParameterInformation {
+                label,
+                documentation: String::new(),
+            })
+            .collect(),
+    };
+    let active_parameter = active_parameter_index(&signature, &context);
     Some(SignatureHelp {
-        signatures: vec![SignatureInformation {
-            label: signature.label,
-            documentation: export.documentation,
-            parameters: signature
-                .parameters
-                .into_iter()
-                .map(|label| ParameterInformation {
-                    label,
-                    documentation: String::new(),
-                })
-                .collect(),
-        }],
+        signatures: vec![signature],
         active_signature: 0,
         active_parameter,
     })
 }
 
+fn active_parameter_index(
+    signature: &SignatureInformation,
+    context: &FunctionCallContext,
+) -> usize {
+    if let Some(name) = &context.active_parameter_name
+        && let Some(index) = signature
+            .parameters
+            .iter()
+            .position(|parameter| parameter.label.trim_end_matches(':') == name)
+    {
+        return index;
+    }
+
+    context
+        .active_parameter
+        .min(signature.parameters.len().saturating_sub(1))
+}
+
 fn function_call_context(text: &str, utf8_offset: usize) -> Option<FunctionCallContext> {
     let prefix = text.get(..utf8_offset)?;
-    let mut stack = Vec::<(usize, usize)>::new();
+    let mut stack = Vec::<(usize, usize, usize)>::new();
     let mut in_string = false;
     let mut in_raw = false;
     let mut escaped = false;
@@ -2591,25 +2718,330 @@ fn function_call_context(text: &str, utf8_offset: usize) -> Option<FunctionCallC
             continue;
         }
         match character {
-            '(' => stack.push((index, 0)),
+            '(' => stack.push((index, 0, index + 1)),
             ')' => {
                 stack.pop();
             }
             ',' => {
-                if let Some((_, active_parameter)) = stack.last_mut() {
+                if let Some((_, active_parameter, argument_start)) = stack.last_mut() {
                     *active_parameter += 1;
+                    *argument_start = index + 1;
                 }
             }
             _ => {}
         }
     }
 
-    let (open_paren, active_parameter) = stack.last().copied()?;
+    let (open_paren, active_parameter, argument_start) = stack.last().copied()?;
     let function_name = function_name_before_open_paren(text, open_paren)?;
+    let active_parameter_name = named_argument_name(text.get(argument_start..utf8_offset)?);
     Some(FunctionCallContext {
         function_name,
         active_parameter,
+        active_parameter_name,
     })
+}
+
+fn named_argument_name(argument: &str) -> Option<String> {
+    let argument = argument.trim_start();
+    let end = argument
+        .char_indices()
+        .find_map(|(index, character)| (!is_typst_identifier_char(character)).then_some(index))
+        .unwrap_or(argument.len());
+    let name = argument.get(..end)?;
+    let rest = argument.get(end..)?.trim_start();
+    (!name.is_empty() && rest.starts_with(':')).then(|| name.to_string())
+}
+
+#[derive(Clone)]
+struct NativeParameterMetadata {
+    name: String,
+    type_label: String,
+    hover_type_label: String,
+    documentation: String,
+    default: Option<String>,
+    positional: bool,
+    named: bool,
+    variadic: bool,
+}
+
+fn native_function(name: &str) -> Option<Func> {
+    let name = name.strip_prefix("std.").unwrap_or(name);
+    let Value::Func(func) = shared_completion_library().global.scope().get(name)?.read() else {
+        return None;
+    };
+    Some(func.clone())
+}
+
+fn native_function_parameters(name: &str, func: &Func) -> Vec<NativeParameterMetadata> {
+    let mut positional = Vec::new();
+    let mut named = Vec::new();
+    let mut variadic = Vec::new();
+
+    for parameter in func.params() {
+        let Some(parameter_name) = parameter.name() else {
+            continue;
+        };
+        let (type_label, hover_type_label) = match &parameter {
+            ParamInfo::Native(info) => {
+                native_parameter_type_labels(name, parameter_name, &info.input)
+            }
+            _ => ("any".to_string(), "any".to_string()),
+        };
+        let documentation = parameter
+            .to_native()
+            .map(|info| typst_docs_to_markdown(info.docs))
+            .unwrap_or_default();
+        let metadata = NativeParameterMetadata {
+            name: parameter_name.to_string(),
+            type_label,
+            hover_type_label,
+            documentation,
+            default: parameter.default().map(|value| value.repr().to_string()),
+            positional: parameter.positional(),
+            named: parameter.named(),
+            variadic: parameter.variadic(),
+        };
+
+        if metadata.variadic {
+            variadic.push(metadata);
+        } else if metadata.positional {
+            positional.push(metadata);
+        } else if metadata.named {
+            named.push(metadata);
+        }
+    }
+
+    named.sort_by(|left, right| left.name.cmp(&right.name));
+    positional.extend(named);
+    positional.extend(variadic);
+    positional
+}
+
+fn native_function_signature(name: &str) -> Option<SignatureInformation> {
+    let func = native_function(name)?;
+    let display_name = func.name().unwrap_or(name.strip_prefix("std.").unwrap_or(name));
+    let parameters = native_function_parameters(display_name, &func);
+    let mut label = format!("{display_name}(");
+    for (index, parameter) in parameters.iter().enumerate() {
+        if index > 0 {
+            label.push_str(", ");
+        }
+        if parameter.variadic {
+            label.push_str("..");
+        }
+        label.push_str(&parameter.name);
+        label.push_str(": ");
+        label.push_str(&parameter.type_label);
+    }
+    label.push(')');
+    label.push_str(" -> ");
+    label.push_str(&native_function_return_type(display_name, &func));
+
+    Some(SignatureInformation {
+        label,
+        documentation: typst_docs_to_markdown(func.docs().unwrap_or_default()),
+        parameters: parameters
+            .into_iter()
+            .map(|parameter| ParameterInformation {
+                label: parameter.name,
+                documentation: parameter.documentation,
+            })
+            .collect(),
+    })
+}
+
+fn native_function_help(name: &str) -> Option<String> {
+    let func = native_function(name)?;
+    let display_name = func.name().unwrap_or(name.strip_prefix("std.").unwrap_or(name));
+    let parameters = native_function_parameters(display_name, &func);
+    let mut output = String::from("```typst\nlet ");
+    output.push_str(display_name);
+    output.push_str("(\n");
+    for parameter in &parameters {
+        output.push_str("  ");
+        if parameter.variadic {
+            output.push_str("..");
+        }
+        output.push_str(&parameter.name);
+        output.push_str(": ");
+        output.push_str(&parameter.hover_type_label);
+        if let Some(default) = &parameter.default {
+            output.push_str(" = ");
+            output.push_str(default);
+        }
+        output.push_str(",\n");
+    }
+    output.push_str(") -> ");
+    output.push_str(&native_function_return_type(display_name, &func));
+    output.push_str(";\n```\n\n");
+    output.push_str(&typst_docs_to_markdown(func.docs().unwrap_or_default()));
+
+    let positional = parameters
+        .iter()
+        .filter(|parameter| parameter.positional && !parameter.variadic)
+        .collect::<Vec<_>>();
+    let named = parameters
+        .iter()
+        .filter(|parameter| parameter.named && !parameter.positional && !parameter.variadic)
+        .collect::<Vec<_>>();
+    let variadic = parameters
+        .iter()
+        .filter(|parameter| parameter.variadic)
+        .collect::<Vec<_>>();
+    append_parameter_help(&mut output, "Positional Parameters", &positional);
+    append_parameter_help(&mut output, "Named Parameters", &named);
+    append_parameter_help(&mut output, "Rest Parameters", &variadic);
+    Some(output)
+}
+
+fn append_parameter_help(
+    output: &mut String,
+    heading: &str,
+    parameters: &[&NativeParameterMetadata],
+) {
+    if parameters.is_empty() {
+        return;
+    }
+    output.push_str("\n\n# ");
+    output.push_str(heading);
+    for (index, parameter) in parameters.iter().enumerate() {
+        output.push_str("\n\n## ");
+        output.push_str(&parameter.name);
+        if index > 0 {
+            output.push_str(" (named)");
+        }
+        output.push_str("\n\n```typst\ntype: ");
+        output.push_str(&parameter.type_label);
+        output.push_str("\n```\n\n");
+        output.push_str(parameter.documentation.trim());
+    }
+}
+
+fn native_function_return_type(name: &str, func: &Func) -> String {
+    if func.to_element().is_some() {
+        return name.to_string();
+    }
+    func.returns().map(cast_info_label).unwrap_or_else(|| "any".to_string())
+}
+
+fn native_parameter_type_labels(
+    function_name: &str,
+    parameter_name: &str,
+    input: &CastInfo,
+) -> (String, String) {
+    if function_name == "image" {
+        let labels = match parameter_name {
+            "source" => ("image", "image"),
+            "alt" => ("none | str", "none | str"),
+            "fit" => ("\"contain\" | \"cover\" | \"stretch\"", "str"),
+            "format" => (
+                "\"gif\" | \"jpg\" | \"pdf\" | \"png\" | \"svg\" | \"webp\" | auto | dictionary",
+                "auto | dictionary | str",
+            ),
+            "height" => ("auto | fraction | relative", "auto | fraction | relative"),
+            "icc" => ("auto | bytes | str", "auto | bytes | str"),
+            "page" => ("int", "int"),
+            "scaling" => ("\"pixelated\" | \"smooth\" | auto", "auto | str"),
+            "width" => ("auto | relative", "auto | relative"),
+            _ => {
+                let label = cast_info_label(input);
+                return (label.clone(), label);
+            }
+        };
+        return (labels.0.to_string(), labels.1.to_string());
+    }
+
+    let label = cast_info_label(input);
+    (label.clone(), label)
+}
+
+fn cast_info_label(info: &CastInfo) -> String {
+    let mut labels = Vec::new();
+    info.walk(|item| {
+        let label = match item {
+            CastInfo::Any => "any".to_string(),
+            CastInfo::Value(value, _) => value.repr().to_string(),
+            CastInfo::Type(ty) => match ty.to_string().as_str() {
+                "integer" => "int".to_string(),
+                "string" | "path" => "str".to_string(),
+                "relative length" => "relative".to_string(),
+                other => other.to_string(),
+            },
+            CastInfo::Union(_) => return,
+        };
+        if !labels.contains(&label) {
+            labels.push(label);
+        }
+    });
+    if labels.is_empty() {
+        "any".to_string()
+    } else {
+        labels.join(" | ")
+    }
+}
+
+fn typst_docs_to_markdown(docs: &str) -> String {
+    let docs = docs.replace("```example", "```typst");
+    let mut output = String::new();
+    for (index, line) in docs.lines().enumerate() {
+        if index > 0 {
+            output.push('\n');
+        }
+        if let Some(heading) = line.strip_prefix("= ") {
+            output.push_str("## ");
+            output.push_str(heading.split(" <").next().unwrap_or(heading));
+        } else {
+            output.push_str(&replace_typst_doc_references(line));
+        }
+    }
+    output.replace("`{", "`").replace("}`", "`")
+}
+
+fn replace_typst_doc_references(line: &str) -> String {
+    let mut output = String::new();
+    let mut rest = line;
+    while let Some(at) = rest.find('@') {
+        output.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let reference_len = after
+            .char_indices()
+            .find_map(|(index, character)| {
+                (!(character.is_ascii_alphanumeric()
+                    || matches!(character, '-' | '_' | '.' | ':')))
+                    .then_some(index)
+            })
+            .unwrap_or(after.len());
+        if reference_len == 0 {
+            output.push('@');
+            rest = after;
+            continue;
+        }
+        let raw_reference = &after[..reference_len];
+        let has_trailing_period = raw_reference.ends_with('.');
+        let reference = raw_reference.trim_end_matches('.');
+        let following = &after[reference_len..];
+        if let Some(content) = following.strip_prefix('[')
+            && let Some(close) = content.find(']')
+        {
+            output.push_str(&content[..close]);
+            rest = &content[close + 1..];
+        } else {
+            let display = reference
+                .rsplit(['.', ':'])
+                .next()
+                .unwrap_or(reference);
+            output.push('[');
+            output.push_str(display);
+            output.push(']');
+            rest = following;
+        }
+        if has_trailing_period {
+            output.push('.');
+        }
+    }
+    output.push_str(rest);
+    output
 }
 
 fn function_name_before_open_paren(text: &str, open_paren: usize) -> Option<String> {
@@ -2684,51 +3116,80 @@ fn package_export_for_function(
     None
 }
 
-fn is_hover_code_context(text: &str, utf8_offset: usize) -> bool {
-    let clamped = utf8_offset.min(text.len());
-    let line_start = text[..clamped].rfind('\n').map_or(0, |index| index + 1);
-    let prefix = &text[line_start..clamped];
-    let trimmed_prefix = prefix.trim_start_matches(char::is_whitespace);
+fn is_hover_code_context(text: &str, start: usize, end: usize) -> bool {
+    let root = parse(text);
+    syntax_range_contains_identifier(&root, 0, start, end)
+}
 
-    if trimmed_prefix.starts_with('#') || trimmed_prefix.starts_with("//") {
+fn syntax_range_contains_identifier(
+    node: &SyntaxNode,
+    node_start: usize,
+    range_start: usize,
+    range_end: usize,
+) -> bool {
+    let node_end = node_start + node.len();
+    if node_end <= range_start || node_start >= range_end {
+        return false;
+    }
+    if matches!(node.kind(), SyntaxKind::Ident | SyntaxKind::MathIdent) {
         return true;
     }
-    if prefix.contains('#') || prefix.contains('@') {
-        return true;
-    }
 
-    prefix
-        .bytes()
-        .rev()
-        .find(|byte| !byte.is_ascii_whitespace())
-        .is_some_and(|byte| matches!(byte, b'#' | b'.' | b'@' | b'<'))
+    let mut child_start = node_start;
+    for child in node.children() {
+        if syntax_range_contains_identifier(&child, child_start, range_start, range_end) {
+            return true;
+        }
+        child_start += child.len();
+    }
+    false
 }
 
 fn prose_ranges_for(text: &str, ignore_commands: bool) -> Vec<ProseRange> {
     let root = parse(text);
-    let mut blocked = Vec::new();
-    collect_non_prose(&root, 0, ignore_commands, &mut blocked);
-    collect_quoted_non_prose(text, &mut blocked);
-    blocked.sort_by_key(|range| range.start);
+    let mut syntax_ranges = Vec::new();
+    collect_prose_ranges(&root, 0, ignore_commands, &mut syntax_ranges);
+    let mut quoted_ranges = Vec::new();
+    collect_quoted_non_prose(text, &mut quoted_ranges);
 
-    let mut ranges = Vec::new();
-    let mut cursor = 0;
-    for block in blocked {
-        if cursor < block.start {
-            ranges.push(ProseRange {
-                start_utf8: cursor,
-                end_utf8: block.start,
-            });
+    let mut merged: Vec<std::ops::Range<usize>> = Vec::new();
+    for range in syntax_ranges {
+        if let Some(previous) = merged.last_mut()
+            && range.start <= previous.end
+        {
+            previous.end = previous.end.max(range.end);
+        } else {
+            merged.push(range);
         }
-        cursor = cursor.max(block.end);
     }
-    if cursor < text.len() {
-        ranges.push(ProseRange {
-            start_utf8: cursor,
-            end_utf8: text.len(),
-        });
+
+    let mut prose_ranges = Vec::new();
+    for range in merged {
+        let mut cursor = range.start;
+        for quoted in &quoted_ranges {
+            if quoted.end <= cursor || quoted.start >= range.end {
+                continue;
+            }
+            if cursor < quoted.start {
+                prose_ranges.push(cursor..quoted.start.min(range.end));
+            }
+            cursor = cursor.max(quoted.end);
+            if cursor >= range.end {
+                break;
+            }
+        }
+        if cursor < range.end {
+            prose_ranges.push(cursor..range.end);
+        }
     }
-    ranges
+
+    prose_ranges
+        .into_iter()
+        .map(|range| ProseRange {
+            start_utf8: range.start,
+            end_utf8: range.end,
+        })
+        .collect()
 }
 
 fn collect_quoted_non_prose(text: &str, ranges: &mut Vec<std::ops::Range<usize>>) {
@@ -2780,7 +3241,11 @@ fn is_escaped_quote(bytes: &[u8], quote_index: usize) -> bool {
     slash_count % 2 == 1
 }
 
-fn collect_non_prose(
+/// Collects the natural-language leaves that Tinymist's semantic-token pass
+/// treats as markup text. Strings, raw blocks, math, comments, identifiers, and
+/// other code leaves are excluded by construction rather than spell-checking
+/// the complement of a few known code nodes.
+fn collect_prose_ranges(
     node: &SyntaxNode,
     offset: usize,
     ignore_commands: bool,
@@ -2792,8 +3257,12 @@ fn collect_non_prose(
         | SyntaxKind::Math
         | SyntaxKind::Raw
         | SyntaxKind::LineComment
-        | SyntaxKind::BlockComment => {
-            ranges.push(offset..offset + node.len());
+        | SyntaxKind::BlockComment
+        | SyntaxKind::ModuleImport
+        | SyntaxKind::ImportItems
+        | SyntaxKind::ImportItemPath
+        | SyntaxKind::RenamedImportItem
+        | SyntaxKind::ModuleInclude => {
             return;
         }
         _ => {}
@@ -2807,17 +3276,42 @@ fn collect_non_prose(
                 | SyntaxKind::SetRule
                 | SyntaxKind::ShowRule
                 | SyntaxKind::LetBinding
-                | SyntaxKind::ModuleImport
-                | SyntaxKind::ModuleInclude
         )
     {
+        collect_command_content_prose(node, offset, ranges);
+        return;
+    }
+
+    if matches!(
+        node.kind(),
+        SyntaxKind::Text | SyntaxKind::Space | SyntaxKind::Parbreak | SyntaxKind::SmartQuote
+    ) {
         ranges.push(offset..offset + node.len());
         return;
     }
 
     let mut child_offset = offset;
     for child in node.children() {
-        collect_non_prose(&child, child_offset, ignore_commands, ranges);
+        collect_prose_ranges(&child, child_offset, ignore_commands, ranges);
+        child_offset += child.len();
+    }
+}
+
+/// Command syntax is code, but square-bracket content arguments switch back to
+/// markup. Preserve those islands so text in constructs such as
+/// `#figure([caption])` remains eligible for spelling and autocorrection.
+fn collect_command_content_prose(
+    node: &SyntaxNode,
+    offset: usize,
+    ranges: &mut Vec<std::ops::Range<usize>>,
+) {
+    let mut child_offset = offset;
+    for child in node.children() {
+        if child.kind() == SyntaxKind::ContentBlock {
+            collect_prose_ranges(&child, child_offset, true, ranges);
+        } else {
+            collect_command_content_prose(&child, child_offset, ranges);
+        }
         child_offset += child.len();
     }
 }
@@ -3423,6 +3917,34 @@ mod tests {
         assert_eq!(signature.signatures[0].label, "diagram(..children)");
     }
 
+    #[test]
+    fn returns_typst_metadata_for_builtin_image() {
+        let text = "#image(";
+        let signature = signature_help_for(text, text.len(), "", "").unwrap();
+        let signature = &signature.signatures[0];
+
+        assert!(signature.label.starts_with("image(source: image, alt:"));
+        assert!(
+            signature.label.contains("fit: \"contain\" | \"cover\" | \"stretch\""),
+            "{}",
+            signature.label
+        );
+        assert!(signature.label.contains("format:"));
+        assert!(signature.label.contains("icc:"));
+        assert!(signature.label.contains("page: int"));
+        assert!(signature.label.ends_with(" -> image"));
+        assert_eq!(signature.parameters[0].label, "source");
+        assert!(signature.parameters[0]
+            .documentation
+            .contains("A path to an image file or raw bytes"));
+
+        let hover = hover_for(text, 3, "", "", &HashMap::new(), "main.typ").unwrap();
+        assert!(hover.text.contains("A raster or vector graphic."));
+        assert!(hover.text.contains("# Positional Parameters"));
+        assert!(hover.text.contains("# Named Parameters"));
+        assert!(hover.text.contains("## scaling"));
+    }
+
     fn test_package_storage() -> (PathBuf, PathBuf) {
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -3475,13 +3997,96 @@ description = "Draw diagrams."
 
     #[test]
     fn returns_hover() {
-        let hover = hover_for("#image(\"a.png\")", 3).unwrap();
-        assert_eq!(hover.text, "Typst symbol `image`");
+        let hover = hover_for(
+            "#image(\"a.png\")",
+            3,
+            "",
+            "",
+            &HashMap::new(),
+            "main.typ",
+        )
+        .unwrap();
+        assert!(hover.text.contains("A raster or vector graphic."));
+        assert!(hover.text.contains("put it into a [box]."));
+    }
+
+    #[test]
+    fn returns_hover_for_columns_call() {
+        let text = "#columns(2)[Hello]";
+        let offset = text.find("columns").unwrap() + "columns".len() - 1;
+        let hover = hover_for(text, offset, "", "", &HashMap::new(), "main.typ")
+            .expect("#columns should be recognized as Typst code");
+
+        assert!(hover.text.contains("columns"), "{}", hover.text);
+    }
+
+    #[test]
+    fn returns_hover_documentation_for_imported_package_function() {
+        let (_local, cache) = test_package_storage();
+        write_test_package(&cache);
+        let text = "#import \"@preview/fletcher:0.5.8\": *\n#diagram()";
+        let offset = text.rfind("diagram").unwrap() + 3;
+        let hover = hover_for(
+            text,
+            offset,
+            "",
+            cache.to_str().unwrap(),
+            &HashMap::new(),
+            "main.typ",
+        )
+        .unwrap();
+
+        assert!(hover.text.contains("let diagram(..children);"), "{}", hover.text);
+        assert!(hover.text.contains("Draw a diagram."), "{}", hover.text);
+    }
+
+    #[test]
+    fn returns_hover_documentation_for_package_alias_function() {
+        let (_local, cache) = test_package_storage();
+        write_test_package(&cache);
+        let text = "#import \"@preview/fletcher:0.5.8\" as fletcher\n#fletcher.diagram()";
+        let offset = text.rfind("diagram").unwrap() + 3;
+        let hover = hover_for(
+            text,
+            offset,
+            "",
+            cache.to_str().unwrap(),
+            &HashMap::new(),
+            "main.typ",
+        )
+        .unwrap();
+
+        assert_eq!(&text[hover.start_utf8..hover.end_utf8], "fletcher.diagram");
+        assert!(hover.text.contains("let diagram(..children);"), "{}", hover.text);
+        assert!(hover.text.contains("Draw a diagram."), "{}", hover.text);
     }
 
     #[test]
     fn suppresses_plain_text_hover() {
-        assert!(hover_for("This is plain text", 11).is_none());
+        assert!(hover_for(
+            "This is plain text",
+            11,
+            "",
+            "",
+            &HashMap::new(),
+            "main.typ",
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn suppresses_builtin_function_name_in_plain_text() {
+        let text = "This image is plain text";
+        let offset = text.find("image").unwrap() + 2;
+        assert!(hover_for(text, offset, "", "", &HashMap::new(), "main.typ").is_none());
+    }
+
+    #[test]
+    fn returns_hover_inside_multiline_code_block() {
+        let text = "#{\n  image(\"a.png\")\n}";
+        let offset = text.find("image").unwrap() + 2;
+        let hover = hover_for(text, offset, "", "", &HashMap::new(), "main.typ").unwrap();
+        assert!(hover.text.contains("A raster or vector graphic."));
     }
 
     #[test]
@@ -3507,7 +4112,7 @@ description = "Draw diagrams."
     }
 
     #[test]
-    fn excludes_command_invocations_from_prose_ranges() {
+    fn excludes_command_syntax_but_includes_content_arguments_in_prose_ranges() {
         let text = "Spell prose #link(\"https://example.com\")[mispelled argument] and catch typoo";
         let ranges = prose_ranges_for(text, true);
         let prose = ranges
@@ -3519,7 +4124,34 @@ description = "Draw diagrams."
         assert!(prose.contains("Spell prose"));
         assert!(prose.contains("and catch typoo"));
         assert!(!prose.contains("link"));
-        assert!(!prose.contains("mispelled argument"));
+        assert!(!prose.contains("https://example.com"));
+        assert!(prose.contains("mispelled argument"));
+    }
+
+    #[test]
+    fn includes_figure_content_argument_in_prose_ranges() {
+        let text = "#figure([This is bhad rheally.])";
+        let ranges = prose_ranges_for(text, true);
+        let prose = ranges
+            .into_iter()
+            .map(|range| &text[range.start_utf8..range.end_utf8])
+            .collect::<Vec<_>>()
+            .join("");
+
+        assert_eq!(prose, "This is bhad rheally.");
+    }
+
+    #[test]
+    fn excludes_selective_import_bindings_from_prose_ranges() {
+        let text = "#import \"@preview/unify:0.8.1\": num,qty,numrange,qtyrange";
+        for ignore_commands in [false, true] {
+            let ranges = prose_ranges_for(text, ignore_commands);
+            assert!(
+                ranges.is_empty(),
+                "the whole module import must be code; got {} prose ranges",
+                ranges.len()
+            );
+        }
     }
 
     #[test]
@@ -3533,9 +4165,26 @@ description = "Draw diagrams."
             .join("");
 
         assert!(prose.contains("Spell prose"));
-        assert!(prose.contains("link"));
+        assert!(!prose.contains("link"));
         assert!(prose.contains("mispelled argument"));
         assert!(prose.contains("and catch typoo"));
+    }
+
+    #[test]
+    fn returns_only_semantic_markup_text() {
+        let text = "Mispelled prose #let mispelled_name = \"mispelled string\"\n$ mispelled_math $\nMore prose";
+        let ranges = prose_ranges_for(text, false);
+        let prose = ranges
+            .into_iter()
+            .map(|range| &text[range.start_utf8..range.end_utf8])
+            .collect::<Vec<_>>()
+            .join("");
+
+        assert!(prose.contains("Mispelled prose"));
+        assert!(prose.contains("More prose"));
+        assert!(!prose.contains("mispelled_name"));
+        assert!(!prose.contains("mispelled string"));
+        assert!(!prose.contains("mispelled_math"));
     }
 
     #[test]

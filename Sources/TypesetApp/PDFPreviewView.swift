@@ -1,14 +1,9 @@
 // Copyright (c) 2026 Twarge LLC.
 // SPDX-License-Identifier: Apache-2.0
 
-import OSLog
 import PDFKit
 import SwiftUI
 import TypesetCore
-
-/// Signposts for the preview double-buffer pipeline (staging → warmup → swap),
-/// for diagnosing early swaps / mispositioned reveals with `log stream`.
-let previewBufferLog = Logger(subsystem: "com.twarge.app.typeset", category: "PreviewBuffer")
 
 /// The exact location the user was viewing in the preview: a zoom `scale`
 /// (`0` = automatic fit-to-width) plus the top-left of the visible area as a
@@ -149,7 +144,6 @@ extension PDFPreviewView {
                 stagedSourceRects = []
                 isSwapScheduled = false
                 preparationToken += 1
-                previewBufferLog.debug("preview nil — clearing container")
                 container.clear()
                 return
             }
@@ -157,7 +151,6 @@ extension PDFPreviewView {
             guard revision != activeRevision, revision != stagedRevision else { return }
 
             guard let document = PDFDocument(data: preview.data) else { return }
-            previewBufferLog.debug("stage revision \(revision) (delay \(renderWarmupDelay, format: .fixed(precision: 2)))")
             stagedData = preview.data
             stagedDocument = document
             stagedRevision = revision
@@ -208,9 +201,7 @@ extension PDFPreviewView {
             isSwapScheduled = true
             preparationToken += 1
             let currentToken = preparationToken
-            let warmup = Self.clampedWarmupDelay(renderWarmupDelay)
-            previewBufferLog.debug("schedule commit token \(currentToken) after \(warmup, format: .fixed(precision: 2))s (staged rev \(self.stagedRevision ?? -1))")
-            container.finishPreparingInactiveView(after: warmup) {
+            container.finishPreparingInactiveView(after: Self.clampedWarmupDelay(renderWarmupDelay)) {
                 self.commitStagedPreview(in: container, token: currentToken)
             }
         }
@@ -275,14 +266,10 @@ extension PDFPreviewView {
         }
 
         private func commitStagedPreview(in container: BufferedPDFPreviewContainer, token: Int) {
-            guard isSwapScheduled, preparationToken == token else {
-                previewBufferLog.debug("commit token \(token) superseded (current \(self.preparationToken))")
-                return
-            }
+            guard isSwapScheduled, preparationToken == token else { return }
             isSwapScheduled = false
 
             guard let data = stagedData else { return }
-            previewBufferLog.debug("commit token \(token): swapping in rev \(self.stagedRevision ?? -1) (animated \(container.hasVisibleDocument))")
 
             // The off-screen view was already populated and zoom-restored in
             // `applyStagedPreview`; committing just promotes it to the front.
@@ -464,7 +451,6 @@ extension PDFPreviewView {
     }
 
     func showInactiveView(animated: Bool) {
-        previewBufferLog.debug("showInactiveView animated=\(animated)")
         isApplyingViewport = true
         let oldView = activePDFView
         let newView = inactivePDFView
@@ -691,7 +677,6 @@ extension PDFPreviewView {
     }
 
     func showInactiveView(animated: Bool) {
-        previewBufferLog.debug("showInactiveView animated=\(animated)")
         isApplyingViewport = true
         let oldView = activePDFView
         let newView = inactivePDFView
