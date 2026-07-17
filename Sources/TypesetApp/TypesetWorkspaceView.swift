@@ -27,6 +27,69 @@ private struct ProseRangeSnapshot: Equatable {
     let ranges: [TypstProseRange]
 }
 
+private struct PendingSymbolRename: Identifiable {
+    let id = UUID()
+    let path: String
+    let source: String
+    let offset: Int
+    let preparation: TypstRenamePreparation
+}
+
+private struct RenameSymbolSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var isNameFocused: Bool
+    @State private var name: String
+
+    let originalName: String
+    let onRename: (String) -> Void
+
+    init(originalName: String, onRename: @escaping (String) -> Void) {
+        self.originalName = originalName
+        self.onRename = onRename
+        _name = State(initialValue: originalName)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Rename Symbol")
+                .font(.headline)
+
+            TextField("Symbol Name", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .focused($isNameFocused)
+                .onSubmit(rename)
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) {
+                    dismiss()
+                }
+                Button("Rename") {
+                    rename()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(trimmedName.isEmpty || trimmedName == originalName)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 360, idealWidth: 400, minHeight: 150)
+        .onAppear {
+            isNameFocused = true
+        }
+    }
+
+    private var trimmedName: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func rename() {
+        let newName = trimmedName
+        guard !newName.isEmpty, newName != originalName else { return }
+        onRename(newName)
+        dismiss()
+    }
+}
+
 struct TypesetWorkspaceView: View {
     @Binding var document: TypesetDocument
     var fileURL: URL?
@@ -41,6 +104,10 @@ struct TypesetWorkspaceView: View {
     @State private var selectedFolderPath: String?
     @State private var sourceText: String = ""
     @State private var sourceCaretLocation = 0
+    @State private var sourceSelectionRange = NSRange(location: 0, length: 0)
+    @State private var selectionExpansionHistory: [NSRange] = []
+    @State private var pendingSyntaxSelection: NSRange?
+    @State private var selectionExpansionRequestID = UUID()
     @State private var previewPDF: PDFPreview?
     @State private var previewRevision = 0
     @State private var didForceInitialPreviewRecompile = false
@@ -80,6 +147,9 @@ struct TypesetWorkspaceView: View {
     @State private var selectedCompletionIndex = 0
     @State private var hoverInfo: TypstHoverInfo?
     @State private var signatureHelp: TypstSignatureHelp?
+    @State private var referenceLocations: [TypstSourceLocation] = []
+    @State private var codeActions: [TypstCodeAction] = []
+    @State private var pendingSymbolRename: PendingSymbolRename?
     @State private var isManualLanguageHelpPresented = false
     @State private var languageRequestID = UUID()
     @State private var languageRequestTask: Task<Void, Never>?
@@ -97,6 +167,10 @@ struct TypesetWorkspaceView: View {
     /// the workspace so it survives the iOS sidebar overlay being torn down and
     /// re-created, where `.onChange` can't fire on a fresh mount.
     @State private var isFindActivationPending = false
+    /// A one-shot Refs-tab activation carrying the label/symbol to filter.
+    /// Like Find activation, it lives in the workspace so opening the iOS
+    /// sidebar cannot lose the request while constructing a fresh view.
+    @State private var pendingReferenceFilter: String?
     @State private var pendingScrollFraction: Double?
     @State private var scrollSaveTask: Task<Void, Never>?
     @State private var pendingPreviewViewport: PreviewViewport?
@@ -105,6 +179,8 @@ struct TypesetWorkspaceView: View {
     @State private var commentToggleRequest = 0
     @State private var snippetInsertionToken = 0
     @State private var snippetInsertion: EditorSnippetInsertion?
+    @State private var textReplacementToken = 0
+    @State private var textReplacement: EditorTextReplacement?
     @State private var pendingFileTreeEdit: FileTreeEditingTarget?
     @State private var isImporterPresented = false
     @State private var isSettingsPresented = false
@@ -112,6 +188,8 @@ struct TypesetWorkspaceView: View {
     @State private var findText = ""
     @State private var replaceText = ""
     @State private var findIsCaseSensitive = false
+    @State private var findIsWholeWord = false
+    @State private var findUsesRegularExpression = false
     @State private var didAutoExportPDFOnDisappear = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .detailOnly
     @State private var isFileSidebarPresented = false
@@ -273,6 +351,11 @@ struct TypesetWorkspaceView: View {
                     holdErrorPopupWhileEditing: $holdErrorPopupWhileEditing,
                     onDismiss: { isSettingsPresented = false }
                 )
+            }
+            .sheet(item: $pendingSymbolRename) { request in
+                RenameSymbolSheet(originalName: request.preparation.placeholder) { newName in
+                    performSymbolRename(request, newName: newName)
+                }
             }
             #if os(iOS)
             // The right file sidebar slides over the preview / editor as
@@ -804,12 +887,13 @@ struct TypesetWorkspaceView: View {
             documentSymbols: documentSymbols,
             restoredSidebarTabRawValue: document.package.state.sidebarTab,
             findActivation: $isFindActivationPending,
+            referenceFilterActivation: $pendingReferenceFilter,
             pendingEdit: $pendingFileTreeEdit,
             onSidebarTabChange: persistSidebarTab,
             onSelectSymbolRange: selectSymbolRange,
             onSearchSelectMatch: { jumpToSearchMatch(path: $0, range: $1) },
-            onSearchReplaceMatch: { replaceSearchMatch(path: $0, range: $1, replacement: $2, query: $3, isCaseSensitive: $4) },
-            onSearchReplaceAll: { replaceAllSearchMatches(query: $0, replacement: $1, isCaseSensitive: $2) },
+            onSearchReplaceMatch: { replaceSearchMatch(path: $0, range: $1, replacement: $2, configuration: $3) },
+            onSearchReplaceAll: { replaceAllSearchMatches(replacement: $0, configuration: $1) },
             onNewFile: prepareNewFile,
             onNewFolder: prepareNewFolder,
             onImportFromPicker: { isImporterPresented = true },
@@ -865,6 +949,15 @@ struct TypesetWorkspaceView: View {
             findPrevious: { selectFindMatch(direction: .previous) },
             replaceCurrentMatch: replaceCurrentFindMatch,
             toggleParagraphComment: toggleParagraphComment,
+            expandSelection: { expandSelection() },
+            shrinkSelection: shrinkSelection,
+            canShrinkSelection: !selectionExpansionHistory.isEmpty,
+            goToDefinition: { goToDefinition() },
+            findReferences: { findReferences() },
+            renameSymbol: { beginSymbolRename() },
+            showCodeActions: { showCodeActions() },
+            formatDocument: { formatSource(selectionOnly: false) },
+            formatSelection: { formatSource(selectionOnly: true) },
             insertFigure: insertFigure,
             insertTable: insertTable,
             showLineNumbers: showLineNumbers,
@@ -1028,8 +1121,11 @@ struct TypesetWorkspaceView: View {
                         findText: $findText,
                         replaceText: $replaceText,
                         isCaseSensitive: $findIsCaseSensitive,
+                        isWholeWord: $findIsWholeWord,
+                        usesRegularExpression: $findUsesRegularExpression,
                         currentIndex: currentFindMatchDisplayIndex,
                         matchCount: findMatchRanges.count,
+                        errorMessage: findPatternError,
                         onFindChanged: selectFirstFindMatch,
                         onPrevious: { selectFindMatch(direction: .previous) },
                         onNext: { selectFindMatch(direction: .next) },
@@ -1062,6 +1158,7 @@ struct TypesetWorkspaceView: View {
                     focusRequest: sourceEditorFocusRequest,
                     commentToggleRequest: commentToggleRequest,
                     snippetInsertion: snippetInsertion,
+                    textReplacement: textReplacement,
                     insertableImagePaths: insertableImagePaths,
                     insertableTypstPaths: insertableTypstPaths,
                     imageInsertTemplate: imageInsertTemplate,
@@ -1076,6 +1173,8 @@ struct TypesetWorkspaceView: View {
                     hoverInfo: hoverInfo,
                     cursorDiagnostic: cursorLineDiagnostic,
                     signatureHelp: signatureHelp,
+                    referenceLocations: referenceLocations,
+                    codeActions: codeActions,
                     selectedCompletionIndex: selectedCompletionIndex,
                     showLineNumbers: showLineNumbers,
                     spellCheckingEnabled: spellCheckingEnabled,
@@ -1090,7 +1189,18 @@ struct TypesetWorkspaceView: View {
                     onCompletionDismiss: clearCompletions,
                     onShowFunctionHelp: showFunctionHelp,
                     onShowSignatureHelp: showSignatureHelp,
-                    onEditorInteraction: dismissManualLanguageHelp,
+                    onGoToDefinition: { goToDefinition(at: $0) },
+                    onFindReferences: { findReferences(at: $0) },
+                    onRenameSymbol: { beginSymbolRename(at: $0) },
+                    onShowCodeActions: { showCodeActions(at: $0) },
+                    onReferenceSelected: selectReferenceLocation,
+                    onReferencesDismiss: { referenceLocations = [] },
+                    onCodeActionSelected: applyCodeAction,
+                    onCodeActionsDismiss: { codeActions = [] },
+                    onEditorInteraction: {
+                        dismissManualLanguageHelp()
+                        codeActions = []
+                    },
                     onScrollFractionChange: handleEditorScrollFraction,
                     scrollRestore: SourceEditorScrollRestore(
                         token: scrollRestoreToken,
@@ -1295,6 +1405,9 @@ struct TypesetWorkspaceView: View {
 
     private func select(_ path: String, restoringEditorState: Bool = false, revealing: NSRange? = nil) {
         cancelPendingEditorStateSave()
+        selectionExpansionHistory = []
+        pendingSyntaxSelection = nil
+        selectionExpansionRequestID = UUID()
         do {
             try withoutDocumentUndo {
                 try document.package.select(path: path, resettingEditorState: !restoringEditorState)
@@ -1331,6 +1444,8 @@ struct TypesetWorkspaceView: View {
             let restoredSelection: NSRange? = shouldRestoreEditorState
                 ? clampedRange(restoredRange, in: sourceText)
                 : nil
+            sourceSelectionRange = restoredSelection ?? NSRange(location: 0, length: 0)
+            sourceCaretLocation = sourceSelectionRange.location
             // When `revealing` is set (jump to a Find match), scroll that
             // range into view. Reopening is different: restore the persisted
             // caret without revealing it, then restore the saved viewport
@@ -1349,6 +1464,7 @@ struct TypesetWorkspaceView: View {
             clearCompletions()
             hoverInfo = nil
             signatureHelp = nil
+            referenceLocations = []
             activeEditParagraph = nil
         } catch {
             recordLog("Selection failed", message: error.localizedDescription, level: .error, present: true)
@@ -1369,7 +1485,15 @@ struct TypesetWorkspaceView: View {
         let path = selectedPath
         DispatchQueue.main.async {
             guard selectedPath == path else { return }
+            if pendingSyntaxSelection == range {
+                pendingSyntaxSelection = nil
+            } else {
+                selectionExpansionHistory = []
+                pendingSyntaxSelection = nil
+                selectionExpansionRequestID = UUID()
+            }
             sourceCaretLocation = range.location
+            sourceSelectionRange = range
             if let paragraph = activeEditParagraph {
                 let ns = sourceText as NSString
                 let caret = min(max(0, range.location), ns.length)
@@ -1612,12 +1736,19 @@ struct TypesetWorkspaceView: View {
 
     private func updateSource(_ text: String, selectionRange: NSRange? = nil) {
         guard selectedFile?.isTextEditable == true else { return }
+        selectionExpansionHistory = []
+        pendingSyntaxSelection = nil
+        selectionExpansionRequestID = UUID()
         dismissManualLanguageHelp()
         let path = selectedPath
         // Remember which paragraph this edit touched: its error callout is held
         // back until the caret leaves the paragraph.
         let editedText = text as NSString
         let editCaret = min(max(0, selectionRange?.location ?? sourceCaretLocation), editedText.length)
+        if let selectionRange {
+            sourceSelectionRange = clampedRange(selectionRange, in: text)
+            sourceCaretLocation = sourceSelectionRange.location
+        }
         activeEditParagraph = editedText.lineRange(for: NSRange(location: editCaret, length: 0))
         if let selectionRange {
             applyEditorSelection(
@@ -1892,30 +2023,41 @@ struct TypesetWorkspaceView: View {
     /// Replaces the single occurrence at `range` in `path` with `replacement`.
     /// Verifies the range still matches before editing so a stale result (the
     /// file changed since the search ran) can't corrupt unrelated text.
-    private func replaceSearchMatch(path: String, range: NSRange, replacement: String, query: String, isCaseSensitive: Bool) {
+    private func replaceSearchMatch(
+        path: String,
+        range: NSRange,
+        replacement: String,
+        configuration: WorkspaceSearchConfiguration
+    ) {
         guard document.package.files.contains(where: { $0.path == path && $0.isTextEditable }) else { return }
         let text = document.package.text(for: path)
-        let nsText = text as NSString
-        guard range.location >= 0, NSMaxRange(range) <= nsText.length else { return }
-        let options: NSString.CompareOptions = isCaseSensitive ? [] : [.caseInsensitive]
-        guard nsText.substring(with: range).compare(query, options: options) == .orderedSame else { return }
-        let newText = nsText.replacingCharacters(in: range, with: replacement)
+        guard let pattern = try? TextSearchPattern(options: configuration.options),
+              let resolvedReplacement = pattern.replacement(for: range, in: text, template: replacement) else {
+            return
+        }
+        let newText = (text as NSString).replacingCharacters(in: range, with: resolvedReplacement)
         applyReplacedText(newText, for: path)
     }
 
     /// Replaces every occurrence of `query` across all text files.
-    private func replaceAllSearchMatches(query: String, replacement: String, isCaseSensitive: Bool) {
-        guard !query.isEmpty else { return }
-        let targets = document.package.files.filter { $0.isTextEditable }.map(\.path)
+    private func replaceAllSearchMatches(
+        replacement: String,
+        configuration: WorkspaceSearchConfiguration
+    ) {
+        guard !configuration.options.query.isEmpty,
+              let pattern = try? TextSearchPattern(options: configuration.options) else { return }
+        let fileFilter = TextSearchFileFilter(
+            including: configuration.includedFiles,
+            excluding: configuration.excludedFiles
+        )
+        let targets = document.package.files
+            .filter { $0.isTextEditable && fileFilter.includes(path: $0.path) }
+            .map(\.path)
         for path in targets {
             let text = document.package.text(for: path)
-            let ranges = Self.findRanges(in: text, query: query, isCaseSensitive: isCaseSensitive)
-            guard !ranges.isEmpty else { continue }
-            let mutable = NSMutableString(string: text)
-            for range in ranges.reversed() {
-                mutable.replaceCharacters(in: range, with: replacement)
-            }
-            applyReplacedText(mutable as String, for: path)
+            let newText = pattern.replacingAll(in: text, with: replacement)
+            guard newText != text else { continue }
+            applyReplacedText(newText, for: path)
         }
     }
 
@@ -2064,6 +2206,388 @@ struct TypesetWorkspaceView: View {
 
     private func showSignatureHelp(at range: NSRange) {
         requestFunctionInformation(at: range, showSignature: true)
+    }
+
+    private func goToDefinition(at requestedRange: NSRange? = nil) {
+        guard selectedFile?.isTextEditable == true else { return }
+        let path = selectedPath
+        let text = sourceText
+        let range = languageSymbolRange(requestedRange)
+        let offset = min((text as NSString).length, range.location + max(0, range.length - 1))
+        referenceLocations = []
+        Task { @MainActor in
+            await languageService.updateFile(path: path, text: text)
+            guard selectedPath == path, sourceText == text else { return }
+            guard let location = await languageService.definition(path: path, utf16Offset: offset) else {
+                return
+            }
+            guard selectedPath == path, sourceText == text else { return }
+            jumpToSearchMatch(path: location.path, range: location.range)
+        }
+    }
+
+    private func findReferences(at requestedRange: NSRange? = nil) {
+        guard selectedFile?.isTextEditable == true else { return }
+        let range = languageSymbolRange(requestedRange)
+        completionItems = []
+        hoverInfo = nil
+        signatureHelp = nil
+        referenceLocations = []
+        let rawSymbol = (sourceText as NSString).substring(with: range)
+        let filter = rawSymbol.trimmingCharacters(
+            in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "@<>"))
+        )
+        pendingReferenceFilter = filter
+        setFileSidebarPresented(true)
+    }
+
+    private func beginSymbolRename(at requestedRange: NSRange? = nil) {
+        guard selectedFile?.isTextEditable == true else { return }
+        let path = selectedPath
+        let text = sourceText
+        let range = languageSymbolRange(requestedRange)
+        let offset = min((text as NSString).length, range.location + max(0, range.length - 1))
+        completionItems = []
+        hoverInfo = nil
+        signatureHelp = nil
+        referenceLocations = []
+        codeActions = []
+
+        Task { @MainActor in
+            await languageService.updateFile(path: path, text: text)
+            guard selectedPath == path, sourceText == text else { return }
+            guard let preparation = await languageService.prepareRename(
+                path: path,
+                utf16Offset: offset
+            ) else {
+                recordLog(
+                    "Rename unavailable",
+                    message: "The selected symbol cannot be renamed.",
+                    level: .warning
+                )
+                return
+            }
+            guard selectedPath == path, sourceText == text else { return }
+            pendingSymbolRename = PendingSymbolRename(
+                path: path,
+                source: text,
+                offset: offset,
+                preparation: preparation
+            )
+        }
+    }
+
+    private func performSymbolRename(_ request: PendingSymbolRename, newName: String) {
+        Task { @MainActor in
+            guard selectedPath == request.path, sourceText == request.source else {
+                recordLog(
+                    "Rename canceled",
+                    message: "The source changed before the rename could be applied.",
+                    level: .warning
+                )
+                return
+            }
+            await languageService.updateFile(path: request.path, text: request.source)
+            guard let workspaceEdit = await languageService.rename(
+                path: request.path,
+                utf16Offset: request.offset,
+                newName: newName
+            ) else {
+                recordLog(
+                    "Rename failed",
+                    message: "“\(newName)” is not a valid name for this symbol.",
+                    level: .warning
+                )
+                return
+            }
+            guard selectedPath == request.path, sourceText == request.source else { return }
+            await applySymbolRename(workspaceEdit, request: request, newName: newName)
+        }
+    }
+
+    private func applySymbolRename(
+        _ workspaceEdit: TypstWorkspaceTextEdit,
+        request: PendingSymbolRename,
+        newName: String
+    ) async {
+        var updatedTexts: [String: String] = [:]
+        for fileEdit in workspaceEdit.files {
+            guard document.package.files.contains(where: {
+                $0.path == fileEdit.path && $0.isTextEditable
+            }) else {
+                recordLog(
+                    "Rename failed",
+                    message: "The file “\(fileEdit.path)” is no longer available.",
+                    level: .warning
+                )
+                return
+            }
+            let text = fileEdit.path == selectedPath
+                ? sourceText
+                : document.package.text(for: fileEdit.path)
+            guard let updated = Self.applying(fileEdit.edits, to: text) else {
+                recordLog(
+                    "Rename failed",
+                    message: "A source file changed while references were being resolved.",
+                    level: .warning
+                )
+                return
+            }
+            updatedTexts[fileEdit.path] = updated
+        }
+
+        guard let activeFileEdit = workspaceEdit.files.first(where: { $0.path == selectedPath }),
+              let activeEditorEdit = Self.combinedEditorEdit(
+                activeFileEdit.edits,
+                in: sourceText,
+                selectedSourceRange: request.preparation.range,
+                newName: newName
+              ) else {
+            recordLog(
+                "Rename failed",
+                message: "No editable reference was found in the current file.",
+                level: .warning
+            )
+            return
+        }
+
+        do {
+            for (path, text) in updatedTexts where path != selectedPath {
+                try withoutDocumentUndo {
+                    try document.package.updateText(text, for: path)
+                }
+            }
+        } catch {
+            recordLog("Rename failed", message: error.localizedDescription, level: .error, present: true)
+            return
+        }
+
+        let documentID = languageServiceDocumentID
+        for (path, text) in updatedTexts {
+            _ = try? await tinymistWorkspaceStore.updateFile(
+                documentID: documentID,
+                path: path,
+                data: Data(text.utf8)
+            )
+            await languageService.updateFile(path: path, text: text)
+        }
+
+        textReplacementToken += 1
+        textReplacement = EditorTextReplacement(
+            token: textReplacementToken,
+            edit: activeEditorEdit
+        )
+        focusSourceEditor()
+    }
+
+    private static func applying(_ edits: [TypstTextEdit], to text: String) -> String? {
+        let sorted = edits.sorted { lhs, rhs in
+            lhs.range.location == rhs.range.location
+                ? lhs.range.length < rhs.range.length
+                : lhs.range.location < rhs.range.location
+        }
+        let length = (text as NSString).length
+        var previousEnd = 0
+        for edit in sorted {
+            guard edit.range.location >= previousEnd,
+                  edit.range.location >= 0,
+                  NSMaxRange(edit.range) <= length else { return nil }
+            previousEnd = NSMaxRange(edit.range)
+        }
+        let mutable = NSMutableString(string: text)
+        for edit in sorted.reversed() {
+            mutable.replaceCharacters(in: edit.range, with: edit.text)
+        }
+        return mutable as String
+    }
+
+    private static func combinedEditorEdit(
+        _ edits: [TypstTextEdit],
+        in text: String,
+        selectedSourceRange: NSRange,
+        newName: String
+    ) -> SourceEditorTextEdit? {
+        let sorted = edits.sorted { $0.range.location < $1.range.location }
+        guard !sorted.isEmpty, applying(sorted, to: text) != nil else { return nil }
+        let start = sorted[0].range.location
+        let end = sorted.map { NSMaxRange($0.range) }.max() ?? start
+        let envelope = NSRange(location: start, length: end - start)
+        let original = (text as NSString).substring(with: envelope)
+        let replacement = NSMutableString(string: original)
+        for edit in sorted.reversed() {
+            replacement.replaceCharacters(
+                in: NSRange(
+                    location: edit.range.location - envelope.location,
+                    length: edit.range.length
+                ),
+                with: edit.text
+            )
+        }
+
+        let selectedEdit = sorted.first { edit in
+            edit.range == selectedSourceRange
+                || NSIntersectionRange(edit.range, selectedSourceRange).length > 0
+        } ?? sorted[0]
+        let precedingDelta = sorted
+            .prefix { $0.range.location < selectedEdit.range.location }
+            .reduce(0) { delta, edit in
+                delta + (edit.text as NSString).length - edit.range.length
+            }
+        let nextSelection = NSRange(
+            location: selectedEdit.range.location + precedingDelta,
+            length: (newName as NSString).length
+        )
+        return SourceEditorTextEdit(
+            replacementRange: envelope,
+            replacementText: replacement as String,
+            selectedRange: nextSelection
+        )
+    }
+
+    private func languageSymbolRange(_ requestedRange: NSRange?) -> NSRange {
+        if let requestedRange {
+            return clampedRange(requestedRange, in: sourceText)
+        }
+        return SourceEditorSymbol.range(in: sourceText, at: sourceSelectionRange.location)
+            ?? clampedRange(sourceSelectionRange, in: sourceText)
+    }
+
+    private func expandSelection(from requestedRange: NSRange? = nil) {
+        guard selectedFile?.isTextEditable == true else { return }
+        let path = selectedPath
+        let text = sourceText
+        let current = clampedRange(requestedRange ?? sourceSelectionRange, in: text)
+        let requestID = UUID()
+        selectionExpansionRequestID = requestID
+        dismissManualLanguageHelp()
+        codeActions = []
+        referenceLocations = []
+
+        Task { @MainActor in
+            await languageService.updateFile(path: path, text: text)
+            let ranges = await languageService.selectionRanges(path: path, range: current)
+            guard selectionExpansionRequestID == requestID,
+                  selectedPath == path,
+                  sourceText == text,
+                  sourceSelectionRange == current else { return }
+            guard let next = ranges.first(where: { candidate in
+                candidate != current
+                    && candidate.location <= current.location
+                    && NSMaxRange(candidate) >= NSMaxRange(current)
+            }) else { return }
+            selectionExpansionHistory.append(current)
+            applySyntaxSelection(next)
+        }
+    }
+
+    private func shrinkSelection() {
+        selectionExpansionRequestID = UUID()
+        guard let previous = selectionExpansionHistory.popLast() else { return }
+        dismissManualLanguageHelp()
+        codeActions = []
+        referenceLocations = []
+        applySyntaxSelection(previous)
+    }
+
+    private func applySyntaxSelection(_ range: NSRange) {
+        let range = clampedRange(range, in: sourceText)
+        pendingSyntaxSelection = range
+        sourceSelectionRange = range
+        sourceCaretLocation = range.location
+        selectedRange = range
+        focusSourceEditor()
+    }
+
+    private func selectReferenceLocation(_ location: TypstSourceLocation) {
+        referenceLocations = []
+        jumpToSearchMatch(path: location.path, range: location.range)
+    }
+
+    private func showCodeActions(at requestedRange: NSRange? = nil) {
+        guard selectedFile?.isTextEditable == true else { return }
+        let path = selectedPath
+        let text = sourceText
+        let range = clampedRange(requestedRange ?? sourceSelectionRange, in: text)
+        completionItems = []
+        selectedCompletionIndex = 0
+        hoverInfo = nil
+        signatureHelp = nil
+        referenceLocations = []
+        codeActions = []
+        Task { @MainActor in
+            await languageService.updateFile(path: path, text: text)
+            guard selectedPath == path, sourceText == text else { return }
+            codeActions = await languageService.codeActions(path: path, range: range)
+        }
+    }
+
+    private func applyCodeAction(_ action: TypstCodeAction) {
+        let edit = action.edit
+        let selection = clampedRange(sourceSelectionRange, in: sourceText)
+        let replacementLength = (edit.text as NSString).length
+        let nextSelection = transformedSelection(
+            selection,
+            replacing: edit.range,
+            withLength: replacementLength
+        )
+        codeActions = []
+        textReplacementToken += 1
+        textReplacement = EditorTextReplacement(
+            token: textReplacementToken,
+            edit: SourceEditorTextEdit(
+                replacementRange: edit.range,
+                replacementText: edit.text,
+                selectedRange: nextSelection
+            )
+        )
+        focusSourceEditor()
+    }
+
+    private func formatSource(selectionOnly: Bool) {
+        guard selectedFile?.isTextEditable == true else { return }
+        let path = selectedPath
+        let text = sourceText
+        let selection = clampedRange(sourceSelectionRange, in: text)
+        guard !selectionOnly || selection.length > 0 else { return }
+        Task { @MainActor in
+            await languageService.updateFile(path: path, text: text)
+            guard selectedPath == path, sourceText == text else { return }
+            guard let edit = await languageService.format(
+                path: path,
+                range: selectionOnly ? selection : nil
+            ) else { return }
+            guard selectedPath == path, sourceText == text else { return }
+            let replacementLength = (edit.text as NSString).length
+            let nextSelection = selectionOnly
+                ? NSRange(location: edit.range.location, length: replacementLength)
+                : transformedSelection(selection, replacing: edit.range, withLength: replacementLength)
+            textReplacementToken += 1
+            textReplacement = EditorTextReplacement(
+                token: textReplacementToken,
+                edit: SourceEditorTextEdit(
+                    replacementRange: edit.range,
+                    replacementText: edit.text,
+                    selectedRange: nextSelection
+                )
+            )
+            focusSourceEditor()
+        }
+    }
+
+    private func transformedSelection(
+        _ selection: NSRange,
+        replacing range: NSRange,
+        withLength replacementLength: Int
+    ) -> NSRange {
+        let delta = replacementLength - range.length
+        func transform(_ position: Int) -> Int {
+            if position <= range.location { return position }
+            if position >= NSMaxRange(range) { return max(0, position + delta) }
+            return range.location + min(replacementLength, position - range.location)
+        }
+        let start = transform(selection.location)
+        let end = transform(NSMaxRange(selection))
+        return NSRange(location: start, length: max(0, end - start))
     }
 
     private func requestFunctionInformation(at range: NSRange, showSignature: Bool) {
@@ -2222,7 +2746,27 @@ struct TypesetWorkspaceView: View {
     }
 
     private var findMatchRanges: [NSRange] {
-        Self.findRanges(in: sourceText, query: findText, isCaseSensitive: findIsCaseSensitive)
+        guard let pattern = try? TextSearchPattern(options: findOptions) else { return [] }
+        return pattern.occurrences(in: sourceText).occurrences.map(\.range)
+    }
+
+    private var findOptions: TextSearchOptions {
+        TextSearchOptions(
+            query: findText,
+            isCaseSensitive: findIsCaseSensitive,
+            isWholeWord: findIsWholeWord,
+            usesRegularExpression: findUsesRegularExpression
+        )
+    }
+
+    private var findPatternError: String? {
+        guard !findText.isEmpty else { return nil }
+        do {
+            _ = try TextSearchPattern(options: findOptions)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
     }
 
     private var currentFindMatchDisplayIndex: Int? {
@@ -2305,6 +2849,7 @@ struct TypesetWorkspaceView: View {
 
     private func replaceCurrentFindMatch() {
         guard selectedFile?.isTextEditable == true, !findText.isEmpty else { return }
+        guard let pattern = try? TextSearchPattern(options: findOptions) else { return }
         let ranges = findMatchRanges
         guard !ranges.isEmpty else { return }
 
@@ -2312,10 +2857,15 @@ struct TypesetWorkspaceView: View {
         let replacementRange = ranges.first { NSEqualRanges($0, current) }
             ?? ranges.first { $0.location >= current.location }
             ?? ranges[0]
+        guard let resolvedReplacement = pattern.replacement(
+            for: replacementRange,
+            in: sourceText,
+            template: replaceText
+        ) else { return }
         let nsText = sourceText as NSString
-        sourceText = nsText.replacingCharacters(in: replacementRange, with: replaceText)
+        sourceText = nsText.replacingCharacters(in: replacementRange, with: resolvedReplacement)
 
-        let nextLocation = replacementRange.location + (replaceText as NSString).length
+        let nextLocation = replacementRange.location + (resolvedReplacement as NSString).length
         updateSource(sourceText, selectionRange: NSRange(location: nextLocation, length: 0))
         DispatchQueue.main.async {
             self.selectFindMatch(startingAt: nextLocation, direction: .next)
@@ -2324,14 +2874,11 @@ struct TypesetWorkspaceView: View {
 
     private func replaceAllFindMatches() {
         guard selectedFile?.isTextEditable == true, !findText.isEmpty else { return }
+        guard let pattern = try? TextSearchPattern(options: findOptions) else { return }
         let ranges = findMatchRanges
         guard !ranges.isEmpty else { return }
 
-        let mutableText = NSMutableString(string: sourceText)
-        for range in ranges.reversed() {
-            mutableText.replaceCharacters(in: range, with: replaceText)
-        }
-        sourceText = mutableText as String
+        sourceText = pattern.replacingAll(in: sourceText, with: replaceText)
         let newRange = NSRange(location: min(ranges[0].location, (sourceText as NSString).length), length: 0)
         selectedRange = newRange
         updateSource(sourceText, selectionRange: newRange)
@@ -3309,25 +3856,6 @@ struct TypesetWorkspaceView: View {
         let length = (text as NSString).length
         let location = min(max(0, range.location), length)
         return NSRange(location: location, length: min(max(0, range.length), max(0, length - location)))
-    }
-
-    private static func findRanges(in text: String, query: String, isCaseSensitive: Bool) -> [NSRange] {
-        guard !query.isEmpty else { return [] }
-        let nsText = text as NSString
-        let options: NSString.CompareOptions = isCaseSensitive ? [] : [.caseInsensitive]
-        var ranges: [NSRange] = []
-        var searchRange = NSRange(location: 0, length: nsText.length)
-
-        while searchRange.location < nsText.length {
-            let foundRange = nsText.range(of: query, options: options, range: searchRange)
-            guard foundRange.location != NSNotFound else { break }
-            ranges.append(foundRange)
-
-            let nextLocation = foundRange.location + max(1, foundRange.length)
-            searchRange = NSRange(location: nextLocation, length: max(0, nsText.length - nextLocation))
-        }
-
-        return ranges
     }
 
     private func defaultPDFExportFilename() -> String {

@@ -21,6 +21,7 @@ struct PlatformTextView: NSViewRepresentable {
     var focusRequest: Int
     var commentToggleRequest: Int
     var snippetInsertion: EditorSnippetInsertion?
+    var textReplacement: EditorTextReplacement?
     var insertableImagePaths: Set<String>
     var insertableTypstPaths: Set<String>
     var imageInsertTemplate: String
@@ -40,6 +41,10 @@ struct PlatformTextView: NSViewRepresentable {
     var onCompletionDismiss: () -> Void
     var onShowFunctionHelp: (NSRange, CGPoint) -> Void
     var onShowSignatureHelp: (NSRange, CGPoint) -> Void
+    var onGoToDefinition: (NSRange, CGPoint) -> Void
+    var onFindReferences: (NSRange, CGPoint) -> Void
+    var onRenameSymbol: (NSRange, CGPoint) -> Void
+    var onShowCodeActions: (NSRange, CGPoint) -> Void
     var onEditorInteraction: () -> Void
     var onScrollOffsetChange: (CGFloat) -> Void
     var onLanguageOverlayAnchorChange: (CGPoint) -> Void
@@ -87,6 +92,10 @@ struct PlatformTextView: NSViewRepresentable {
         }
         textView.onShowFunctionHelp = onShowFunctionHelp
         textView.onShowSignatureHelp = onShowSignatureHelp
+        textView.onGoToDefinition = onGoToDefinition
+        textView.onFindReferences = onFindReferences
+        textView.onRenameSymbol = onRenameSymbol
+        textView.onShowCodeActions = onShowCodeActions
         context.coordinator.configureDropHandling(for: textView)
         context.coordinator.applyHighlighting(to: textView, text: text)
 
@@ -151,6 +160,10 @@ struct PlatformTextView: NSViewRepresentable {
         if let packageTextView = textView as? PackagePathTextView {
             packageTextView.onShowFunctionHelp = onShowFunctionHelp
             packageTextView.onShowSignatureHelp = onShowSignatureHelp
+            packageTextView.onGoToDefinition = onGoToDefinition
+            packageTextView.onFindReferences = onFindReferences
+            packageTextView.onRenameSymbol = onRenameSymbol
+            packageTextView.onShowCodeActions = onShowCodeActions
             packageTextView.onUserInteraction = { [weak coordinator = context.coordinator] in
                 coordinator?.clearScrollAnchor()
                 onEditorInteraction()
@@ -187,6 +200,7 @@ struct PlatformTextView: NSViewRepresentable {
         }
         context.coordinator.toggleCommentIfNeeded(commentToggleRequest, in: textView)
         context.coordinator.insertSnippetIfNeeded(snippetInsertion, in: textView)
+        context.coordinator.applyTextReplacementIfNeeded(textReplacement, in: textView)
         context.coordinator.focusIfNeeded(focusRequest, textView: textView)
         context.coordinator.onScrollFractionChange = onScrollFractionChange
         context.coordinator.restoreScrollIfNeeded(scrollRestore)
@@ -366,6 +380,7 @@ struct PlatformTextView: NSViewRepresentable {
         private var lastFocusRequest = 0
         private var lastCommentToggleRequest = 0
         private var lastSnippetToken = 0
+        private var lastTextReplacementToken = 0
         private var nativeTextAwaitingBinding: String?
 
         deinit {
@@ -561,6 +576,28 @@ struct PlatformTextView: NSViewRepresentable {
             textView.setSelectedRange(newSelection)
             textView.scrollRangeToVisible(newSelection)
             updateLanguageOverlayAnchor(in: textView, selectedRange: newSelection)
+        }
+
+        func applyTextReplacementIfNeeded(_ request: EditorTextReplacement?, in textView: NSTextView) {
+            guard let request, request.token != lastTextReplacementToken else { return }
+            lastTextReplacementToken = request.token
+            guard textView.isEditable else { return }
+            let length = (textView.string as NSString).length
+            let location = min(max(0, request.edit.replacementRange.location), length)
+            let range = NSRange(
+                location: location,
+                length: min(max(0, request.edit.replacementRange.length), length - location)
+            )
+            textView.insertText(request.edit.replacementText, replacementRange: range)
+            let nextLength = length - range.length + (request.edit.replacementText as NSString).length
+            let selectionLocation = min(max(0, request.edit.selectedRange.location), nextLength)
+            let selection = NSRange(
+                location: selectionLocation,
+                length: min(max(0, request.edit.selectedRange.length), nextLength - selectionLocation)
+            )
+            textView.setSelectedRange(selection)
+            textView.scrollRangeToVisible(selection)
+            updateLanguageOverlayAnchor(in: textView, selectedRange: selection)
         }
 
         private func focus(_ textView: NSTextView, remainingAttempts: Int) {
@@ -759,6 +796,28 @@ struct PlatformTextView: NSViewRepresentable {
                   textView.isEditable, !textView.hasMarkedText(),
                   let replacementString else { return true }
             let selectedRange = textView.selectedRange()
+
+            if replacementString == "\n",
+               affectedRange == selectedRange,
+               let indentationEdit = SourceEditorSmartIndentation.editForNewline(
+                in: textView.string,
+                selectedRange: selectedRange
+               ) {
+                isApplyingPairEdit = true
+                trackProseEdit(
+                    replacing: indentationEdit.replacementRange,
+                    with: indentationEdit.replacementText,
+                    in: textView.string
+                )
+                textView.insertText(
+                    indentationEdit.replacementText,
+                    replacementRange: indentationEdit.replacementRange
+                )
+                textView.setSelectedRange(indentationEdit.selectedRange)
+                isApplyingPairEdit = false
+                textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+                return false
+            }
 
             let pairEdit: SourceEditorTextEdit?
             if replacementString.isEmpty,
@@ -1084,6 +1143,10 @@ struct PlatformTextView: NSViewRepresentable {
         var onCheckSpelling: (() -> Bool)?
         var onShowFunctionHelp: ((NSRange, CGPoint) -> Void)?
         var onShowSignatureHelp: ((NSRange, CGPoint) -> Void)?
+        var onGoToDefinition: ((NSRange, CGPoint) -> Void)?
+        var onFindReferences: ((NSRange, CGPoint) -> Void)?
+        var onRenameSymbol: ((NSRange, CGPoint) -> Void)?
+        var onShowCodeActions: ((NSRange, CGPoint) -> Void)?
         var onValidatePackagePathDrop: ((String) -> Bool)?
         var onPackagePathDropTargeted: ((Bool) -> Void)?
         var onDropPackagePath: ((String, NSPoint) -> Bool)?
@@ -1093,6 +1156,8 @@ struct PlatformTextView: NSViewRepresentable {
         /// anchor (see `Coordinator.clearScrollAnchor`).
         var onUserInteraction: (() -> Void)?
         private var contextFunctionRange: NSRange?
+        private var contextSymbolRange: NSRange?
+        private var contextCodeActionRange: NSRange?
         private var selectionBeforePackageDrag: NSRange?
 
         /// Compiler diagnostics rendered inline: a faint full-width tint behind
@@ -1113,6 +1178,14 @@ struct PlatformTextView: NSViewRepresentable {
 
         override func mouseDown(with event: NSEvent) {
             onUserInteraction?()
+            if event.modifierFlags.contains(.command) {
+                let point = convert(event.locationInWindow, from: nil)
+                let location = characterIndexForInsertion(at: point)
+                if let range = SourceEditorSymbol.range(in: string, at: location) {
+                    onGoToDefinition?(range, languageOverlayAnchor(for: range))
+                    return
+                }
+            }
             super.mouseDown(with: event)
         }
 
@@ -1175,8 +1248,54 @@ struct PlatformTextView: NSViewRepresentable {
             let menu = super.menu(for: event) ?? NSMenu()
             let point = convert(event.locationInWindow, from: nil)
             let location = characterIndexForInsertion(at: point)
-            guard let range = functionCallRange(at: location) else { return menu }
-            contextFunctionRange = range
+            let actionRange = selectedRange().length > 0
+                ? selectedRange()
+                : NSRange(location: location, length: 0)
+            contextCodeActionRange = actionRange
+            let quickActions = NSMenuItem(
+                title: "Quick Actions…",
+                action: #selector(showCodeActions(_:)),
+                keyEquivalent: ""
+            )
+            quickActions.target = self
+            quickActions.representedObject = NSValue(range: actionRange)
+            menu.insertItem(.separator(), at: 0)
+            menu.insertItem(quickActions, at: 0)
+
+            guard let symbolRange = SourceEditorSymbol.range(in: string, at: location) else { return menu }
+            contextSymbolRange = symbolRange
+            let functionRange = functionCallRange(at: location)
+            contextFunctionRange = functionRange
+
+            let definition = NSMenuItem(
+                title: "Go to Definition",
+                action: #selector(goToDefinition(_:)),
+                keyEquivalent: ""
+            )
+            definition.target = self
+            definition.representedObject = NSValue(range: symbolRange)
+
+            let references = NSMenuItem(
+                title: "Find References",
+                action: #selector(findReferences(_:)),
+                keyEquivalent: ""
+            )
+            references.target = self
+            references.representedObject = NSValue(range: symbolRange)
+
+            let rename = NSMenuItem(
+                title: "Rename Symbol…",
+                action: #selector(renameSymbol(_:)),
+                keyEquivalent: ""
+            )
+            rename.target = self
+            rename.representedObject = NSValue(range: symbolRange)
+
+            menu.insertItem(references, at: 0)
+            menu.insertItem(rename, at: 0)
+            menu.insertItem(definition, at: 0)
+
+            guard let range = functionRange else { return menu }
 
             let help = NSMenuItem(
                 title: "Show Function Help",
@@ -1194,10 +1313,27 @@ struct PlatformTextView: NSViewRepresentable {
             signature.target = self
             signature.representedObject = NSValue(range: range)
 
-            menu.insertItem(.separator(), at: 0)
             menu.insertItem(signature, at: 0)
             menu.insertItem(help, at: 0)
             return menu
+        }
+
+        @objc private func goToDefinition(_ sender: NSMenuItem) {
+            performSymbolMenuAction(sender, action: onGoToDefinition)
+        }
+
+        @objc private func findReferences(_ sender: NSMenuItem) {
+            performSymbolMenuAction(sender, action: onFindReferences)
+        }
+
+        @objc private func renameSymbol(_ sender: NSMenuItem) {
+            performSymbolMenuAction(sender, action: onRenameSymbol)
+        }
+
+        @objc private func showCodeActions(_ sender: NSMenuItem) {
+            let representedRange = (sender.representedObject as? NSValue)?.rangeValue
+            guard let range = representedRange ?? contextCodeActionRange else { return }
+            onShowCodeActions?(range, languageOverlayAnchor(for: range))
         }
 
         @objc private func showFunctionHelp(_ sender: NSMenuItem) {
@@ -1219,6 +1355,15 @@ struct PlatformTextView: NSViewRepresentable {
                 "native menu action=\(sender.title) range=\(range.location)..<\(NSMaxRange(range)) anchor=(\(anchor.x), \(anchor.y)) callback=\(action != nil)"
             )
             action?(range, anchor)
+        }
+
+        private func performSymbolMenuAction(
+            _ sender: NSMenuItem,
+            action: ((NSRange, CGPoint) -> Void)?
+        ) {
+            let representedRange = (sender.representedObject as? NSValue)?.rangeValue
+            guard let range = representedRange ?? contextSymbolRange else { return }
+            action?(range, languageOverlayAnchor(for: range))
         }
 
         private func functionCallRange(at location: Int) -> NSRange? {
@@ -1283,7 +1428,11 @@ struct PlatformTextView: NSViewRepresentable {
 
         override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
             if menuItem.action == #selector(showFunctionHelp(_:))
-                || menuItem.action == #selector(showSignatureHelp(_:)) {
+                || menuItem.action == #selector(showSignatureHelp(_:))
+                || menuItem.action == #selector(goToDefinition(_:))
+                || menuItem.action == #selector(findReferences(_:))
+                || menuItem.action == #selector(renameSymbol(_:))
+                || menuItem.action == #selector(showCodeActions(_:)) {
                 return true
             }
             if menuItem.action == #selector(paste(_:)),

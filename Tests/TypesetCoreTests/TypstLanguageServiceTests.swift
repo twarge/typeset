@@ -174,8 +174,8 @@ import Testing
     let help = await service.signatureHelp(path: "main.typ", utf16Offset: 27)
 
     #expect(help?.signatures.first?.label.hasPrefix("image(") == true)
-    #expect(help?.activeParameter == 1)
-    #expect(help?.signatures.first?.parameters[1].label == "width")
+    #expect(help?.activeParameter == 8)
+    #expect(help?.signatures.first?.parameters[8].label == "width")
 }
 
 @Test func basicLanguageServiceShowsSignatureHelpForNestedCalls() async {
@@ -206,6 +206,60 @@ import Testing
 
     #expect(hover?.text == "Typst symbol `image`")
 }
+
+#if canImport(TypesetTinymist)
+@Test func embeddedLanguageServiceReturnsCodeActionsWithUTF16Edits() async {
+    let service = EmbeddedTinymistLanguageService()
+    let text = "α\n== Details"
+    let caret = (text as NSString).range(of: "Details").location
+    await service.updateFile(path: "main.typ", text: text)
+
+    let actions = await service.codeActions(
+        path: "main.typ",
+        range: NSRange(location: caret, length: 0)
+    )
+
+    #expect(actions.map(\.title) == [
+        "Decrease depth of heading",
+        "Increase depth of heading",
+    ])
+    #expect(actions.first?.edit.range == (text as NSString).range(of: "=="))
+    #expect(actions.first?.edit.text == "=")
+}
+
+@Test func embeddedLanguageServiceReturnsCrossFileRenameEditsInUTF16() async {
+    let service = EmbeddedTinymistLanguageService()
+    let main = "α\n#import \"defs.typ\": greet\n#greet(\"Ada\")"
+    let defs = "#let greet(name) = [Hello #name]"
+    await service.updateFile(path: "main.typ", text: main)
+    await service.updateFile(path: "defs.typ", text: defs)
+    let caret = (main as NSString).range(of: "greet", options: .backwards).location + 2
+
+    let preparation = await service.prepareRename(path: "main.typ", utf16Offset: caret)
+    let edit = await service.rename(path: "main.typ", utf16Offset: caret, newName: "welcome")
+
+    #expect(preparation?.placeholder == "greet")
+    #expect(preparation?.range == (main as NSString).range(of: "greet", options: .backwards))
+    #expect(edit?.files.map(\.path).sorted() == ["defs.typ", "main.typ"])
+    #expect(edit?.files.first(where: { $0.path == "main.typ" })?.edits.count == 2)
+}
+
+@Test func embeddedLanguageServiceReturnsNestedSelectionRangesInUTF16() async {
+    let service = EmbeddedTinymistLanguageService()
+    let text = "α #let value = image(\"plot.svg\")"
+    await service.updateFile(path: "main.typ", text: text)
+    let stringRange = (text as NSString).range(of: "\"plot.svg\"")
+    let caret = stringRange.location + 4
+
+    let ranges = await service.selectionRanges(
+        path: "main.typ",
+        range: NSRange(location: caret, length: 0)
+    )
+
+    #expect(ranges.contains(stringRange))
+    #expect(ranges.last == NSRange(location: 0, length: (text as NSString).length))
+}
+#endif
 
 @Test func compilerDiagnosticParserReadsTypstPrettyDiagnostics() {
     let message = """

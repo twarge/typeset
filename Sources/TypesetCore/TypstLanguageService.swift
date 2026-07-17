@@ -382,6 +382,82 @@ public struct TypstDocumentSymbols: Equatable, Codable, Sendable {
     public static let empty = TypstDocumentSymbols()
 }
 
+public struct TypstSourceLocation: Equatable, Codable, Sendable, Identifiable {
+    public var id: String { "\(path):\(range.location):\(range.length)" }
+    public var path: String
+    public var range: NSRange
+    public var line: Int
+    public var column: Int
+
+    public init(path: String, range: NSRange, line: Int = 1, column: Int = 1) {
+        self.path = path
+        self.range = range
+        self.line = line
+        self.column = column
+    }
+}
+
+public struct TypstTextEdit: Equatable, Codable, Sendable {
+    public var range: NSRange
+    public var text: String
+
+    public init(range: NSRange, text: String) {
+        self.range = range
+        self.text = text
+    }
+}
+
+public struct TypstRenamePreparation: Equatable, Codable, Sendable {
+    public var range: NSRange
+    public var placeholder: String
+
+    public init(range: NSRange, placeholder: String) {
+        self.range = range
+        self.placeholder = placeholder
+    }
+}
+
+public struct TypstFileTextEdits: Equatable, Codable, Sendable, Identifiable {
+    public var id: String { path }
+    public var path: String
+    public var edits: [TypstTextEdit]
+
+    public init(path: String, edits: [TypstTextEdit]) {
+        self.path = path
+        self.edits = edits
+    }
+}
+
+public struct TypstWorkspaceTextEdit: Equatable, Codable, Sendable {
+    public var files: [TypstFileTextEdits]
+
+    public init(files: [TypstFileTextEdits]) {
+        self.files = files
+    }
+}
+
+public struct TypstCodeAction: Equatable, Codable, Sendable, Identifiable {
+    public var id: String
+    public var title: String
+    public var kind: String
+    public var isPreferred: Bool
+    public var edit: TypstTextEdit
+
+    public init(
+        id: String,
+        title: String,
+        kind: String,
+        isPreferred: Bool = false,
+        edit: TypstTextEdit
+    ) {
+        self.id = id
+        self.title = title
+        self.kind = kind
+        self.isPreferred = isPreferred
+        self.edit = edit
+    }
+}
+
 public enum TypstSourceOffsetConverter {
     public static func utf8Offset(fromUTF16Offset utf16Offset: Int, in text: String) -> Int {
         let nsText = text as NSString
@@ -421,6 +497,13 @@ public protocol TypstLanguageService: Sendable {
     func signatureHelp(path: String, utf16Offset: Int) async -> TypstSignatureHelp?
     func proseRanges(path: String, ignoringCommandsAndArguments: Bool) async -> [TypstProseRange]
     func documentSymbols(path: String) async -> TypstDocumentSymbols
+    func definition(path: String, utf16Offset: Int) async -> TypstSourceLocation?
+    func references(path: String, utf16Offset: Int) async -> [TypstSourceLocation]
+    func selectionRanges(path: String, range: NSRange) async -> [NSRange]
+    func prepareRename(path: String, utf16Offset: Int) async -> TypstRenamePreparation?
+    func rename(path: String, utf16Offset: Int, newName: String) async -> TypstWorkspaceTextEdit?
+    func format(path: String, range: NSRange?) async -> TypstTextEdit?
+    func codeActions(path: String, range: NSRange) async -> [TypstCodeAction]
 }
 
 public enum TypstLanguageServiceFactory {
@@ -773,6 +856,211 @@ public actor EmbeddedTinymistLanguageService: TypstLanguageService {
         return TypstDocumentSymbols(outline: outline, figures: figures, references: references)
     }
 
+    public func definition(path: String, utf16Offset: Int) async -> TypstSourceLocation? {
+        let text = files[path] ?? ""
+        let offset = TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: utf16Offset, in: text)
+        guard let data = await call({ session in
+            typeset_tinymist_definition(session, path, UInt32(clamping: offset))
+        }).data(using: .utf8),
+              let response = try? JSONDecoder().decode(FFIDefinitionResponse.self, from: data),
+              let location = response.location else { return nil }
+        return sourceLocation(from: location)
+    }
+
+    public func references(path: String, utf16Offset: Int) async -> [TypstSourceLocation] {
+        let text = files[path] ?? ""
+        let offset = TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: utf16Offset, in: text)
+        guard let data = await call({ session in
+            typeset_tinymist_references(session, path, UInt32(clamping: offset))
+        }).data(using: .utf8),
+              let response = try? JSONDecoder().decode(FFIReferencesResponse.self, from: data) else {
+            return []
+        }
+        return response.locations.compactMap(sourceLocation(from:))
+    }
+
+    public func selectionRanges(path: String, range: NSRange) async -> [NSRange] {
+        let text = files[path] ?? ""
+        let length = (text as NSString).length
+        let location = min(max(0, range.location), length)
+        let clampedRange = NSRange(
+            location: location,
+            length: min(max(0, range.length), length - location)
+        )
+        let start = TypstSourceOffsetConverter.utf8Offset(
+            fromUTF16Offset: clampedRange.location,
+            in: text
+        )
+        let end = TypstSourceOffsetConverter.utf8Offset(
+            fromUTF16Offset: NSMaxRange(clampedRange),
+            in: text
+        )
+        guard let data = await call({ session in
+            typeset_tinymist_selection_ranges(
+                session,
+                path,
+                UInt32(clamping: start),
+                UInt32(clamping: end)
+            )
+        }).data(using: .utf8),
+              let response = try? JSONDecoder().decode(FFISelectionRangesResponse.self, from: data) else {
+            return []
+        }
+        return response.ranges.map { range in
+            TypstSourceOffsetConverter.utf16Range(
+                fromUTF8Start: range.startUtf8,
+                endUTF8: range.endUtf8,
+                in: text
+            )
+        }
+    }
+
+    public func prepareRename(path: String, utf16Offset: Int) async -> TypstRenamePreparation? {
+        let text = files[path] ?? ""
+        let offset = TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: utf16Offset, in: text)
+        guard let data = await call({ session in
+            typeset_tinymist_prepare_rename(session, path, UInt32(clamping: offset))
+        }).data(using: .utf8),
+              let response = try? JSONDecoder().decode(FFIPrepareRenameResponse.self, from: data),
+              let preparation = response.preparation else { return nil }
+        return TypstRenamePreparation(
+            range: TypstSourceOffsetConverter.utf16Range(
+                fromUTF8Start: preparation.startUtf8,
+                endUTF8: preparation.endUtf8,
+                in: text
+            ),
+            placeholder: preparation.placeholder
+        )
+    }
+
+    public func rename(
+        path: String,
+        utf16Offset: Int,
+        newName: String
+    ) async -> TypstWorkspaceTextEdit? {
+        let text = files[path] ?? ""
+        let offset = TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: utf16Offset, in: text)
+        guard let data = await call({ session in
+            typeset_tinymist_rename(session, path, UInt32(clamping: offset), newName)
+        }).data(using: .utf8),
+              let response = try? JSONDecoder().decode(FFIRenameResponse.self, from: data),
+              let edit = response.edit else { return nil }
+        return TypstWorkspaceTextEdit(files: edit.files.compactMap { file in
+            guard let fileText = files[file.path] else { return nil }
+            return TypstFileTextEdits(
+                path: file.path,
+                edits: file.edits.map { edit in
+                    TypstTextEdit(
+                        range: TypstSourceOffsetConverter.utf16Range(
+                            fromUTF8Start: edit.startUtf8,
+                            endUTF8: edit.endUtf8,
+                            in: fileText
+                        ),
+                        text: edit.text
+                    )
+                }
+            )
+        })
+    }
+
+    public func format(path: String, range: NSRange?) async -> TypstTextEdit? {
+        let text = files[path] ?? ""
+        let clampedRange = range.map { range in
+            let length = (text as NSString).length
+            let location = min(max(0, range.location), length)
+            return NSRange(location: location, length: min(max(0, range.length), length - location))
+        }
+        let start = TypstSourceOffsetConverter.utf8Offset(
+            fromUTF16Offset: clampedRange?.location ?? 0,
+            in: text
+        )
+        let end = TypstSourceOffsetConverter.utf8Offset(
+            fromUTF16Offset: clampedRange.map(NSMaxRange) ?? (text as NSString).length,
+            in: text
+        )
+        guard let data = await call({ session in
+            typeset_tinymist_format(
+                session,
+                path,
+                UInt32(clamping: start),
+                UInt32(clamping: end),
+                clampedRange == nil ? 0 : 1
+            )
+        }).data(using: .utf8),
+              let response = try? JSONDecoder().decode(FFIFormatResponse.self, from: data),
+              let edit = response.edit else { return nil }
+        return TypstTextEdit(
+            range: TypstSourceOffsetConverter.utf16Range(
+                fromUTF8Start: edit.startUtf8,
+                endUTF8: edit.endUtf8,
+                in: text
+            ),
+            text: edit.text
+        )
+    }
+
+    public func codeActions(path: String, range: NSRange) async -> [TypstCodeAction] {
+        let text = files[path] ?? ""
+        let length = (text as NSString).length
+        let location = min(max(0, range.location), length)
+        let clampedRange = NSRange(
+            location: location,
+            length: min(max(0, range.length), length - location)
+        )
+        let start = TypstSourceOffsetConverter.utf8Offset(
+            fromUTF16Offset: clampedRange.location,
+            in: text
+        )
+        let end = TypstSourceOffsetConverter.utf8Offset(
+            fromUTF16Offset: NSMaxRange(clampedRange),
+            in: text
+        )
+        guard let data = await call({ session in
+            typeset_tinymist_code_actions(
+                session,
+                path,
+                UInt32(clamping: start),
+                UInt32(clamping: end)
+            )
+        }).data(using: .utf8),
+              let response = try? JSONDecoder().decode(FFICodeActionResponse.self, from: data) else {
+            return []
+        }
+        return response.actions.map { action in
+            TypstCodeAction(
+                id: action.id,
+                title: action.title,
+                kind: action.kind,
+                isPreferred: action.isPreferred,
+                edit: TypstTextEdit(
+                    range: TypstSourceOffsetConverter.utf16Range(
+                        fromUTF8Start: action.edit.startUtf8,
+                        endUTF8: action.edit.endUtf8,
+                        in: text
+                    ),
+                    text: action.edit.text
+                )
+            )
+        }
+    }
+
+    private func sourceLocation(from location: FFISourceLocation) -> TypstSourceLocation? {
+        guard let text = files[location.path] else { return nil }
+        let range = TypstSourceOffsetConverter.utf16Range(
+            fromUTF8Start: location.startUtf8,
+            endUTF8: location.endUtf8,
+            in: text
+        )
+        let prefix = (text as NSString).substring(to: min(range.location, (text as NSString).length))
+        let lines = prefix.components(separatedBy: .newlines)
+        return TypstSourceLocation(
+            path: location.path,
+            range: range,
+            line: max(1, lines.count),
+            column: ((lines.last ?? "") as NSString).length + 1
+        )
+    }
+
     private func call(_ body: @escaping @Sendable (OpaquePointer?) -> UnsafeMutablePointer<CChar>?) async -> String {
         let sessionAddress = sessionAddress
         return await EmbeddedRustWorkQueue.languageService.run {
@@ -885,6 +1173,95 @@ private struct FFIDocumentSymbolsResponse: Decodable {
     var outline: [FFIOutlineItem]
     var figures: [FFIFigureItem]
     var references: [FFIReferenceGroup]
+}
+
+private struct FFIDefinitionResponse: Decodable {
+    var location: FFISourceLocation?
+}
+
+private struct FFIReferencesResponse: Decodable {
+    var locations: [FFISourceLocation]
+}
+
+private struct FFISelectionRangesResponse: Decodable {
+    var ranges: [FFISymbolRange]
+}
+
+private struct FFIPrepareRenameResponse: Decodable {
+    var preparation: FFIRenamePreparation?
+}
+
+private struct FFIRenamePreparation: Decodable {
+    var startUtf8: Int
+    var endUtf8: Int
+    var placeholder: String
+
+    enum CodingKeys: String, CodingKey {
+        case startUtf8 = "start_utf8"
+        case endUtf8 = "end_utf8"
+        case placeholder
+    }
+}
+
+private struct FFIRenameResponse: Decodable {
+    var edit: FFIWorkspaceTextEdit?
+}
+
+private struct FFIWorkspaceTextEdit: Decodable {
+    var files: [FFIFileTextEdits]
+}
+
+private struct FFIFileTextEdits: Decodable {
+    var path: String
+    var edits: [FFIFormatEdit]
+}
+
+private struct FFISourceLocation: Decodable {
+    var path: String
+    var startUtf8: Int
+    var endUtf8: Int
+
+    enum CodingKeys: String, CodingKey {
+        case path
+        case startUtf8 = "start_utf8"
+        case endUtf8 = "end_utf8"
+    }
+}
+
+private struct FFIFormatResponse: Decodable {
+    var edit: FFIFormatEdit?
+}
+
+private struct FFIFormatEdit: Decodable {
+    var startUtf8: Int
+    var endUtf8: Int
+    var text: String
+
+    enum CodingKeys: String, CodingKey {
+        case startUtf8 = "start_utf8"
+        case endUtf8 = "end_utf8"
+        case text
+    }
+}
+
+private struct FFICodeActionResponse: Decodable {
+    var actions: [FFICodeAction]
+}
+
+private struct FFICodeAction: Decodable {
+    var id: String
+    var title: String
+    var kind: String
+    var isPreferred: Bool
+    var edit: FFIFormatEdit
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case kind
+        case isPreferred = "is_preferred"
+        case edit
+    }
 }
 
 private struct FFIReferenceGroup: Decodable {
@@ -1055,6 +1432,7 @@ private enum TypstSignatureHelpProvider {
     private struct CallContext {
         var functionName: String
         var activeParameter: Int
+        var activeParameterName: String?
     }
 
     private static let signatures: [String: TypstSignatureInformation] = [
@@ -1145,7 +1523,16 @@ private enum TypstSignatureHelpProvider {
               let signature = signatures[context.functionName] else {
             return nil
         }
-        let activeParameter = min(max(0, context.activeParameter), max(0, signature.parameters.count - 1))
+        let positionalParameter = min(max(0, context.activeParameter), max(0, signature.parameters.count - 1))
+        let activeParameter = context.activeParameterName.flatMap { name in
+            if let exact = signature.parameters.firstIndex(where: { $0.label == name }) {
+                return exact
+            }
+            let prefixMatches = signature.parameters.indices.filter {
+                signature.parameters[$0].label.hasPrefix(name)
+            }
+            return prefixMatches.count == 1 ? prefixMatches[0] : nil
+        } ?? positionalParameter
         return TypstSignatureHelp(
             signatures: [signature],
             activeSignature: 0,
@@ -1161,6 +1548,7 @@ private enum TypstSignatureHelpProvider {
         var index = offset - 1
         var depth = 0
         var activeParameter = 0
+        var activeArgumentStart: Int?
         var inString = false
         var inRaw = false
 
@@ -1176,10 +1564,25 @@ private enum TypstSignatureHelpProvider {
                     depth += 1
                 } else if character == 40 {
                     if depth == 0 {
-                        return functionCall(beforeOpenParen: index, activeParameter: activeParameter, in: nsText)
+                        let argumentStart = activeArgumentStart ?? index + 1
+                        return functionCall(
+                            beforeOpenParen: index,
+                            activeParameter: activeParameter,
+                            activeParameterName: namedArgument(
+                                in: nsText,
+                                range: NSRange(
+                                    location: argumentStart,
+                                    length: max(0, offset - argumentStart)
+                                )
+                            ),
+                            in: nsText
+                        )
                     }
                     depth -= 1
                 } else if character == 44, depth == 0 {
+                    if activeArgumentStart == nil {
+                        activeArgumentStart = index + 1
+                    }
                     activeParameter += 1
                 }
             }
@@ -1192,7 +1595,12 @@ private enum TypstSignatureHelpProvider {
         return nil
     }
 
-    private static func functionCall(beforeOpenParen openParen: Int, activeParameter: Int, in nsText: NSString) -> CallContext? {
+    private static func functionCall(
+        beforeOpenParen openParen: Int,
+        activeParameter: Int,
+        activeParameterName: String?,
+        in nsText: NSString
+    ) -> CallContext? {
         var end = openParen
         while end > 0, isWhitespace(nsText.character(at: end - 1)) {
             end -= 1
@@ -1210,7 +1618,24 @@ private enum TypstSignatureHelpProvider {
                 return nil
             }
         }
-        return CallContext(functionName: functionName, activeParameter: activeParameter)
+        return CallContext(
+            functionName: functionName,
+            activeParameter: activeParameter,
+            activeParameterName: activeParameterName
+        )
+    }
+
+    private static func namedArgument(in text: NSString, range: NSRange) -> String? {
+        let argument = text.substring(with: range)
+        let name = argument
+            .split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !name.isEmpty,
+              name.unicodeScalars.allSatisfy({
+                  CharacterSet.alphanumerics.contains($0) || $0 == "_" || $0 == "-"
+              }) else { return nil }
+        return name
     }
 
     private static func isEscapedQuote(in nsText: NSString, at quoteIndex: Int) -> Bool {
@@ -1402,6 +1827,38 @@ public actor BasicTypstLanguageService: TypstLanguageService {
 
     public func documentSymbols(path: String) async -> TypstDocumentSymbols {
         .empty
+    }
+
+    public func definition(path: String, utf16Offset: Int) async -> TypstSourceLocation? {
+        nil
+    }
+
+    public func references(path: String, utf16Offset: Int) async -> [TypstSourceLocation] {
+        []
+    }
+
+    public func selectionRanges(path: String, range: NSRange) async -> [NSRange] {
+        []
+    }
+
+    public func prepareRename(path: String, utf16Offset: Int) async -> TypstRenamePreparation? {
+        nil
+    }
+
+    public func rename(
+        path: String,
+        utf16Offset: Int,
+        newName: String
+    ) async -> TypstWorkspaceTextEdit? {
+        nil
+    }
+
+    public func format(path: String, range: NSRange?) async -> TypstTextEdit? {
+        nil
+    }
+
+    public func codeActions(path: String, range: NSRange) async -> [TypstCodeAction] {
+        []
     }
 
     private static func localDiagnostics(path: String, text: String) -> [TypstSourceDiagnostic] {

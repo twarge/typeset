@@ -71,6 +71,15 @@ struct TypesetCommandSet: Equatable {
     var findPrevious: () -> Void
     var replaceCurrentMatch: () -> Void
     var toggleParagraphComment: () -> Void
+    var expandSelection: () -> Void
+    var shrinkSelection: () -> Void
+    var canShrinkSelection: Bool
+    var goToDefinition: () -> Void
+    var findReferences: () -> Void
+    var renameSymbol: () -> Void
+    var showCodeActions: () -> Void
+    var formatDocument: () -> Void
+    var formatSelection: () -> Void
     var insertFigure: () -> Void
     var insertTable: () -> Void
     var showLineNumbers: Bool
@@ -86,6 +95,7 @@ struct TypesetCommandSet: Equatable {
     // purposes when their value-typed inputs match — compare only those.
     static func == (lhs: TypesetCommandSet, rhs: TypesetCommandSet) -> Bool {
         lhs.canExportPDFToDefaultLocation == rhs.canExportPDFToDefaultLocation &&
+        lhs.canShrinkSelection == rhs.canShrinkSelection &&
         lhs.showLineNumbers == rhs.showLineNumbers
     }
 }
@@ -162,6 +172,57 @@ struct TypesetCommands: Commands {
                 commands?.toggleParagraphComment()
             }
             .keyboardShortcut("/", modifiers: .command)
+            .disabled(commands == nil)
+
+            Button("Expand Selection") {
+                commands?.expandSelection()
+            }
+            .keyboardShortcut(.rightArrow, modifiers: [.command, .control, .shift])
+            .disabled(commands == nil)
+
+            Button("Shrink Selection") {
+                commands?.shrinkSelection()
+            }
+            .keyboardShortcut(.leftArrow, modifiers: [.command, .control, .shift])
+            .disabled(commands == nil || commands?.canShrinkSelection != true)
+
+            Button("Quick Actions…") {
+                commands?.showCodeActions()
+            }
+            .keyboardShortcut(".", modifiers: .command)
+            .disabled(commands == nil)
+
+            Divider()
+
+            Button("Format Document") {
+                commands?.formatDocument()
+            }
+            .keyboardShortcut("f", modifiers: [.option, .shift])
+            .disabled(commands == nil)
+
+            Button("Format Selection") {
+                commands?.formatSelection()
+            }
+            .disabled(commands == nil)
+        }
+
+        CommandMenu("Navigate") {
+            Button("Go to Definition") {
+                commands?.goToDefinition()
+            }
+            .keyboardShortcut("j", modifiers: [.command, .control])
+            .disabled(commands == nil)
+
+            Button("Find References") {
+                commands?.findReferences()
+            }
+            .keyboardShortcut("j", modifiers: [.command, .control, .shift])
+            .disabled(commands == nil)
+
+            Button("Rename Symbol…") {
+                commands?.renameSymbol()
+            }
+            .keyboardShortcut("r", modifiers: [.command, .control])
             .disabled(commands == nil)
         }
 

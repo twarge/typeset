@@ -20,6 +20,7 @@
 		10000000000000000000000B /* TypesetCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; };
 		10000000000000000000000C /* TypstLanguageService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000010C /* TypstLanguageService.swift */; };
 		10000000000000000000000D /* TinymistWorkspaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000010D /* TinymistWorkspaceStore.swift */; };
+		10000000000000000000000F /* TextSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000110 /* TextSearch.swift */; };
 		10000000000000000000000E /* Vendor/TypesetTinymist.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 10000000000000000000010E /* Vendor/TypesetTinymist.xcframework */; };
 		100000000000000000000020 /* Resources/Fonts/FiraCode/FiraCode-Light.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000120 /* Resources/Fonts/FiraCode/FiraCode-Light.ttf */; };
 		100000000000000000000021 /* Resources/Fonts/FiraCode/FiraCode-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000121 /* Resources/Fonts/FiraCode/FiraCode-Regular.ttf */; };
@@ -141,6 +142,7 @@
 		10000000000000000000010D /* TinymistWorkspaceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TinymistWorkspaceStore.swift; sourceTree = "<group>"; };
 		10000000000000000000010E /* Vendor/TypesetTinymist.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Vendor/TypesetTinymist.xcframework; sourceTree = SOURCE_ROOT; };
 		10000000000000000000010F /* PDFPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFPreviewView.swift; sourceTree = "<group>"; };
+		100000000000000000000110 /* TextSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSearch.swift; sourceTree = "<group>"; };
 		100000000000000000000120 /* Resources/Fonts/FiraCode/FiraCode-Light.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Resources/Fonts/FiraCode/FiraCode-Light.ttf"; sourceTree = SOURCE_ROOT; };
 		100000000000000000000121 /* Resources/Fonts/FiraCode/FiraCode-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Resources/Fonts/FiraCode/FiraCode-Regular.ttf"; sourceTree = SOURCE_ROOT; };
 		100000000000000000000122 /* Resources/Fonts/FiraCode/FiraCode-Retina.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Resources/Fonts/FiraCode/FiraCode-Retina.ttf"; sourceTree = SOURCE_ROOT; };
@@ -253,6 +255,7 @@
 				100000000000000000000107 /* TypstVersion.swift */,
 				10000000000000000000010C /* TypstLanguageService.swift */,
 				10000000000000000000010D /* TinymistWorkspaceStore.swift */,
+				100000000000000000000110 /* TextSearch.swift */,
 			);
 			path = TypesetCore;
 			sourceTree = "<group>";
@@ -573,6 +576,7 @@
 				100000000000000000000007 /* TypstVersion.swift in Sources */,
 				10000000000000000000000C /* TypstLanguageService.swift in Sources */,
 				10000000000000000000000D /* TinymistWorkspaceStore.swift in Sources */,
+				10000000000000000000000F /* TextSearch.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

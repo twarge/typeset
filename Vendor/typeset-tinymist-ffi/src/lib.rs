@@ -20,8 +20,9 @@ use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::{Feature, Library, LibraryExt, World, WorldExt};
 use typst_ide::{
-    Completion as IdeCompletion, CompletionKind as IdeCompletionKind, IdeWorld,
-    Tooltip as IdeTooltip, autocomplete, tooltip,
+    Completion as IdeCompletion, CompletionKind as IdeCompletionKind,
+    Definition as IdeDefinition, IdeWorld, Tooltip as IdeTooltip, autocomplete, definition,
+    tooltip,
 };
 use typst_kit::datetime::Time;
 use typst_kit::downloader::SystemDownloader;
@@ -31,7 +32,7 @@ use typst_kit::packages::{FsPackages, SystemPackages, UniversePackages};
 use typst_html::{HtmlDocument, HtmlOptions};
 use typst_layout::PagedDocument;
 use typst_pdf::{PdfOptions, PdfStandards};
-use typst_syntax::{SyntaxKind, SyntaxNode, parse};
+use typst_syntax::{SyntaxKind, SyntaxNode, is_ident, is_valid_label_literal_id, parse};
 
 pub struct TypesetTinymistSession {
     root: String,
@@ -169,6 +170,82 @@ struct ReferenceGroup {
 struct SymbolRange {
     start_utf8: usize,
     end_utf8: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize)]
+struct SourceLocation {
+    path: String,
+    start_utf8: usize,
+    end_utf8: usize,
+}
+
+#[derive(Serialize)]
+struct DefinitionResponse {
+    location: Option<SourceLocation>,
+}
+
+#[derive(Serialize)]
+struct ReferencesResponse {
+    locations: Vec<SourceLocation>,
+}
+
+#[derive(Serialize)]
+struct SelectionRangesResponse {
+    ranges: Vec<SymbolRange>,
+}
+
+#[derive(Serialize)]
+struct PrepareRenameResponse {
+    preparation: Option<RenamePreparation>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct RenamePreparation {
+    start_utf8: usize,
+    end_utf8: usize,
+    placeholder: String,
+}
+
+#[derive(Serialize)]
+struct RenameResponse {
+    edit: Option<WorkspaceTextEdit>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct WorkspaceTextEdit {
+    files: Vec<FileTextEdits>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct FileTextEdits {
+    path: String,
+    edits: Vec<FormatEdit>,
+}
+
+#[derive(Serialize)]
+struct FormatResponse {
+    edit: Option<FormatEdit>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct FormatEdit {
+    start_utf8: usize,
+    end_utf8: usize,
+    text: String,
+}
+
+#[derive(Serialize)]
+struct CodeActionResponse {
+    actions: Vec<CodeAction>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct CodeAction {
+    id: String,
+    title: String,
+    kind: String,
+    is_preferred: bool,
+    edit: FormatEdit,
 }
 
 #[derive(Serialize)]
@@ -433,6 +510,133 @@ pub extern "C" fn typeset_tinymist_document_symbols(
         let path = read_c_string(path)?;
         let text = session.files.get(&path).cloned().unwrap_or_default();
         Ok(to_json(&document_symbols_for(&text)))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn typeset_tinymist_definition(
+    session: *mut TypesetTinymistSession,
+    path: *const c_char,
+    utf8_offset: u32,
+) -> *mut c_char {
+    with_session(session, |session| {
+        let path = read_c_string(path)?;
+        Ok(to_json(&DefinitionResponse {
+            location: definition_for(&session.files, &path, utf8_offset as usize),
+        }))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn typeset_tinymist_references(
+    session: *mut TypesetTinymistSession,
+    path: *const c_char,
+    utf8_offset: u32,
+) -> *mut c_char {
+    with_session(session, |session| {
+        let path = read_c_string(path)?;
+        Ok(to_json(&ReferencesResponse {
+            locations: references_for(&session.files, &path, utf8_offset as usize),
+        }))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn typeset_tinymist_selection_ranges(
+    session: *mut TypesetTinymistSession,
+    path: *const c_char,
+    start_utf8: u32,
+    end_utf8: u32,
+) -> *mut c_char {
+    with_session(session, |session| {
+        let path = read_c_string(path)?;
+        let text = session.files.get(&path).cloned().unwrap_or_default();
+        Ok(to_json(&SelectionRangesResponse {
+            ranges: selection_ranges_for(
+                &text,
+                start_utf8 as usize,
+                end_utf8 as usize,
+            ),
+        }))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn typeset_tinymist_prepare_rename(
+    session: *mut TypesetTinymistSession,
+    path: *const c_char,
+    utf8_offset: u32,
+) -> *mut c_char {
+    with_session(session, |session| {
+        let path = read_c_string(path)?;
+        Ok(to_json(&PrepareRenameResponse {
+            preparation: rename_target_for(&session.files, &path, utf8_offset as usize)
+                .map(|target| target.preparation()),
+        }))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn typeset_tinymist_rename(
+    session: *mut TypesetTinymistSession,
+    path: *const c_char,
+    utf8_offset: u32,
+    new_name: *const c_char,
+) -> *mut c_char {
+    with_session(session, |session| {
+        let path = read_c_string(path)?;
+        let new_name = read_c_string(new_name)?;
+        Ok(to_json(&RenameResponse {
+            edit: rename_for(
+                &session.files,
+                &path,
+                utf8_offset as usize,
+                &new_name,
+            ),
+        }))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn typeset_tinymist_format(
+    session: *mut TypesetTinymistSession,
+    path: *const c_char,
+    start_utf8: u32,
+    end_utf8: u32,
+    selection_only: u8,
+) -> *mut c_char {
+    with_session(session, |session| {
+        let path = read_c_string(path)?;
+        let text = session.files.get(&path).cloned().unwrap_or_default();
+        Ok(to_json(&FormatResponse {
+            edit: format_for(
+                &path,
+                &text,
+                start_utf8 as usize,
+                end_utf8 as usize,
+                selection_only != 0,
+            ),
+        }))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn typeset_tinymist_code_actions(
+    session: *mut TypesetTinymistSession,
+    path: *const c_char,
+    start_utf8: u32,
+    end_utf8: u32,
+) -> *mut c_char {
+    with_session(session, |session| {
+        let path = read_c_string(path)?;
+        let text = session.files.get(&path).cloned().unwrap_or_default();
+        let actions = code_actions_for(
+            &path,
+            &text,
+            start_utf8 as usize,
+            end_utf8 as usize,
+        );
+        Ok(to_json(&CodeActionResponse { actions }))
     })
 }
 
@@ -1370,6 +1574,767 @@ fn build_completion_world(
         main,
         sources,
         now: Time::system(),
+    })
+}
+
+fn project_source_location(
+    _world: &CompletionWorld,
+    id: FileId,
+    range: std::ops::Range<usize>,
+) -> SourceLocation {
+    SourceLocation {
+        path: id.vpath().get_without_slash().into(),
+        start_utf8: range.start,
+        end_utf8: range.end.max(range.start),
+    }
+}
+
+fn ide_definition_location(
+    world: &CompletionWorld,
+    definition: IdeDefinition,
+) -> Option<SourceLocation> {
+    match definition {
+        IdeDefinition::Span(span) => {
+            let id = span.id()?;
+            let range = world.range(span)?;
+            Some(project_source_location(world, id, range))
+        }
+        IdeDefinition::File(id) => Some(project_source_location(world, id, 0..0)),
+        IdeDefinition::Std(_) => None,
+    }
+}
+
+fn semantic_definition_at(
+    world: &CompletionWorld,
+    source: &Source,
+    offset: usize,
+) -> Option<SourceLocation> {
+    semantic_ide_definition_at(world, source, offset)
+        .and_then(|definition| ide_definition_location(world, definition))
+}
+
+fn semantic_ide_definition_at(
+    world: &CompletionWorld,
+    source: &Source,
+    offset: usize,
+) -> Option<IdeDefinition> {
+    let offset = offset.min(source.text().len());
+    definition(
+        world,
+        None::<&PagedDocument>,
+        source,
+        offset,
+        Side::After,
+    )
+    .or_else(|| {
+        definition(
+            world,
+            None::<&PagedDocument>,
+            source,
+            offset,
+            Side::Before,
+        )
+    })
+}
+
+fn collect_syntax_ranges(
+    node: &SyntaxNode,
+    offset: usize,
+    kind: SyntaxKind,
+    ranges: &mut Vec<std::ops::Range<usize>>,
+) {
+    let end = offset + node.len();
+    if node.kind() == kind {
+        ranges.push(offset..end);
+    }
+    let mut child_offset = offset;
+    for child in node.children() {
+        collect_syntax_ranges(child, child_offset, kind, ranges);
+        child_offset += child.len();
+    }
+}
+
+fn syntax_range_at(source: &Source, offset: usize, kind: SyntaxKind) -> Option<std::ops::Range<usize>> {
+    let mut ranges = Vec::new();
+    collect_syntax_ranges(source.root(), 0, kind, &mut ranges);
+    ranges
+        .into_iter()
+        .filter(|range| range.start <= offset && offset <= range.end)
+        .min_by_key(|range| range.end.saturating_sub(range.start))
+}
+
+fn selection_ranges_for(text: &str, start: usize, end: usize) -> Vec<SymbolRange> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let mut start = clamp_to_char_boundary(text, start);
+    let mut end = clamp_to_char_boundary(text, end);
+    if end < start {
+        std::mem::swap(&mut start, &mut end);
+    }
+
+    let source = Source::detached(text);
+    let mut ranges = Vec::new();
+    collect_enclosing_selection_ranges(source.root(), 0, start, end, text.len(), &mut ranges);
+    ranges.sort_by_key(|range| (
+        range.end_utf8.saturating_sub(range.start_utf8),
+        std::cmp::Reverse(range.start_utf8),
+    ));
+    ranges.dedup_by_key(|range| (range.start_utf8, range.end_utf8));
+    ranges
+}
+
+fn collect_enclosing_selection_ranges(
+    node: &SyntaxNode,
+    offset: usize,
+    selection_start: usize,
+    selection_end: usize,
+    text_length: usize,
+    ranges: &mut Vec<SymbolRange>,
+) {
+    let node_end = offset + node.len();
+    let contains_selection = if selection_start == selection_end {
+        let probe = if selection_start == 0 {
+            0
+        } else {
+            selection_start.min(text_length).saturating_sub(1)
+        };
+        offset <= probe && probe < node_end
+    } else {
+        offset <= selection_start && selection_end <= node_end
+    };
+    if !contains_selection {
+        return;
+    }
+    if node_end > offset {
+        ranges.push(SymbolRange {
+            start_utf8: offset,
+            end_utf8: node_end,
+        });
+    }
+
+    let mut child_offset = offset;
+    for child in node.children() {
+        collect_enclosing_selection_ranges(
+            child,
+            child_offset,
+            selection_start,
+            selection_end,
+            text_length,
+            ranges,
+        );
+        child_offset += child.len();
+    }
+}
+
+fn label_at(text: &str, offset: usize) -> Option<String> {
+    let root = parse(text);
+    let mut labels = BTreeMap::new();
+    let mut uses = BTreeMap::new();
+    collect_references(&root, 0, text, &mut labels, &mut uses);
+    labels
+        .iter()
+        .find(|(_, (start, end))| *start <= offset && offset <= *end)
+        .map(|(name, _)| name.clone())
+        .or_else(|| {
+            uses.iter()
+                .find(|(_, ranges)| {
+                    ranges
+                        .iter()
+                        .any(|(start, end)| *start <= offset && offset <= *end)
+                })
+                .map(|(name, _)| name.clone())
+        })
+}
+
+fn label_locations(
+    session_files: &HashMap<String, String>,
+    name: &str,
+    include_uses: bool,
+) -> Vec<SourceLocation> {
+    let mut locations = Vec::new();
+    for (path, text) in session_files {
+        let root = parse(text);
+        let mut labels = BTreeMap::new();
+        let mut uses = BTreeMap::new();
+        collect_references(&root, 0, text, &mut labels, &mut uses);
+        if let Some((start, end)) = labels.get(name) {
+            locations.push(SourceLocation {
+                path: path.clone(),
+                start_utf8: *start,
+                end_utf8: *end,
+            });
+        }
+        if include_uses {
+            for (start, end) in uses.get(name).into_iter().flatten() {
+                locations.push(SourceLocation {
+                    path: path.clone(),
+                    start_utf8: *start,
+                    end_utf8: *end,
+                });
+            }
+        }
+    }
+    locations
+}
+
+fn definition_for(
+    session_files: &HashMap<String, String>,
+    path: &str,
+    offset: usize,
+) -> Option<SourceLocation> {
+    let text = session_files.get(path)?;
+    if let Some(name) = label_at(text, offset) {
+        return label_locations(session_files, &name, false).into_iter().next();
+    }
+    let world = build_completion_world(session_files, path, text)?;
+    let source = world.source(world.main()).ok()?;
+    semantic_definition_at(&world, &source, offset)
+}
+
+fn references_for(
+    session_files: &HashMap<String, String>,
+    path: &str,
+    offset: usize,
+) -> Vec<SourceLocation> {
+    let Some(text) = session_files.get(path) else {
+        return Vec::new();
+    };
+    if let Some(name) = label_at(text, offset) {
+        let mut locations = label_locations(session_files, &name, true);
+        locations.sort_by(|a, b| (&a.path, a.start_utf8).cmp(&(&b.path, b.start_utf8)));
+        locations.dedup();
+        return locations;
+    }
+
+    let Some(world) = build_completion_world(session_files, path, text) else {
+        return Vec::new();
+    };
+    let Ok(source) = world.source(world.main()) else {
+        return Vec::new();
+    };
+    let requested = semantic_definition_at(&world, &source, offset).or_else(|| {
+        let range = syntax_range_at(&source, offset, SyntaxKind::Ident)?;
+        Some(project_source_location(&world, source.id(), range))
+    });
+    let Some(requested) = requested else {
+        return Vec::new();
+    };
+
+    let mut locations = Vec::new();
+    for source in world.sources.values() {
+        let mut ranges = Vec::new();
+        collect_syntax_ranges(source.root(), 0, SyntaxKind::Ident, &mut ranges);
+        for range in ranges {
+            let own = project_source_location(&world, source.id(), range.clone());
+            let resolved = semantic_definition_at(&world, source, range.end)
+                .or_else(|| semantic_definition_at(&world, source, range.start));
+            if own == requested || resolved.as_ref() == Some(&requested) {
+                locations.push(own);
+            }
+        }
+    }
+    locations.sort_by(|a, b| (&a.path, a.start_utf8).cmp(&(&b.path, b.start_utf8)));
+    locations.dedup();
+    locations
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RenameTargetKind {
+    Identifier,
+    Label,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RenameTarget {
+    kind: RenameTargetKind,
+    name: String,
+    range: std::ops::Range<usize>,
+}
+
+impl RenameTarget {
+    fn preparation(&self) -> RenamePreparation {
+        RenamePreparation {
+            start_utf8: self.range.start,
+            end_utf8: self.range.end,
+            placeholder: self.name.clone(),
+        }
+    }
+}
+
+fn label_rename_target_at(text: &str, offset: usize) -> Option<RenameTarget> {
+    let root = parse(text);
+    let mut labels = BTreeMap::new();
+    let mut uses = BTreeMap::new();
+    collect_references(&root, 0, text, &mut labels, &mut uses);
+
+    if let Some((name, (start, end))) = labels
+        .iter()
+        .find(|(_, (start, end))| *start <= offset && offset <= *end)
+    {
+        let name_start = start.saturating_add(1);
+        return Some(RenameTarget {
+            kind: RenameTargetKind::Label,
+            name: name.clone(),
+            range: name_start..name_start.saturating_add(name.len()).min(*end),
+        });
+    }
+
+    uses.iter().find_map(|(name, ranges)| {
+        let (start, end) = ranges
+            .iter()
+            .find(|(start, end)| *start <= offset && offset <= *end)?;
+        let name_start = start.saturating_add(1);
+        Some(RenameTarget {
+            kind: RenameTargetKind::Label,
+            name: name.clone(),
+            range: name_start..name_start.saturating_add(name.len()).min(*end),
+        })
+    })
+}
+
+fn rename_target_for(
+    session_files: &HashMap<String, String>,
+    path: &str,
+    offset: usize,
+) -> Option<RenameTarget> {
+    let text = session_files.get(path)?;
+    if let Some(target) = label_rename_target_at(text, offset) {
+        return Some(target);
+    }
+
+    let world = build_completion_world(session_files, path, text)?;
+    let source = world.source(world.main()).ok()?;
+    let range = syntax_range_at(&source, offset, SyntaxKind::Ident)?;
+    let name = text.get(range.clone())?;
+    if !is_ident(name) {
+        return None;
+    }
+    match semantic_ide_definition_at(&world, &source, offset) {
+        Some(IdeDefinition::Span(_)) => Some(RenameTarget {
+            kind: RenameTargetKind::Identifier,
+            name: name.to_string(),
+            range,
+        }),
+        Some(IdeDefinition::File(_) | IdeDefinition::Std(_)) | None => None,
+    }
+}
+
+fn label_name_locations(
+    session_files: &HashMap<String, String>,
+    name: &str,
+) -> Vec<SourceLocation> {
+    let mut locations = Vec::new();
+    for (path, text) in session_files {
+        let root = parse(text);
+        let mut labels = BTreeMap::new();
+        let mut uses = BTreeMap::new();
+        collect_references(&root, 0, text, &mut labels, &mut uses);
+        if let Some((start, end)) = labels.get(name) {
+            let name_start = start.saturating_add(1);
+            locations.push(SourceLocation {
+                path: path.clone(),
+                start_utf8: name_start,
+                end_utf8: name_start.saturating_add(name.len()).min(*end),
+            });
+        }
+        for (start, end) in uses.get(name).into_iter().flatten() {
+            let name_start = start.saturating_add(1);
+            locations.push(SourceLocation {
+                path: path.clone(),
+                start_utf8: name_start,
+                end_utf8: name_start.saturating_add(name.len()).min(*end),
+            });
+        }
+    }
+    locations.sort_by(|a, b| (&a.path, a.start_utf8).cmp(&(&b.path, b.start_utf8)));
+    locations.dedup();
+    locations
+}
+
+fn rename_for(
+    session_files: &HashMap<String, String>,
+    path: &str,
+    offset: usize,
+    new_name: &str,
+) -> Option<WorkspaceTextEdit> {
+    let target = rename_target_for(session_files, path, offset)?;
+    let valid_name = match target.kind {
+        RenameTargetKind::Identifier => is_ident(new_name),
+        RenameTargetKind::Label => is_valid_label_literal_id(new_name),
+    };
+    if !valid_name || new_name == target.name {
+        return None;
+    }
+
+    let locations = match target.kind {
+        RenameTargetKind::Identifier => references_for(session_files, path, offset),
+        RenameTargetKind::Label => label_name_locations(session_files, &target.name),
+    };
+    let mut edits_by_path: BTreeMap<String, Vec<FormatEdit>> = BTreeMap::new();
+    for location in locations {
+        let Some(text) = session_files.get(&location.path) else { continue };
+        if text.get(location.start_utf8..location.end_utf8) != Some(target.name.as_str()) {
+            continue;
+        }
+        edits_by_path
+            .entry(location.path)
+            .or_default()
+            .push(FormatEdit {
+                start_utf8: location.start_utf8,
+                end_utf8: location.end_utf8,
+                text: new_name.to_string(),
+            });
+    }
+
+    let files = edits_by_path
+        .into_iter()
+        .map(|(path, mut edits)| {
+            edits.sort_by_key(|edit| (edit.start_utf8, edit.end_utf8));
+            edits.dedup();
+            FileTextEdits { path, edits }
+        })
+        .filter(|file| !file.edits.is_empty())
+        .collect::<Vec<_>>();
+    (!files.is_empty()).then_some(WorkspaceTextEdit { files })
+}
+
+fn code_actions_for(path: &str, text: &str, start: usize, end: usize) -> Vec<CodeAction> {
+    let mut start = clamp_to_char_boundary(text, start);
+    let mut end = clamp_to_char_boundary(text, end);
+    if end < start {
+        std::mem::swap(&mut start, &mut end);
+    }
+
+    let source = Source::detached(text);
+    let cursor = start.min(text.len());
+    let mut actions = Vec::new();
+
+    if start < end && selection_can_be_wrapped(&source, start, end) {
+        if let Some(selected) = text.get(start..end) {
+            push_code_action(
+                &mut actions,
+                "Wrap with content block",
+                "refactor.rewrite",
+                FormatEdit {
+                    start_utf8: start,
+                    end_utf8: end,
+                    text: format!("#[{selected}]"),
+                },
+                text,
+            );
+        }
+    }
+
+    if let Some(range) = syntax_range_at(&source, cursor, SyntaxKind::Heading) {
+        heading_code_actions(text, range, &mut actions);
+    }
+    if let Some(range) = syntax_range_at(&source, cursor, SyntaxKind::Equation) {
+        equation_code_actions(text, range, &mut actions);
+    }
+    if let Some(range) = syntax_range_at(&source, cursor, SyntaxKind::Str) {
+        path_code_actions(path, text, range, &mut actions);
+    }
+
+    actions
+}
+
+fn push_code_action(
+    actions: &mut Vec<CodeAction>,
+    title: &str,
+    kind: &str,
+    edit: FormatEdit,
+    original: &str,
+) {
+    if original.get(edit.start_utf8..edit.end_utf8) == Some(edit.text.as_str()) {
+        return;
+    }
+    actions.push(CodeAction {
+        id: format!("{title}:{}:{}", edit.start_utf8, edit.end_utf8),
+        title: title.to_string(),
+        kind: kind.to_string(),
+        is_preferred: false,
+        edit,
+    });
+}
+
+fn selection_can_be_wrapped(source: &Source, start: usize, end: usize) -> bool {
+    let probe_end = end.saturating_sub(1).max(start);
+    let in_equation = syntax_range_at(source, start, SyntaxKind::Equation)
+        .is_some_and(|range| range.start <= start && probe_end < range.end);
+    if in_equation {
+        return true;
+    }
+
+    let safe_markup_kinds = [
+        SyntaxKind::Text,
+        SyntaxKind::Space,
+        SyntaxKind::Linebreak,
+        SyntaxKind::Parbreak,
+        SyntaxKind::Escape,
+        SyntaxKind::Shorthand,
+        SyntaxKind::SmartQuote,
+    ];
+    safe_markup_kinds.into_iter().any(|kind| {
+        syntax_range_at(source, start, kind)
+            .is_some_and(|range| range.start <= start && probe_end < range.end)
+    })
+}
+
+fn heading_code_actions(
+    text: &str,
+    range: std::ops::Range<usize>,
+    actions: &mut Vec<CodeAction>,
+) {
+    let Some(heading) = text.get(range.clone()) else { return };
+    let depth = heading.bytes().take_while(|byte| *byte == b'=').count();
+    if depth == 0 {
+        return;
+    }
+    let marker_end = range.start + depth;
+    if depth > 1 {
+        push_code_action(
+            actions,
+            "Decrease depth of heading",
+            "refactor.rewrite",
+            FormatEdit {
+                start_utf8: range.start,
+                end_utf8: marker_end,
+                text: "=".repeat(depth - 1),
+            },
+            text,
+        );
+    }
+    push_code_action(
+        actions,
+        "Increase depth of heading",
+        "refactor.rewrite",
+        FormatEdit {
+            start_utf8: range.start,
+            end_utf8: marker_end,
+            text: "=".repeat(depth + 1),
+        },
+        text,
+    );
+}
+
+fn equation_code_actions(
+    text: &str,
+    range: std::ops::Range<usize>,
+    actions: &mut Vec<CodeAction>,
+) {
+    let Some(equation) = text.get(range.clone()) else { return };
+    let Some(first_dollar) = equation.find('$') else { return };
+    let Some(last_dollar) = equation.rfind('$') else { return };
+    if first_dollar == last_dollar {
+        return;
+    }
+    let Some(interior) = equation.get(first_dollar + 1..last_dollar) else { return };
+    let body = interior.trim();
+    let is_block = interior != body;
+
+    let punctuation = text
+        .get(range.end..)
+        .and_then(|suffix| suffix.chars().next())
+        .filter(|character| character.is_ascii_punctuation());
+
+    let replacement = |separator: &str| {
+        let mut rewritten = String::with_capacity(equation.len() + 4);
+        rewritten.push('$');
+        rewritten.push_str(separator);
+        rewritten.push_str(body);
+        if !separator.is_empty() {
+            if let Some(character) = punctuation {
+                rewritten.push(character);
+            }
+        }
+        rewritten.push_str(separator);
+        rewritten.push('$');
+        rewritten
+    };
+    let edited_end = range.end + punctuation.map(char::len_utf8).unwrap_or_default();
+
+    if is_block {
+        push_code_action(
+            actions,
+            "Convert to inline equation",
+            "refactor.rewrite",
+            FormatEdit {
+                start_utf8: range.start,
+                end_utf8: range.end,
+                text: replacement(""),
+            },
+            text,
+        );
+    } else {
+        push_code_action(
+            actions,
+            "Convert to block equation",
+            "refactor.rewrite",
+            FormatEdit {
+                start_utf8: range.start,
+                end_utf8: edited_end,
+                text: replacement(" "),
+            },
+            text,
+        );
+    }
+    push_code_action(
+        actions,
+        "Convert to multiple-line block equation",
+        "refactor.rewrite",
+        FormatEdit {
+            start_utf8: range.start,
+            end_utf8: edited_end,
+            text: replacement("\n"),
+        },
+        text,
+    );
+}
+
+fn path_code_actions(
+    source_path: &str,
+    text: &str,
+    range: std::ops::Range<usize>,
+    actions: &mut Vec<CodeAction>,
+) {
+    let Some(raw) = text.get(range.clone()) else { return };
+    let Some(value) = raw.strip_prefix('"').and_then(|value| value.strip_suffix('"')) else {
+        return;
+    };
+    if value.starts_with('@')
+        || value.contains(char::from(92))
+        || (!value.contains('/') && Path::new(value).extension().is_none())
+    {
+        return;
+    }
+
+    let (title, rewritten) = if value.starts_with('/') {
+        let Some(relative) = package_relative_path(source_path, value) else { return };
+        ("Convert to relative path", relative)
+    } else {
+        let Some(absolute) = package_absolute_path(source_path, value) else { return };
+        ("Convert to absolute path", absolute)
+    };
+    push_code_action(
+        actions,
+        title,
+        "refactor.rewrite",
+        FormatEdit {
+            start_utf8: range.start,
+            end_utf8: range.end,
+            text: format!("{rewritten:?}"),
+        },
+        text,
+    );
+}
+
+fn package_absolute_path(source_path: &str, relative: &str) -> Option<String> {
+    let mut components = source_path
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .collect::<Vec<_>>();
+    components.pop();
+    for component in relative.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                components.pop()?;
+            }
+            component => components.push(component),
+        }
+    }
+    Some(format!("/{}", components.join("/")))
+}
+
+fn package_relative_path(source_path: &str, absolute: &str) -> Option<String> {
+    let mut source = source_path
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .collect::<Vec<_>>();
+    source.pop();
+    let target = absolute
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .collect::<Vec<_>>();
+    if target.is_empty() {
+        return None;
+    }
+    let common = source
+        .iter()
+        .zip(target.iter())
+        .take_while(|(source, target)| source == target)
+        .count();
+    let mut relative = vec![".."; source.len().saturating_sub(common)];
+    relative.extend_from_slice(&target[common..]);
+    Some(relative.join("/"))
+}
+
+fn format_for(
+    _path: &str,
+    text: &str,
+    start: usize,
+    end: usize,
+    selection_only: bool,
+) -> Option<FormatEdit> {
+    let source = typst_syntax_format::Source::detached(text);
+    let formatter = typstyle_core::Typstyle::new(typstyle_core::Config::default());
+
+    if selection_only {
+        let mut start = start.min(text.len());
+        let mut end = end.max(start).min(text.len());
+        while start > 0 && !text.is_char_boundary(start) {
+            start -= 1;
+        }
+        while end > start && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        let result = formatter.format_source_range(source, start..end).ok()?;
+        if text.get(result.source_range.clone())? == result.content {
+            return None;
+        }
+        return Some(FormatEdit {
+            start_utf8: result.source_range.start,
+            end_utf8: result.source_range.end,
+            text: result.content,
+        });
+    }
+
+    let formatted = formatter.format_source(source).render().ok()?;
+    minimal_format_edit(text, &formatted)
+}
+
+fn minimal_format_edit(old: &str, new: &str) -> Option<FormatEdit> {
+    if old == new {
+        return None;
+    }
+    let mut prefix = old
+        .bytes()
+        .zip(new.bytes())
+        .take_while(|(old, new)| old == new)
+        .count();
+    while prefix > 0 && (!old.is_char_boundary(prefix) || !new.is_char_boundary(prefix)) {
+        prefix -= 1;
+    }
+    let mut suffix = old[prefix..]
+        .bytes()
+        .rev()
+        .zip(new[prefix..].bytes().rev())
+        .take_while(|(old, new)| old == new)
+        .count();
+    while suffix > 0
+        && (!old.is_char_boundary(old.len() - suffix)
+            || !new.is_char_boundary(new.len() - suffix))
+    {
+        suffix -= 1;
+    }
+    Some(FormatEdit {
+        start_utf8: prefix,
+        end_utf8: old.len() - suffix,
+        text: new[prefix..new.len() - suffix].to_string(),
     })
 }
 
@@ -4087,6 +5052,197 @@ description = "Draw diagrams."
         let offset = text.find("image").unwrap() + 2;
         let hover = hover_for(text, offset, "", "", &HashMap::new(), "main.typ").unwrap();
         assert!(hover.text.contains("A raster or vector graphic."));
+    }
+
+    #[test]
+    fn resolves_definitions_and_references_across_open_files() {
+        let main = "#import \"defs.typ\": greet\n#greet(\"Ada\")";
+        let defs = "#let greet(name) = [Hello #name]";
+        let files = HashMap::from([
+            ("main.typ".to_string(), main.to_string()),
+            ("defs.typ".to_string(), defs.to_string()),
+        ]);
+        let offset = main.rfind("greet").unwrap() + 2;
+
+        let definition = definition_for(&files, "main.typ", offset).unwrap();
+        assert_eq!(definition.path, "defs.typ");
+        assert_eq!(&defs[definition.start_utf8..definition.end_utf8], "greet");
+
+        let references = references_for(&files, "main.typ", offset);
+        assert!(references.iter().any(|location| location.path == "defs.typ"));
+        assert!(references.iter().any(|location| location.path == "main.typ"));
+    }
+
+    #[test]
+    fn renames_an_identifier_across_open_files() {
+        let main = "#import \"defs.typ\": greet\n#greet(\"Ada\")";
+        let defs = "#let greet(name) = [Hello #name]";
+        let files = HashMap::from([
+            ("main.typ".to_string(), main.to_string()),
+            ("defs.typ".to_string(), defs.to_string()),
+        ]);
+        let offset = main.rfind("greet").unwrap() + 2;
+
+        let preparation = rename_target_for(&files, "main.typ", offset)
+            .unwrap()
+            .preparation();
+        assert_eq!(&main[preparation.start_utf8..preparation.end_utf8], "greet");
+        assert_eq!(preparation.placeholder, "greet");
+
+        let edit = rename_for(&files, "main.typ", offset, "welcome").unwrap();
+        assert_eq!(edit.files.len(), 2);
+        let changed = edit
+            .files
+            .iter()
+            .map(|file| {
+                let mut text = files[&file.path].clone();
+                for edit in file.edits.iter().rev() {
+                    text.replace_range(edit.start_utf8..edit.end_utf8, &edit.text);
+                }
+                (file.path.clone(), text)
+            })
+            .collect::<HashMap<_, _>>();
+        assert_eq!(changed["defs.typ"], "#let welcome(name) = [Hello #name]");
+        assert_eq!(changed["main.typ"], "#import \"defs.typ\": welcome\n#welcome(\"Ada\")");
+    }
+
+    #[test]
+    fn renames_labels_without_replacing_their_delimiters() {
+        let text = "= Result <answer>\nSee @answer.";
+        let files = single_file(text);
+        let offset = text.rfind("answer").unwrap() + 2;
+        let edit = rename_for(&files, "main.typ", offset, "result").unwrap();
+        let mut changed = text.to_string();
+        for edit in edit.files[0].edits.iter().rev() {
+            changed.replace_range(edit.start_utf8..edit.end_utf8, &edit.text);
+        }
+        assert_eq!(changed, "= Result <result>\nSee @result.");
+    }
+
+    #[test]
+    fn does_not_rename_standard_library_symbols_or_invalid_identifiers() {
+        let text = "#image(\"plot.svg\")";
+        let files = single_file(text);
+        let offset = text.find("image").unwrap() + 2;
+        assert!(rename_target_for(&files, "main.typ", offset).is_none());
+
+        let local = "#let value = 1\n#value";
+        let files = single_file(local);
+        let offset = local.rfind("value").unwrap() + 2;
+        assert!(rename_for(&files, "main.typ", offset, "not valid").is_none());
+    }
+
+    #[test]
+    fn returns_nested_selection_ranges_from_the_syntax_tree() {
+        let text = "#let value = image(\"plot.svg\", width: 10cm)";
+        let caret = text.find("plot.svg").unwrap() + 4;
+        let ranges = selection_ranges_for(text, caret, caret);
+
+        assert!(!ranges.is_empty());
+        assert!(ranges.windows(2).all(|pair| {
+            pair[0].start_utf8 >= pair[1].start_utf8
+                && pair[0].end_utf8 <= pair[1].end_utf8
+        }));
+        let selected = ranges
+            .iter()
+            .map(|range| &text[range.start_utf8..range.end_utf8])
+            .collect::<Vec<_>>();
+        assert!(selected.contains(&"\"plot.svg\""));
+        assert_eq!(selected.last(), Some(&text));
+    }
+
+    #[test]
+    fn selection_ranges_enclose_an_existing_selection() {
+        let text = "#let value = (1 + 2) * 3";
+        let start = text.find("1 + 2").unwrap();
+        let end = start + "1 + 2".len();
+        let ranges = selection_ranges_for(text, start, end);
+
+        assert!(ranges.iter().all(|range| {
+            range.start_utf8 <= start && end <= range.end_utf8
+        }));
+        assert!(ranges.iter().any(|range| {
+            &text[range.start_utf8..range.end_utf8] == "(1 + 2)"
+        }));
+    }
+
+    #[test]
+    fn formats_document_as_a_single_text_edit() {
+        let text = "#let add(a,b)={a+b}\n#add(1,2)";
+        let edit = format_for("main.typ", text, 0, text.len(), false).unwrap();
+        let mut formatted = text.to_string();
+        formatted.replace_range(edit.start_utf8..edit.end_utf8, &edit.text);
+
+        assert_ne!(formatted, text);
+        assert!(formatted.contains("#let add(a, b)"), "{formatted}");
+    }
+
+    #[test]
+    fn offers_heading_depth_code_actions() {
+        let text = "== Details\n";
+        let actions = code_actions_for("main.typ", text, 4, 4);
+        assert_eq!(
+            actions.iter().map(|action| action.title.as_str()).collect::<Vec<_>>(),
+            vec!["Decrease depth of heading", "Increase depth of heading"]
+        );
+        assert_eq!(actions[0].edit.text, "=");
+        assert_eq!(actions[1].edit.text, "===");
+    }
+
+    #[test]
+    fn offers_equation_layout_code_actions_and_moves_punctuation() {
+        let text = "The result is $x + y$.";
+        let offset = text.find("x + y").unwrap();
+        let actions = code_actions_for("main.typ", text, offset, offset);
+        assert_eq!(
+            actions.iter().map(|action| action.title.as_str()).collect::<Vec<_>>(),
+            vec![
+                "Convert to block equation",
+                "Convert to multiple-line block equation",
+            ]
+        );
+        assert_eq!(actions[0].edit.text, "$ x + y. $");
+        assert_eq!(&text[actions[0].edit.start_utf8..actions[0].edit.end_utf8], "$x + y$.");
+
+        let block = "$ x + y $.";
+        let actions = code_actions_for("main.typ", block, 3, 3);
+        let multiline = actions
+            .iter()
+            .find(|action| action.title == "Convert to multiple-line block equation")
+            .unwrap();
+        assert_eq!(&block[multiline.edit.start_utf8..multiline.edit.end_utf8], block);
+        assert_eq!(multiline.edit.text, "$\nx + y.\n$");
+    }
+
+    #[test]
+    fn offers_wrap_selection_only_for_markup_or_math() {
+        let markup = "Hello world";
+        let actions = code_actions_for("main.typ", markup, 0, 5);
+        assert_eq!(actions[0].title, "Wrap with content block");
+        assert_eq!(actions[0].edit.text, "#[Hello]");
+
+        let code = "#let value = 1";
+        let start = code.find("value").unwrap();
+        assert!(
+            code_actions_for("main.typ", code, start, start + "value".len())
+                .iter()
+                .all(|action| action.title != "Wrap with content block")
+        );
+    }
+
+    #[test]
+    fn rewrites_package_paths_in_both_directions() {
+        let relative = "#image(\"../Images/plot.svg\")";
+        let offset = relative.find("plot.svg").unwrap();
+        let actions = code_actions_for("chapters/main.typ", relative, offset, offset);
+        assert_eq!(actions[0].title, "Convert to absolute path");
+        assert_eq!(actions[0].edit.text, "\"/Images/plot.svg\"");
+
+        let absolute = "#image(\"/Images/plot.svg\")";
+        let offset = absolute.find("plot.svg").unwrap();
+        let actions = code_actions_for("chapters/main.typ", absolute, offset, offset);
+        assert_eq!(actions[0].title, "Convert to relative path");
+        assert_eq!(actions[0].edit.text, "\"../Images/plot.svg\"");
     }
 
     #[test]

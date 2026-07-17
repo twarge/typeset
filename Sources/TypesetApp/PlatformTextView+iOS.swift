@@ -21,6 +21,7 @@ struct PlatformTextView: UIViewRepresentable {
     var focusRequest: Int
     var commentToggleRequest: Int
     var snippetInsertion: EditorSnippetInsertion?
+    var textReplacement: EditorTextReplacement?
     var insertableImagePaths: Set<String>
     var insertableTypstPaths: Set<String>
     var imageInsertTemplate: String
@@ -40,6 +41,10 @@ struct PlatformTextView: UIViewRepresentable {
     var onCompletionDismiss: () -> Void
     var onShowFunctionHelp: (NSRange, CGPoint) -> Void
     var onShowSignatureHelp: (NSRange, CGPoint) -> Void
+    var onGoToDefinition: (NSRange, CGPoint) -> Void
+    var onFindReferences: (NSRange, CGPoint) -> Void
+    var onRenameSymbol: (NSRange, CGPoint) -> Void
+    var onShowCodeActions: (NSRange, CGPoint) -> Void
     var onEditorInteraction: () -> Void
     var onScrollOffsetChange: (CGFloat) -> Void
     var onLanguageOverlayAnchorChange: (CGPoint) -> Void
@@ -108,6 +113,12 @@ struct PlatformTextView: UIViewRepresentable {
         context.coordinator.onEditorInteraction = onEditorInteraction
         context.coordinator.onScrollOffsetChange = onScrollOffsetChange
         context.coordinator.onLanguageOverlayAnchorChange = onLanguageOverlayAnchorChange
+        context.coordinator.onShowFunctionHelp = onShowFunctionHelp
+        context.coordinator.onShowSignatureHelp = onShowSignatureHelp
+        context.coordinator.onGoToDefinition = onGoToDefinition
+        context.coordinator.onFindReferences = onFindReferences
+        context.coordinator.onRenameSymbol = onRenameSymbol
+        context.coordinator.onShowCodeActions = onShowCodeActions
         if let packageTextView = textView as? PackageTextView {
             packageTextView.onPasteImage = { [weak coordinator = context.coordinator] data, suggestedName in
                 coordinator?.snippetForPastedImage(data: data, suggestedName: suggestedName)
@@ -153,6 +164,7 @@ struct PlatformTextView: UIViewRepresentable {
         }
         context.coordinator.toggleCommentIfNeeded(commentToggleRequest, in: textView)
         context.coordinator.insertSnippetIfNeeded(snippetInsertion, in: textView)
+        context.coordinator.applyTextReplacementIfNeeded(textReplacement, in: textView)
         context.coordinator.focusIfNeeded(focusRequest, textView: textView)
         context.coordinator.onScrollFractionChange = onScrollFractionChange
         context.coordinator.restoreScrollIfNeeded(scrollRestore, in: textView)
@@ -180,6 +192,12 @@ struct PlatformTextView: UIViewRepresentable {
             onEditorInteraction: onEditorInteraction,
             onScrollOffsetChange: onScrollOffsetChange,
             onLanguageOverlayAnchorChange: onLanguageOverlayAnchorChange,
+            onShowFunctionHelp: onShowFunctionHelp,
+            onShowSignatureHelp: onShowSignatureHelp,
+            onGoToDefinition: onGoToDefinition,
+            onFindReferences: onFindReferences,
+            onRenameSymbol: onRenameSymbol,
+            onShowCodeActions: onShowCodeActions,
             isPackageDropTargeted: $isPackageDropTargeted
         )
     }
@@ -210,6 +228,12 @@ struct PlatformTextView: UIViewRepresentable {
         var onEditorInteraction: () -> Void
         var onScrollOffsetChange: (CGFloat) -> Void
         var onLanguageOverlayAnchorChange: (CGPoint) -> Void
+        var onShowFunctionHelp: (NSRange, CGPoint) -> Void
+        var onShowSignatureHelp: (NSRange, CGPoint) -> Void
+        var onGoToDefinition: (NSRange, CGPoint) -> Void
+        var onFindReferences: (NSRange, CGPoint) -> Void
+        var onRenameSymbol: (NSRange, CGPoint) -> Void
+        var onShowCodeActions: (NSRange, CGPoint) -> Void
         var isPackageDropTargeted: Binding<Bool>
         private var isApplyingHighlighting = false
         private var isApplyingPairEdit = false
@@ -222,6 +246,7 @@ struct PlatformTextView: UIViewRepresentable {
         private var lastFocusRequest = 0
         private var lastCommentToggleRequest = 0
         private var lastSnippetToken = 0
+        private var lastTextReplacementToken = 0
         private var nativeTextAwaitingBinding: String?
         private var scheduledRepaintWorkItem: DispatchWorkItem?
         private var renderedDiagnostics: [TypstSourceDiagnostic] = []
@@ -253,6 +278,12 @@ struct PlatformTextView: UIViewRepresentable {
             onEditorInteraction: @escaping () -> Void,
             onScrollOffsetChange: @escaping (CGFloat) -> Void,
             onLanguageOverlayAnchorChange: @escaping (CGPoint) -> Void,
+            onShowFunctionHelp: @escaping (NSRange, CGPoint) -> Void,
+            onShowSignatureHelp: @escaping (NSRange, CGPoint) -> Void,
+            onGoToDefinition: @escaping (NSRange, CGPoint) -> Void,
+            onFindReferences: @escaping (NSRange, CGPoint) -> Void,
+            onRenameSymbol: @escaping (NSRange, CGPoint) -> Void,
+            onShowCodeActions: @escaping (NSRange, CGPoint) -> Void,
             isPackageDropTargeted: Binding<Bool>
         ) {
             _text = text
@@ -277,6 +308,12 @@ struct PlatformTextView: UIViewRepresentable {
             self.onEditorInteraction = onEditorInteraction
             self.onScrollOffsetChange = onScrollOffsetChange
             self.onLanguageOverlayAnchorChange = onLanguageOverlayAnchorChange
+            self.onShowFunctionHelp = onShowFunctionHelp
+            self.onShowSignatureHelp = onShowSignatureHelp
+            self.onGoToDefinition = onGoToDefinition
+            self.onFindReferences = onFindReferences
+            self.onRenameSymbol = onRenameSymbol
+            self.onShowCodeActions = onShowCodeActions
             self.isPackageDropTargeted = isPackageDropTargeted
         }
 
@@ -286,6 +323,34 @@ struct PlatformTextView: UIViewRepresentable {
                   textView.isEditable, textView.markedTextRange == nil else { return true }
             let text = textView.text ?? ""
             let selectedRange = textView.selectedRange
+
+            if replacement == "\n",
+               range == selectedRange,
+               let indentationEdit = SourceEditorSmartIndentation.editForNewline(
+                in: text,
+                selectedRange: selectedRange
+               ),
+               let start = textView.position(
+                from: textView.beginningOfDocument,
+                offset: indentationEdit.replacementRange.location
+               ),
+               let end = textView.position(
+                from: start,
+                offset: indentationEdit.replacementRange.length
+               ),
+               let textRange = textView.textRange(from: start, to: end) {
+                trackProseEdit(
+                    replacing: indentationEdit.replacementRange,
+                    with: indentationEdit.replacementText,
+                    in: text
+                )
+                isApplyingPairEdit = true
+                textView.replace(textRange, withText: indentationEdit.replacementText)
+                textView.selectedRange = indentationEdit.selectedRange
+                isApplyingPairEdit = false
+                textViewDidChange(textView)
+                return false
+            }
 
             if let autocorrectionEdit = autocorrectionEdit(
                 forTyping: replacement,
@@ -531,6 +596,59 @@ struct PlatformTextView: UIViewRepresentable {
             updateLanguageOverlayAnchor(in: textView)
         }
 
+        func applyTextReplacementIfNeeded(_ request: EditorTextReplacement?, in textView: UITextView) {
+            guard let request, request.token != lastTextReplacementToken else { return }
+            lastTextReplacementToken = request.token
+            guard textView.isEditable else { return }
+            let length = (textView.text as NSString).length
+            let location = min(max(0, request.edit.replacementRange.location), length)
+            let range = NSRange(
+                location: location,
+                length: min(max(0, request.edit.replacementRange.length), length - location)
+            )
+            guard let start = textView.position(from: textView.beginningOfDocument, offset: range.location),
+                  let end = textView.position(from: start, offset: range.length),
+                  let textRange = textView.textRange(from: start, to: end) else { return }
+            textView.replace(textRange, withText: request.edit.replacementText)
+            let nextLength = length - range.length + (request.edit.replacementText as NSString).length
+            let selectionLocation = min(max(0, request.edit.selectedRange.location), nextLength)
+            textView.selectedRange = NSRange(
+                location: selectionLocation,
+                length: min(max(0, request.edit.selectedRange.length), nextLength - selectionLocation)
+            )
+            textView.scrollRangeToVisible(textView.selectedRange)
+            updateLanguageOverlayAnchor(in: textView)
+        }
+
+        func textView(
+            _ textView: UITextView,
+            editMenuForTextIn range: NSRange,
+            suggestedActions: [UIMenuElement]
+        ) -> UIMenu? {
+            let location = range.length > 0 ? range.location : textView.selectedRange.location
+            let actionRange = range.length > 0
+                ? range
+                : NSRange(location: location, length: 0)
+            let actionAnchor = navigationAnchor(for: actionRange, in: textView)
+            let quickActions = UIAction(title: "Quick Actions…", image: UIImage(systemName: "lightbulb")) { [weak self] _ in
+                self?.onShowCodeActions(actionRange, actionAnchor)
+            }
+            guard let symbolRange = SourceEditorSymbol.range(in: textView.text ?? "", at: location) else {
+                return UIMenu(children: [quickActions, UIMenu(options: .displayInline, children: suggestedActions)])
+            }
+            let anchor = navigationAnchor(for: symbolRange, in: textView)
+            let definition = UIAction(title: "Go to Definition", image: UIImage(systemName: "arrow.turn.down.right")) { [weak self] _ in
+                self?.onGoToDefinition(symbolRange, anchor)
+            }
+            let references = UIAction(title: "Find References", image: UIImage(systemName: "list.bullet.rectangle")) { [weak self] _ in
+                self?.onFindReferences(symbolRange, anchor)
+            }
+            let rename = UIAction(title: "Rename Symbol…", image: UIImage(systemName: "pencil")) { [weak self] _ in
+                self?.onRenameSymbol(symbolRange, anchor)
+            }
+            return UIMenu(children: [quickActions, definition, rename, references, UIMenu(options: .displayInline, children: suggestedActions)])
+        }
+
         private func focus(_ textView: UITextView, remainingAttempts: Int) {
             DispatchQueue.main.async { [weak self, weak textView] in
                 guard let self, let textView else { return }
@@ -722,6 +840,20 @@ struct PlatformTextView: UIViewRepresentable {
                 self.lastLanguageOverlayAnchor = anchor
                 self.onLanguageOverlayAnchorChange(anchor)
             }
+        }
+
+        private func navigationAnchor(for range: NSRange, in textView: UITextView) -> CGPoint {
+            guard let layoutManager = textView.textLayoutManager,
+                  let rect = EditorTextGeometry.caretRect(
+                    atCharacterOffset: NSMaxRange(range),
+                    in: layoutManager
+                  ) else {
+                return lastLanguageOverlayAnchor ?? CGPoint(x: 12, y: 34)
+            }
+            return CGPoint(
+                x: rect.minX + textView.textContainerInset.left - textView.contentOffset.x,
+                y: rect.maxY + textView.textContainerInset.top - textView.contentOffset.y
+            )
         }
 
         func consumeAnnotationChanges(

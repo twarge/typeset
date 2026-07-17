@@ -19,8 +19,11 @@ struct FindReplacePanel: View {
     @Binding var findText: String
     @Binding var replaceText: String
     @Binding var isCaseSensitive: Bool
+    @Binding var isWholeWord: Bool
+    @Binding var usesRegularExpression: Bool
     var currentIndex: Int?
     var matchCount: Int
+    var errorMessage: String?
     var onFindChanged: () -> Void
     var onPrevious: () -> Void
     var onNext: () -> Void
@@ -41,6 +44,10 @@ struct FindReplacePanel: View {
                 TextField("Find", text: $findText)
                     .textFieldStyle(.roundedBorder)
                     .focused($focusedField, equals: .find)
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
                     .onSubmit(onNext)
                     .onChange(of: findText) { _, _ in
                         onFindChanged()
@@ -76,16 +83,22 @@ struct FindReplacePanel: View {
                 TextField("Replace", text: $replaceText)
                     .textFieldStyle(.roundedBorder)
                     .focused($focusedField, equals: .replace)
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
                     .onSubmit(onReplace)
 
-                Toggle(isOn: $isCaseSensitive) {
-                    Text("Aa")
-                        .font(.caption.weight(.semibold))
+                searchOptionButton("Aa", isActive: isCaseSensitive, help: "Match Case") {
+                    isCaseSensitive.toggle()
                 }
-                .toggleStyle(.button)
-                .help("Match Case")
-                .onChange(of: isCaseSensitive) { _, _ in
-                    onFindChanged()
+
+                searchOptionButton("ab", isActive: isWholeWord, help: "Match Whole Word") {
+                    isWholeWord.toggle()
+                }
+
+                searchOptionButton(".*", isActive: usesRegularExpression, help: "Use Regular Expression") {
+                    usesRegularExpression.toggle()
                 }
 
                 Button("Replace", action: onReplace)
@@ -93,6 +106,14 @@ struct FindReplacePanel: View {
 
                 Button("All", action: onReplaceAll)
                     .disabled(matchCount == 0)
+            }
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(2)
             }
         }
         .padding(10)
@@ -107,10 +128,31 @@ struct FindReplacePanel: View {
             focusedField = .find
             onFindChanged()
         }
+        .onChange(of: isCaseSensitive) { _, _ in onFindChanged() }
+        .onChange(of: isWholeWord) { _, _ in onFindChanged() }
+        .onChange(of: usesRegularExpression) { _, _ in onFindChanged() }
+    }
+
+    private func searchOptionButton(
+        _ title: String,
+        isActive: Bool,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .frame(minWidth: 24, minHeight: 22)
+        }
+        .buttonStyle(.bordered)
+        .tint(isActive ? .accentColor : .secondary)
+        .help(help)
+        .accessibilityLabel(help)
     }
 
     private var matchStatus: String {
         guard !findText.isEmpty else { return "" }
+        guard errorMessage == nil else { return "Invalid" }
         guard matchCount > 0 else { return "0" }
         if let currentIndex {
             return "\(currentIndex)/\(matchCount)"
@@ -118,4 +160,3 @@ struct FindReplacePanel: View {
         return "\(matchCount)"
     }
 }
-

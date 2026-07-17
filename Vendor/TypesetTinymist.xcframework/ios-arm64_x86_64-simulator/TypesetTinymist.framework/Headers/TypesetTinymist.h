@@ -26,6 +26,13 @@ char *typeset_tinymist_signature_help(TypesetTinymistSession *session, const cha
 char *typeset_tinymist_prose_ranges(TypesetTinymistSession *session, const char *path);
 char *typeset_tinymist_prose_ranges_with_options(TypesetTinymistSession *session, const char *path, uint8_t ignore_commands);
 char *typeset_tinymist_document_symbols(TypesetTinymistSession *session, const char *path);
+char *typeset_tinymist_definition(TypesetTinymistSession *session, const char *path, uint32_t utf8_offset);
+char *typeset_tinymist_references(TypesetTinymistSession *session, const char *path, uint32_t utf8_offset);
+char *typeset_tinymist_selection_ranges(TypesetTinymistSession *session, const char *path, uint32_t start_utf8, uint32_t end_utf8);
+char *typeset_tinymist_prepare_rename(TypesetTinymistSession *session, const char *path, uint32_t utf8_offset);
+char *typeset_tinymist_rename(TypesetTinymistSession *session, const char *path, uint32_t utf8_offset, const char *new_name);
+char *typeset_tinymist_format(TypesetTinymistSession *session, const char *path, uint32_t start_utf8, uint32_t end_utf8, uint8_t selection_only);
+char *typeset_tinymist_code_actions(TypesetTinymistSession *session, const char *path, uint32_t start_utf8, uint32_t end_utf8);
 char *typeset_typst_compile_svg(const char *root, const char *main_path, const char *package_path, const char *package_cache_path);
 char *typeset_typst_compile_pdf(const char *root, const char *main_path, const char *package_path, const char *package_cache_path);
 char *typeset_typst_compile_html(const char *root, const char *main_path, const char *package_path, const char *package_cache_path);

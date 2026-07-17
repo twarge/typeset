@@ -33,12 +33,13 @@ struct FileSidebar: View {
     var documentSymbols: TypstDocumentSymbols
     var restoredSidebarTabRawValue: String
     @Binding var findActivation: Bool
+    @Binding var referenceFilterActivation: String?
     @Binding var pendingEdit: FileTreeEditingTarget?
     var onSidebarTabChange: (String) -> Void
     var onSelectSymbolRange: (NSRange) -> Void
     var onSearchSelectMatch: (String, NSRange) -> Void
-    var onSearchReplaceMatch: (String, NSRange, String, String, Bool) -> Void
-    var onSearchReplaceAll: (String, String, Bool) -> Void
+    var onSearchReplaceMatch: (String, NSRange, String, WorkspaceSearchConfiguration) -> Void
+    var onSearchReplaceAll: (String, WorkspaceSearchConfiguration) -> Void
     var onNewFile: () -> Void
     var onNewFolder: () -> Void
     var onImportFromPicker: () -> Void
@@ -69,7 +70,15 @@ struct FileSidebar: View {
     @State private var searchQuery = ""
     @State private var searchReplacement = ""
     @State private var searchIsCaseSensitive = false
+    @State private var searchIsWholeWord = false
+    @State private var searchUsesRegularExpression = false
+    @State private var searchFileFiltersVisible = false
     @State private var searchIsReplaceVisible = false
+    @AppStorage("Typeset.workspaceSearch.includedFiles") private var searchIncludedFiles = ""
+    @AppStorage("Typeset.workspaceSearch.excludedFiles") private var searchExcludedFiles = ""
+    @AppStorage("Typeset.workspaceSearch.history") private var searchHistoryStorage = "[]"
+    @State private var referenceFilter = ""
+    @FocusState private var isReferenceFilterFocused: Bool
 
     private enum SidebarTab: String, CaseIterable, Identifiable {
         case files
@@ -118,6 +127,8 @@ struct FileSidebar: View {
             // fire on the fresh mount.
             if findActivation {
                 sidebarTab = .search
+            } else if referenceFilterActivation != nil {
+                consumeReferenceFilterActivation()
             } else if let restored = SidebarTab(rawValue: restoredSidebarTabRawValue) {
                 sidebarTab = restored
             }
@@ -131,6 +142,19 @@ struct FileSidebar: View {
         .onChange(of: findActivation) { _, isPending in
             if isPending { sidebarTab = .search }
         }
+        .onChange(of: referenceFilterActivation) { _, query in
+            if query != nil { consumeReferenceFilterActivation() }
+        }
+    }
+
+    private func consumeReferenceFilterActivation() {
+        guard let query = referenceFilterActivation else { return }
+        sidebarTab = .references
+        referenceFilter = query
+        referenceFilterActivation = nil
+        DispatchQueue.main.async {
+            isReferenceFilterFocused = true
+        }
     }
 
     @ViewBuilder
@@ -140,12 +164,38 @@ struct FileSidebar: View {
             query: $searchQuery,
             replacement: $searchReplacement,
             isCaseSensitive: $searchIsCaseSensitive,
+            isWholeWord: $searchIsWholeWord,
+            usesRegularExpression: $searchUsesRegularExpression,
+            includedFiles: $searchIncludedFiles,
+            excludedFiles: $searchExcludedFiles,
+            areFileFiltersVisible: $searchFileFiltersVisible,
             isReplaceVisible: $searchIsReplaceVisible,
             activation: $findActivation,
+            history: searchHistory,
+            onCommitQuery: recordSearch,
+            onClearHistory: { searchHistoryStorage = "[]" },
             onSelectMatch: onSearchSelectMatch,
             onReplaceMatch: onSearchReplaceMatch,
             onReplaceAll: onSearchReplaceAll
         )
+    }
+
+    private var searchHistory: [String] {
+        guard let data = searchHistoryStorage.data(using: .utf8),
+              let values = try? JSONDecoder().decode([String].self, from: data) else {
+            return []
+        }
+        return Array(values.prefix(20))
+    }
+
+    private func recordSearch(_ query: String) {
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        var values = searchHistory.filter { $0 != query }
+        values.insert(query, at: 0)
+        values = Array(values.prefix(20))
+        guard let data = try? JSONEncoder().encode(values),
+              let encoded = String(data: data, encoding: .utf8) else { return }
+        searchHistoryStorage = encoded
     }
 
     private var tabSelector: some View {
@@ -237,15 +287,43 @@ struct FileSidebar: View {
 
     @ViewBuilder
     private var referencesList: some View {
-        if documentSymbols.references.isEmpty {
-            sidebarEmptyState(
-                title: "No References",
-                message: "Define a <label> and reference it with @label.",
-                systemImage: "link"
-            )
-        } else {
-            List {
-                ForEach(documentSymbols.references) { group in
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                    .foregroundStyle(.secondary)
+                TextField("Filter references", text: $referenceFilter)
+                    .textFieldStyle(.plain)
+                    .focused($isReferenceFilterFocused)
+                if !referenceFilter.isEmpty {
+                    Button {
+                        referenceFilter = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear Filter")
+                }
+            }
+            .padding(.horizontal, sidebarToolbarHorizontalPadding)
+            .padding(.vertical, sidebarToolbarVerticalPadding)
+            .platformSidebarToolbarBackground()
+
+            if documentSymbols.references.isEmpty {
+                sidebarEmptyState(
+                    title: "No References",
+                    message: "Define a <label> and reference it with @label.",
+                    systemImage: "link"
+                )
+            } else if filteredReferenceGroups.isEmpty {
+                sidebarEmptyState(
+                    title: "No Matches",
+                    message: "No references match the current filter.",
+                    systemImage: "line.3.horizontal.decrease.circle"
+                )
+            } else {
+                List {
+                    ForEach(filteredReferenceGroups) { group in
                     // The referenced element (the <label> definition).
                     Button {
                         if let source = group.source {
@@ -291,9 +369,18 @@ struct FileSidebar: View {
                         .buttonStyle(.plain)
                     }
                 }
+                }
+                .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
             }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
+        }
+    }
+
+    private var filteredReferenceGroups: [TypstReferenceGroup] {
+        let query = referenceFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return documentSymbols.references }
+        return documentSymbols.references.filter {
+            $0.name.localizedCaseInsensitiveContains(query)
         }
     }
 
@@ -1287,4 +1374,3 @@ private struct StemSelectingRenameTextField: UIViewRepresentable {
     }
 }
 #endif
-

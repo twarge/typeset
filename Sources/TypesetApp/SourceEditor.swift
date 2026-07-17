@@ -43,6 +43,14 @@ struct EditorSnippetInsertion: Equatable {
     var fallback: String
 }
 
+/// A one-shot native editor replacement. Formatting uses this instead of
+/// assigning the SwiftUI text binding directly so AppKit/UIKit register one
+/// undoable edit and keep the native selection authoritative.
+struct EditorTextReplacement: Equatable {
+    var token: Int
+    var edit: SourceEditorTextEdit
+}
+
 /// A one-shot request to restore the editor to a saved position: a vertical
 /// scroll `fraction` (0...1 of the scrollable range) and, optionally, the caret
 /// `selection`. The `token` distinguishes a fresh request from a repeat so the
@@ -66,6 +74,7 @@ struct SourceEditor: View {
     var focusRequest = 0
     var commentToggleRequest = 0
     var snippetInsertion: EditorSnippetInsertion?
+    var textReplacement: EditorTextReplacement?
     var insertableImagePaths: Set<String> = []
     var insertableTypstPaths: Set<String> = []
     var imageInsertTemplate = SourceEditorDropSnippet.defaultImageTemplate
@@ -78,6 +87,8 @@ struct SourceEditor: View {
     var hoverInfo: TypstHoverInfo?
     var cursorDiagnostic: TypstSourceDiagnostic?
     var signatureHelp: TypstSignatureHelp?
+    var referenceLocations: [TypstSourceLocation] = []
+    var codeActions: [TypstCodeAction] = []
     var selectedCompletionIndex = 0
     var showLineNumbers = false
     var spellCheckingEnabled = true
@@ -90,6 +101,14 @@ struct SourceEditor: View {
     var onCompletionDismiss: () -> Void = {}
     var onShowFunctionHelp: (NSRange) -> Void = { _ in }
     var onShowSignatureHelp: (NSRange) -> Void = { _ in }
+    var onGoToDefinition: (NSRange) -> Void = { _ in }
+    var onFindReferences: (NSRange) -> Void = { _ in }
+    var onRenameSymbol: (NSRange) -> Void = { _ in }
+    var onShowCodeActions: (NSRange) -> Void = { _ in }
+    var onReferenceSelected: (TypstSourceLocation) -> Void = { _ in }
+    var onReferencesDismiss: () -> Void = {}
+    var onCodeActionSelected: (TypstCodeAction) -> Void = { _ in }
+    var onCodeActionsDismiss: () -> Void = {}
     var onEditorInteraction: () -> Void = {}
     var onScrollFractionChange: (Double) -> Void = { _ in }
     var scrollRestore: SourceEditorScrollRestore?
@@ -109,6 +128,7 @@ struct SourceEditor: View {
             focusRequest: focusRequest,
             commentToggleRequest: commentToggleRequest,
             snippetInsertion: snippetInsertion,
+            textReplacement: textReplacement,
             insertableImagePaths: insertableImagePaths,
             insertableTypstPaths: insertableTypstPaths,
             imageInsertTemplate: imageInsertTemplate,
@@ -133,6 +153,22 @@ struct SourceEditor: View {
             onShowSignatureHelp: { range, anchor in
                 languageOverlayAnchor = anchor
                 onShowSignatureHelp(range)
+            },
+            onGoToDefinition: { range, anchor in
+                languageOverlayAnchor = anchor
+                onGoToDefinition(range)
+            },
+            onFindReferences: { range, anchor in
+                languageOverlayAnchor = anchor
+                onFindReferences(range)
+            },
+            onRenameSymbol: { range, anchor in
+                languageOverlayAnchor = anchor
+                onRenameSymbol(range)
+            },
+            onShowCodeActions: { range, anchor in
+                languageOverlayAnchor = anchor
+                onShowCodeActions(range)
             },
             onEditorInteraction: onEditorInteraction,
             onScrollOffsetChange: { offset in
@@ -177,11 +213,17 @@ struct SourceEditor: View {
                     hoverInfo: hoverInfo,
                     cursorDiagnostic: cursorDiagnostic,
                     signatureHelp: signatureHelp,
+                    referenceLocations: referenceLocations,
+                    codeActions: codeActions,
                     selectedCompletionIndex: selectedCompletionIndex,
                     fontSize: fontSize,
                     anchor: languageOverlayAnchor,
                     onCompletionSelected: onCompletionSelected,
-                    onCompletionDismiss: onCompletionDismiss
+                    onCompletionDismiss: onCompletionDismiss,
+                    onReferenceSelected: onReferenceSelected,
+                    onReferencesDismiss: onReferencesDismiss,
+                    onCodeActionSelected: onCodeActionSelected,
+                    onCodeActionsDismiss: onCodeActionsDismiss
                 )
             }
         }
@@ -382,11 +424,17 @@ private struct SourceEditorLanguageOverlay: View {
     var hoverInfo: TypstHoverInfo?
     var cursorDiagnostic: TypstSourceDiagnostic?
     var signatureHelp: TypstSignatureHelp?
+    var referenceLocations: [TypstSourceLocation]
+    var codeActions: [TypstCodeAction]
     var selectedCompletionIndex: Int
     var fontSize: Double
     var anchor: CGPoint
     var onCompletionSelected: (TypstCompletionItem) -> Void
     var onCompletionDismiss: () -> Void
+    var onReferenceSelected: (TypstSourceLocation) -> Void
+    var onReferencesDismiss: () -> Void
+    var onCodeActionSelected: (TypstCodeAction) -> Void
+    var onCodeActionsDismiss: () -> Void
 
     var body: some View {
         GeometryReader { proxy in
@@ -401,7 +449,15 @@ private struct SourceEditorLanguageOverlay: View {
             let arrowX = min(max(18, anchor.x - x), size.width - 18)
 
             VStack(alignment: .leading, spacing: 8) {
-                if !completions.isEmpty {
+                if !codeActions.isEmpty {
+                    calloutPanel(arrowX: arrowX, pointsUp: placeBelow) {
+                        codeActionsPanel
+                    }
+                } else if !referenceLocations.isEmpty {
+                    calloutPanel(arrowX: arrowX, pointsUp: placeBelow) {
+                        referencesPanel
+                    }
+                } else if !completions.isEmpty {
                     calloutPanel(arrowX: arrowX, pointsUp: placeBelow) {
                         completionPanel
                     }
@@ -430,13 +486,23 @@ private struct SourceEditorLanguageOverlay: View {
             .frame(width: size.width, alignment: .leading)
             .offset(x: x, y: y)
         }
-        .allowsHitTesting(!completions.isEmpty || signatureHelp != nil || hoverInfo != nil || cursorDiagnostic != nil)
+        .allowsHitTesting(!codeActions.isEmpty || !referenceLocations.isEmpty || !completions.isEmpty || signatureHelp != nil || hoverInfo != nil || cursorDiagnostic != nil)
     }
 
     private func panelSize(constrainedTo availableSize: CGSize) -> CGSize {
         let availableWidth = max(160, availableSize.width - 16)
         let availableHeight = max(96, availableSize.height - 16)
-        if !completions.isEmpty {
+        if !codeActions.isEmpty {
+            return CGSize(
+                width: min(400, availableWidth),
+                height: min(CGFloat(min(codeActions.count, 8)) * 42 + 42, availableHeight)
+            )
+        } else if !referenceLocations.isEmpty {
+            return CGSize(
+                width: min(400, availableWidth),
+                height: min(CGFloat(min(referenceLocations.count, 10)) * 38 + 40, availableHeight)
+            )
+        } else if !completions.isEmpty {
             return CGSize(
                 width: min(320, availableWidth),
                 height: min(CGFloat(min(completions.count, 8)) * 48 + 34, availableHeight)
@@ -530,6 +596,94 @@ private struct SourceEditorLanguageOverlay: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
                 .onTapGesture(perform: onCompletionDismiss)
+        }
+    }
+
+    private var referencesPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("References")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Button(action: onReferencesDismiss) {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.plain)
+                .help("Close References")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            ScrollView(.vertical) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(referenceLocations) { location in
+                        Button {
+                            onReferenceSelected(location)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "doc.text")
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 16)
+                                Text(location.path)
+                                    .lineLimit(1)
+                                Spacer(minLength: 8)
+                                Text("\(location.line):\(location.column)")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    private var codeActionsPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Label("Quick Actions", systemImage: "lightbulb")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Button(action: onCodeActionsDismiss) {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.plain)
+                .help("Close Quick Actions")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            ScrollView(.vertical) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(codeActions) { action in
+                        Button {
+                            onCodeActionSelected(action)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: action.isPreferred ? "lightbulb.fill" : "lightbulb")
+                                    .foregroundStyle(action.isPreferred ? Color.accentColor : Color.secondary)
+                                    .frame(width: 16)
+                                Text(action.title)
+                                    .lineLimit(2)
+                                Spacer(minLength: 8)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
         }
     }
 
@@ -937,7 +1091,7 @@ private nonisolated struct PopoverBubbleShape: Shape {
 /// A pending text change produced by an editing engine (comment toggle,
 /// bracket pairing): replace `replacementRange` with `replacementText`,
 /// then select `selectedRange` (absolute, post-edit).
-struct SourceEditorTextEdit {
+struct SourceEditorTextEdit: Equatable {
     var replacementRange: NSRange
     var replacementText: String
     var selectedRange: NSRange
@@ -946,6 +1100,84 @@ struct SourceEditorTextEdit {
     /// closer that steps over an identical character).
     var isCaretMoveOnly: Bool {
         replacementRange.length == 0 && replacementText.isEmpty
+    }
+}
+
+enum SourceEditorSymbol {
+    static func range(in text: String, at location: Int) -> NSRange? {
+        let text = text as NSString
+        guard text.length > 0 else { return nil }
+        var probe = min(max(0, location), text.length - 1)
+        if !isSymbolCharacter(text.character(at: probe)) {
+            guard probe > 0, isSymbolCharacter(text.character(at: probe - 1)) else { return nil }
+            probe -= 1
+        }
+        var start = probe
+        while start > 0, isSymbolCharacter(text.character(at: start - 1)) { start -= 1 }
+        var end = probe + 1
+        while end < text.length, isSymbolCharacter(text.character(at: end)) { end += 1 }
+        return NSRange(location: start, length: end - start)
+    }
+
+    private static func isSymbolCharacter(_ character: unichar) -> Bool {
+        CharacterSet.alphanumerics.contains(UnicodeScalar(character) ?? "\0")
+            || character == 95 || character == 45 || character == 46
+            || character == 64 || character == 60 || character == 62
+    }
+}
+
+enum SourceEditorSmartIndentation {
+    static func editForNewline(in text: String, selectedRange: NSRange) -> SourceEditorTextEdit? {
+        guard selectedRange.length == 0 else { return nil }
+        let nsText = text as NSString
+        let caret = min(max(0, selectedRange.location), nsText.length)
+        let lineRange = nsText.lineRange(for: NSRange(location: caret, length: 0))
+        let beforeRange = NSRange(location: lineRange.location, length: caret - lineRange.location)
+        let before = nsText.substring(with: beforeRange)
+        let indentation = String(before.prefix { $0 == " " || $0 == "\t" })
+        let trimmed = before.trimmingCharacters(in: .whitespaces)
+        let opener = trimmed.last.flatMap { closers[$0] }
+        let next = character(in: nsText, at: caret)
+
+        if let opener {
+            let inner = indentation + indentUnit(in: text, currentIndentation: indentation)
+            if next == opener {
+                let replacement = "\n\(inner)\n\(indentation)"
+                return SourceEditorTextEdit(
+                    replacementRange: selectedRange,
+                    replacementText: replacement,
+                    selectedRange: NSRange(location: caret + 1 + (inner as NSString).length, length: 0)
+                )
+            }
+            let replacement = "\n\(inner)"
+            return SourceEditorTextEdit(
+                replacementRange: selectedRange,
+                replacementText: replacement,
+                selectedRange: NSRange(location: caret + (replacement as NSString).length, length: 0)
+            )
+        }
+
+        guard !indentation.isEmpty else { return nil }
+        let replacement = "\n\(indentation)"
+        return SourceEditorTextEdit(
+            replacementRange: selectedRange,
+            replacementText: replacement,
+            selectedRange: NSRange(location: caret + (replacement as NSString).length, length: 0)
+        )
+    }
+
+    private static let closers: [Character: Character] = ["(": ")", "[": "]", "{": "}"]
+
+    private static func character(in text: NSString, at location: Int) -> Character? {
+        guard location >= 0, location < text.length else { return nil }
+        return Character(text.substring(with: text.rangeOfComposedCharacterSequence(at: location)))
+    }
+
+    private static func indentUnit(in text: String, currentIndentation: String) -> String {
+        if currentIndentation.contains("\t") { return "\t" }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        if lines.prefix(80).contains(where: { $0.first == "\t" }) { return "\t" }
+        return "  "
     }
 }
 

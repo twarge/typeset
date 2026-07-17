@@ -1203,6 +1203,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a588916bfdfd92e71cacef98a63d9b1f0d74d6599980d11894290e7ddefffcf7"
 
 [[package]]
+name = "itertools"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1753,6 +1762,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
  "zerocopy",
+]
+
+[[package]]
+name = "prettyless"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "749d63085aa461d80b3233e48781bf9e9dca8147fbc98f577e0697c6827dc418"
+dependencies = [
+ "typed-arena",
+ "unicode-width",
 ]
 
 [[package]]
@@ -2569,7 +2588,9 @@ dependencies = [
  "typst-layout",
  "typst-pdf",
  "typst-svg",
- "typst-syntax",
+ "typst-syntax 0.14.2",
+ "typst-syntax 0.15.0",
+ "typstyle-core",
 ]
 
 [[package]]
@@ -2586,9 +2607,9 @@ dependencies = [
  "typst-library",
  "typst-macros",
  "typst-realize",
- "typst-syntax",
- "typst-timing",
- "typst-utils",
+ "typst-syntax 0.15.0",
+ "typst-timing 0.15.0",
+ "typst-utils 0.15.0",
 ]
 
 [[package]]
@@ -2612,9 +2633,9 @@ dependencies = [
  "toml",
  "typst-library",
  "typst-macros",
- "typst-syntax",
- "typst-timing",
- "typst-utils",
+ "typst-syntax 0.15.0",
+ "typst-timing 0.15.0",
+ "typst-utils 0.15.0",
  "unicode-segmentation",
 ]
 
@@ -2633,9 +2654,9 @@ dependencies = [
  "typst-library",
  "typst-macros",
  "typst-svg",
- "typst-syntax",
- "typst-timing",
- "typst-utils",
+ "typst-syntax 0.15.0",
+ "typst-timing 0.15.0",
+ "typst-utils 0.15.0",
  "unicode-math-class",
 ]
 
@@ -2652,7 +2673,7 @@ dependencies = [
  "typst-eval",
  "typst-html",
  "typst-layout",
- "typst-utils",
+ "typst-utils 0.15.0",
  "unscanny",
 ]
 
@@ -2677,9 +2698,9 @@ dependencies = [
  "tar",
  "typst-assets",
  "typst-library",
- "typst-syntax",
- "typst-timing",
- "typst-utils",
+ "typst-syntax 0.15.0",
+ "typst-timing 0.15.0",
+ "typst-utils 0.15.0",
  "ureq",
  "url",
 ]
@@ -2709,9 +2730,9 @@ dependencies = [
  "typst-assets",
  "typst-library",
  "typst-macros",
- "typst-syntax",
- "typst-timing",
- "typst-utils",
+ "typst-syntax 0.15.0",
+ "typst-timing 0.15.0",
+ "typst-utils 0.15.0",
  "unicode-bidi",
  "unicode-math-class",
  "unicode-script",
@@ -2770,9 +2791,9 @@ dependencies = [
  "typed-arena",
  "typst-assets",
  "typst-macros",
- "typst-syntax",
- "typst-timing",
- "typst-utils",
+ "typst-syntax 0.15.0",
+ "typst-timing 0.15.0",
+ "typst-utils 0.15.0",
  "unicode-math-class",
  "unicode-normalization",
  "unicode-segmentation",
@@ -2815,9 +2836,9 @@ dependencies = [
  "typst-layout",
  "typst-library",
  "typst-macros",
- "typst-syntax",
- "typst-timing",
- "typst-utils",
+ "typst-syntax 0.15.0",
+ "typst-timing 0.15.0",
+ "typst-utils 0.15.0",
 ]
 
 [[package]]
@@ -2832,9 +2853,9 @@ dependencies = [
  "typst-html",
  "typst-library",
  "typst-macros",
- "typst-syntax",
- "typst-timing",
- "typst-utils",
+ "typst-syntax 0.15.0",
+ "typst-timing 0.15.0",
+ "typst-utils 0.15.0",
 ]
 
 [[package]]
@@ -2857,9 +2878,28 @@ dependencies = [
  "typst-layout",
  "typst-library",
  "typst-macros",
- "typst-timing",
- "typst-utils",
+ "typst-timing 0.15.0",
+ "typst-utils 0.15.0",
  "xmlwriter",
+]
+
+[[package]]
+name = "typst-syntax"
+version = "0.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a95d9192060e23b1e491b0b94dff676acddc92a4d672aeb8ca3890a5a734e879"
+dependencies = [
+ "ecow",
+ "rustc-hash",
+ "serde",
+ "toml",
+ "typst-timing 0.14.2",
+ "typst-utils 0.14.2",
+ "unicode-ident",
+ "unicode-math-class",
+ "unicode-script",
+ "unicode-segmentation",
+ "unscanny",
 ]
 
 [[package]]
@@ -2870,8 +2910,8 @@ dependencies = [
  "rustc-hash",
  "serde",
  "toml",
- "typst-timing",
- "typst-utils",
+ "typst-timing 0.15.0",
+ "typst-utils 0.15.0",
  "unicode-ident",
  "unicode-math-class",
  "unicode-script",
@@ -2881,11 +2921,37 @@ dependencies = [
 
 [[package]]
 name = "typst-timing"
+version = "0.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7be94f8faf19841b49574ef5c7fd7a12e2deb7c3d8deba5a596f35d2222024cd"
+dependencies = [
+ "parking_lot",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "typst-timing"
 version = "0.15.0"
 dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "typst-utils"
+version = "0.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3966c92e8fa48c7ce898130d07000d985f18206d92b250f0f939287fbccdee3"
+dependencies = [
+ "once_cell",
+ "portable-atomic",
+ "rayon",
+ "rustc-hash",
+ "siphasher",
+ "thin-vec",
+ "unicode-math-class",
 ]
 
 [[package]]
@@ -2902,6 +2968,22 @@ dependencies = [
  "smallvec",
  "thin-vec",
  "unicode-math-class",
+]
+
+[[package]]
+name = "typstyle-core"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab63c637927751a8eab9b56d02146ea14e1e25307918f590e658446813276b64"
+dependencies = [
+ "ecow",
+ "itertools",
+ "prettyless",
+ "rustc-hash",
+ "smallvec",
+ "thiserror",
+ "typst-syntax 0.14.2",
+ "unicode-width",
 ]
 
 [[package]]
@@ -3010,6 +3092,12 @@ name = "unicode-vo"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1d386ff53b415b7fe27b50bb44679e2cc4660272694b7b6f3326d8480823a94"
+
+[[package]]
+name = "unicode-width"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 
 [[package]]
 name = "unicode-xid"
