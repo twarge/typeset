@@ -256,10 +256,14 @@ public enum TypstCompletionRanking {
 public struct TypstHoverInfo: Equatable, Codable, Sendable {
     public var range: NSRange
     public var text: String
+    /// Link to the symbol's page on typst.app, when it is a standard-library
+    /// symbol with official documentation.
+    public var documentationURL: URL?
 
-    public init(range: NSRange, text: String) {
+    public init(range: NSRange, text: String, documentationURL: URL? = nil) {
         self.range = range
         self.text = text
+        self.documentationURL = documentationURL
     }
 }
 
@@ -267,11 +271,20 @@ public struct TypstSignatureHelp: Equatable, Codable, Sendable {
     public var signatures: [TypstSignatureInformation]
     public var activeSignature: Int
     public var activeParameter: Int
+    /// Link to the function's page on typst.app, when it is a standard-library
+    /// function with official documentation.
+    public var documentationURL: URL?
 
-    public init(signatures: [TypstSignatureInformation], activeSignature: Int = 0, activeParameter: Int = 0) {
+    public init(
+        signatures: [TypstSignatureInformation],
+        activeSignature: Int = 0,
+        activeParameter: Int = 0,
+        documentationURL: URL? = nil
+    ) {
         self.signatures = signatures
         self.activeSignature = activeSignature
         self.activeParameter = activeParameter
+        self.documentationURL = documentationURL
     }
 }
 
@@ -708,7 +721,8 @@ public actor EmbeddedLanguageService: TypstLanguageService {
         }
         let result = TypstHoverInfo(
             range: TypstSourceOffsetConverter.utf16Range(fromUTF8Start: hover.startUtf8, endUTF8: hover.endUtf8, in: text),
-            text: hover.text
+            text: hover.text,
+            documentationURL: hover.documentationUrl.flatMap(URL.init(string:))
         )
         TypstLanguageDebug.log("hover Rust result range=\(result.range.location)..<\(NSMaxRange(result.range)) textPrefix=\(result.text.prefix(120))")
         return result
@@ -749,7 +763,8 @@ public actor EmbeddedLanguageService: TypstLanguageService {
                 )
             },
             activeSignature: signatureHelp.activeSignature,
-            activeParameter: signatureHelp.activeParameter
+            activeParameter: signatureHelp.activeParameter,
+            documentationURL: signatureHelp.documentationUrl.flatMap(URL.init(string:))
         )
         TypstLanguageDebug.log("signature Rust result=\(result.signatures.first?.label ?? "none") activeParameter=\(result.activeParameter)")
         return result
@@ -1130,11 +1145,13 @@ private struct FFIHover: Decodable {
     var startUtf8: Int
     var endUtf8: Int
     var text: String
+    var documentationUrl: String?
 
     enum CodingKeys: String, CodingKey {
         case startUtf8 = "start_utf8"
         case endUtf8 = "end_utf8"
         case text
+        case documentationUrl = "documentation_url"
     }
 }
 
@@ -1150,11 +1167,13 @@ private struct FFISignatureHelp: Decodable {
     var signatures: [FFISignatureInformation]
     var activeSignature: Int
     var activeParameter: Int
+    var documentationUrl: String?
 
     enum CodingKeys: String, CodingKey {
         case signatures
         case activeSignature = "active_signature"
         case activeParameter = "active_parameter"
+        case documentationUrl = "documentation_url"
     }
 }
 

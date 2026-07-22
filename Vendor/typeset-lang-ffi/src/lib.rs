@@ -8,13 +8,14 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::{CStr, CString};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use typst::diag::{FileError, FileResult, Severity, SourceDiagnostic};
 use typst::foundations::{Bytes, CastInfo, Datetime, Duration, Func, ParamInfo, Repr, Smart, Value};
 use typst::layout::{Abs, Frame, FrameItem, Point, Size, Transform};
 use typst::syntax::{
-    DiagSpan, DiagSpanKind, FileId, RootedPath, Side, Source, Span, VirtualPath, VirtualRoot,
+    DiagSpan, DiagSpanKind, FileId, LinkedNode, RootedPath, Side, Source, Span, VirtualPath,
+    VirtualRoot,
 };
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
@@ -95,6 +96,7 @@ struct Hover {
     start_utf8: usize,
     end_utf8: usize,
     text: String,
+    documentation_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -107,6 +109,7 @@ struct SignatureHelp {
     signatures: Vec<SignatureInformation>,
     active_signature: usize,
     active_parameter: usize,
+    documentation_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -406,6 +409,7 @@ pub extern "C" fn typeset_lang_completions(
             text.len(),
             workspace_paths.len()
         ));
+        let document = cached_paged_document();
         let completions = completions_for(
             &text,
             utf8_offset as usize,
@@ -414,6 +418,7 @@ pub extern "C" fn typeset_lang_completions(
             &session.package_cache_path,
             &session.files,
             &path,
+            document.as_deref(),
         );
         lsp_debug(format!(
             "completion response path='{path}' count={} labels=[{}]",
@@ -433,6 +438,7 @@ pub extern "C" fn typeset_lang_hover(
     with_session(session, |session| {
         let path = read_c_string(path)?;
         let text = session.files.get(&path).cloned().unwrap_or_default();
+        let document = cached_paged_document();
         Ok(to_json(&HoverResponse {
             hover: hover_for(
                 &text,
@@ -441,6 +447,7 @@ pub extern "C" fn typeset_lang_hover(
                 &session.package_cache_path,
                 &session.files,
                 &path,
+                document.as_deref(),
             ),
         }))
     })
@@ -889,6 +896,30 @@ fn compile_html_response(
     })
 }
 
+/// The most recent successfully compiled document. Language queries hand it to
+/// `typst-ide`, whose tooltips and completions become document-aware: label and
+/// bibliography references, evaluated values, and introspection-derived info
+/// only exist with a compiled document in hand.
+///
+/// A single process-global slot, deliberately unkeyed: the render path compiles
+/// from a fresh temporary directory every time while the language session
+/// roots at the stable workspace mirror, so the two sides share no path to key
+/// on. With several documents open, a query from a not-most-recently-compiled
+/// document can briefly see the other document's labels until its own next
+/// compile (sub-second); `typst-ide` degrades gracefully on a document that
+/// doesn't match the source.
+static LAST_PAGED_DOCUMENT: Mutex<Option<Arc<PagedDocument>>> = Mutex::new(None);
+
+fn cache_paged_document(document: &PagedDocument) {
+    if let Ok(mut slot) = LAST_PAGED_DOCUMENT.lock() {
+        *slot = Some(Arc::new(document.clone()));
+    }
+}
+
+fn cached_paged_document() -> Option<Arc<PagedDocument>> {
+    LAST_PAGED_DOCUMENT.lock().ok()?.clone()
+}
+
 fn compile_paged_document(
     root: &str,
     main_path: &str,
@@ -900,7 +931,10 @@ fn compile_paged_document(
     let typst::diag::Warned { output, warnings } = typst::compile::<PagedDocument>(&world);
     comemo::evict(COMEMO_EVICT_MAX_AGE);
     match output {
-        Ok(document) => Ok((world, document, warnings.into_iter().collect())),
+        Ok(document) => {
+            cache_paged_document(&document);
+            Ok((world, document, warnings.into_iter().collect()))
+        }
         Err(errors) => {
             let diagnostics = render_diagnostics(&world, errors.iter().chain(warnings.iter()));
             let message = if diagnostics.is_empty() {
@@ -1425,6 +1459,7 @@ fn completions_for(
     package_cache_path: &str,
     session_files: &HashMap<String, String>,
     main_path: &str,
+    document: Option<&PagedDocument>,
 ) -> Vec<Completion> {
     let offset = clamp_to_char_boundary(text, utf8_offset);
     if let Some(path_context) = path_completion_context(text, offset) {
@@ -1453,6 +1488,25 @@ fn completions_for(
         );
     }
 
+    // After `@` only actual references belong — labels and bibliography keys,
+    // the same list the references sidebar shows, sourced from `typst-ide` and
+    // the compiled document. Suppress everything else (especially the package
+    // export supplement below, which would flood the reference popup).
+    let reference_context = replacement
+        .start
+        .checked_sub(1)
+        .and_then(|index| text.as_bytes().get(index))
+        == Some(&b'@');
+    if reference_context {
+        let completions: Vec<Completion> =
+            autocomplete_completions(session_files, main_path, text, offset, document)
+                .into_iter()
+                .filter(|completion| completion.kind == "reference")
+                .collect();
+        lsp_debug(format!("completion branch=reference items={}", completions.len()));
+        return completions;
+    }
+
     // Everything else is delegated to typst's real autocompletion engine
     // (`typst-ide`), which is fully context-aware: standard-library functions,
     // locally-bound `#let` variables, function parameters, field accesses
@@ -1460,7 +1514,7 @@ fn completions_for(
     // all originate here. Installed-package export symbols are supplemented
     // separately, because the lightweight completion world does not load
     // packages from disk.
-    let mut completions = autocomplete_completions(session_files, main_path, text, offset);
+    let mut completions = autocomplete_completions(session_files, main_path, text, offset, document);
 
     let package_completions = package_symbol_completions(
         text,
@@ -2345,6 +2399,7 @@ fn autocomplete_completions(
     main_path: &str,
     text: &str,
     offset: usize,
+    document: Option<&PagedDocument>,
 ) -> Vec<Completion> {
     let Some(world) = build_completion_world(session_files, main_path, text) else {
         return Vec::new();
@@ -2356,7 +2411,7 @@ fn autocomplete_completions(
     // `explicit = false`: only complete where the user is genuinely in the
     // middle of an identifier, field access, reference, etc. This keeps plain
     // prose clean — typing a word mid-sentence yields no completions.
-    let Some((from, items)) = autocomplete(&world, None::<&PagedDocument>, &source, offset, false)
+    let Some((from, items)) = autocomplete(&world, document, &source, offset, false)
     else {
         return Vec::new();
     };
@@ -3073,7 +3128,7 @@ fn collect_exports_from_module(
             }
         }
 
-        if let Some(let_exports) = let_exports_from_statement(&statement, docs.join("\n")) {
+        if let Some(let_exports) = let_exports_from_statement(&statement, format_doc_site_markup(&docs.join("\n"))) {
             for export in let_exports {
                 exports.insert(export.name.clone(), export);
             }
@@ -3121,6 +3176,260 @@ fn relative_import_from_line(line: &str) -> Option<RelativeImport> {
         wildcard,
         items,
     })
+}
+
+/// Cleans doc-site macros out of package `///` documentation so the editor's
+/// tooltip panels can render it. Package docs are written for the package's own
+/// documentation generator (tidy and friends) and use helpers that mean nothing
+/// here: `#short-or-long[a][b]` picks a wording per output, `#the-param[e][p]`
+/// cross-references a parameter, `#example(..)` embeds a titled code example,
+/// and bare illustration calls (`#stack(..)` demos) render figures. They are
+/// rewritten to plain markdown: long wording, inline code, a titled fenced
+/// example, and fenced code respectively.
+fn format_doc_site_markup(doc: &str) -> String {
+    let text = replace_bracket_macro(doc, "short-or-long", |_, long| long.to_string());
+    let text = replace_bracket_macro(&text, "the-param", |receiver, parameter| {
+        format!("`{receiver}.{parameter}`")
+    });
+    let text = replace_example_macros(&text);
+    fence_standalone_calls(&text)
+}
+
+/// Replaces every `#name[first][second]` with `render(first, second)`.
+fn replace_bracket_macro(
+    text: &str,
+    name: &str,
+    mut render: impl FnMut(&str, &str) -> String,
+) -> String {
+    let marker = format!("#{name}[");
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(found) = rest.find(&marker) {
+        let open = found + marker.len() - 1;
+        let replaced = bracket_group(rest, open).and_then(|(first, after_first)| {
+            rest[after_first..].starts_with('[').then(|| {
+                bracket_group(rest, after_first)
+                    .map(|(second, after_second)| (render(&first, &second), after_second))
+            })?
+        });
+        match replaced {
+            Some((rendered, after)) => {
+                output.push_str(&rest[..found]);
+                output.push_str(&rendered);
+                rest = &rest[after..];
+            }
+            None => {
+                output.push_str(&rest[..found + 1]);
+                rest = &rest[found + 1..];
+            }
+        }
+    }
+    output.push_str(rest);
+    output
+}
+
+/// Reads a `[..]` group starting at `open_index`; returns the content and the
+/// index just past the closing bracket.
+fn bracket_group(text: &str, open_index: usize) -> Option<(String, usize)> {
+    let bytes = text.as_bytes();
+    let mut depth = 0usize;
+    let mut index = open_index;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'[' => depth += 1,
+            b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((text[open_index + 1..index].to_string(), index + 1));
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
+/// Rewrites `#example(title: "..", ```lang .. ```)` calls into a titled,
+/// fenced code block.
+fn replace_example_macros(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(found) = rest.find("#example(") {
+        let open = found + "#example".len();
+        match matching_paren_end(rest, open) {
+            Some(close) => {
+                let call = &rest[open + 1..close];
+                output.push_str(&rest[..found]);
+                output.push_str(&render_example(call));
+                rest = &rest[close + 1..];
+            }
+            None => {
+                output.push_str(&rest[..found + 1]);
+                rest = &rest[found + 1..];
+            }
+        }
+    }
+    output.push_str(rest);
+    output
+}
+
+fn render_example(call: &str) -> String {
+    let title = string_argument(call, "title:").unwrap_or_else(|| "Example".to_string());
+    match raw_block_content(call) {
+        Some(code) => format!("### {title}\n```typst\n{code}\n```"),
+        None => format!("### {title}"),
+    }
+}
+
+/// The value of a `name: "..."` argument inside a call body.
+fn string_argument(call: &str, name: &str) -> Option<String> {
+    let after = call.find(name)? + name.len();
+    let rest = call.get(after..)?.trim_start();
+    let (value, _) = read_quoted_string(rest)?;
+    Some(value.to_string())
+}
+
+/// The content of the first raw block (``` .. ```) inside a call body, with a
+/// leading language tag line stripped.
+fn raw_block_content(call: &str) -> Option<String> {
+    let start = call.find("```")?;
+    let after = start + 3;
+    let close = call.get(after..)?.find("```")? + after;
+    let mut content = call.get(after..close)?;
+    if let Some(newline) = content.find('\n') {
+        let first_line = content[..newline].trim();
+        if !first_line.is_empty() && first_line.chars().all(|c| c.is_ascii_alphanumeric()) {
+            content = &content[newline + 1..];
+        }
+    }
+    let trimmed = content.trim_matches('\n');
+    (!trimmed.trim().is_empty()).then(|| trimmed.to_string())
+}
+
+/// The index of the `)` matching the `(` at `open_index`, skipping strings and
+/// raw backtick regions.
+fn matching_paren_end(text: &str, open_index: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut raw_ticks = 0usize;
+    let mut index = open_index;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if raw_ticks > 0 {
+            if byte == b'`' {
+                let mut run = 0;
+                while index + run < bytes.len() && bytes[index + run] == b'`' {
+                    run += 1;
+                }
+                if run >= raw_ticks {
+                    raw_ticks = 0;
+                }
+                index += run;
+                continue;
+            }
+            index += 1;
+            continue;
+        }
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            index += 1;
+            continue;
+        }
+        match byte {
+            b'"' => in_string = true,
+            b'`' => {
+                let mut run = 0;
+                while index + run < bytes.len() && bytes[index + run] == b'`' {
+                    run += 1;
+                }
+                raw_ticks = run;
+                index += run;
+                continue;
+            }
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
+/// Wraps illustration calls that stand alone (a line starting with
+/// `#identifier(` whose call ends a line) in a ```typst fence, so multi-line
+/// figure demos read as code instead of shattered prose.
+fn fence_standalone_calls(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut remaining = text;
+    let mut in_fence = false;
+    while !remaining.is_empty() {
+        let line_end = remaining
+            .find('\n')
+            .map(|index| index + 1)
+            .unwrap_or(remaining.len());
+        let line = &remaining[..line_end];
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") {
+            in_fence = !in_fence;
+            output.push_str(line);
+            remaining = &remaining[line_end..];
+            continue;
+        }
+        if !in_fence {
+            if let Some(fenced_end) = standalone_call_end(remaining, line, trimmed) {
+                let indent = line.len() - trimmed.len();
+                output.push_str("```typst\n");
+                output.push_str(remaining[indent..fenced_end].trim_end());
+                output.push_str("\n```\n");
+                remaining = &remaining[fenced_end..];
+                if remaining.starts_with('\n') {
+                    remaining = &remaining[1..];
+                }
+                continue;
+            }
+        }
+        output.push_str(line);
+        remaining = &remaining[line_end..];
+    }
+    output
+}
+
+/// When `line` (the first line of `remaining`) opens a standalone call, returns
+/// the index just past the call's closing paren.
+fn standalone_call_end(remaining: &str, line: &str, trimmed: &str) -> Option<usize> {
+    let rest = trimmed.strip_prefix('#')?;
+    let ident_len = rest
+        .char_indices()
+        .find_map(|(index, character)| {
+            (!(is_typst_identifier_char(character) || character == '.')).then_some(index)
+        })
+        .unwrap_or(rest.len());
+    if ident_len == 0 || !rest[ident_len..].starts_with('(') {
+        return None;
+    }
+    let indent = line.len() - trimmed.len();
+    let open = indent + 1 + ident_len;
+    let close = matching_paren_end(remaining, open)?;
+    let after = &remaining[close + 1..];
+    let after_line_end = after.find('\n').unwrap_or(after.len());
+    after[..after_line_end]
+        .trim()
+        .is_empty()
+        .then_some(close + 1 + after_line_end)
 }
 
 fn let_exports_from_statement(statement: &str, documentation: String) -> Option<Vec<PackageExport>> {
@@ -3462,24 +3771,44 @@ fn hover_for(
     package_cache_path: &str,
     session_files: &HashMap<String, String>,
     main_path: &str,
+    document: Option<&PagedDocument>,
 ) -> Option<Hover> {
     let (start, end) = hover_symbol_range(text, utf8_offset)?;
+
+    // Keywords parse as keyword tokens rather than identifiers, so resolve
+    // them before the identifier-based code-context gate below.
+    if let Some(doc) = keyword_construct_at(text, start, true) {
+        return Some(Hover {
+            start_utf8: start,
+            end_utf8: end,
+            text: doc.hover_markdown(),
+            documentation_url: Some(doc.url.to_string()),
+        });
+    }
+
     if !is_hover_code_context(text, start, end) {
         return None;
     }
 
     let symbol = &text[start..end];
-    let hover_text = native_function_help(symbol)
-        .or_else(|| {
-            package_export_for_function(text, symbol, package_path, package_cache_path)
-                .map(|export| package_export_help(symbol, &export))
-        })
-        .or_else(|| ide_tooltip_for(session_files, main_path, text, utf8_offset))
-        .unwrap_or_else(|| format!("Typst symbol `{symbol}`"));
+    let mut documentation_url = None;
+    let hover_text = if let Some(native) = native_function_help(symbol) {
+        documentation_url = official_docs_url(symbol);
+        native
+    } else if let Some(export) =
+        package_export_for_function(text, symbol, package_path, package_cache_path)
+    {
+        package_export_help(symbol, &export)
+    } else if let Some(tooltip) = ide_tooltip_for(session_files, main_path, text, utf8_offset, document) {
+        tooltip
+    } else {
+        format!("Typst symbol `{symbol}`")
+    };
     Some(Hover {
         start_utf8: start,
         end_utf8: end,
         text: hover_text,
+        documentation_url,
     })
 }
 
@@ -3549,26 +3878,13 @@ fn ide_tooltip_for(
     main_path: &str,
     text: &str,
     utf8_offset: usize,
+    document: Option<&PagedDocument>,
 ) -> Option<String> {
     let world = build_completion_world(session_files, main_path, text)?;
     let source = world.source(world.main()).ok()?;
     let cursor = clamp_to_char_boundary(text, utf8_offset);
-    let tooltip = tooltip(
-        &world,
-        None::<&PagedDocument>,
-        &source,
-        cursor,
-        Side::After,
-    )
-    .or_else(|| {
-        tooltip(
-            &world,
-            None::<&PagedDocument>,
-            &source,
-            cursor,
-            Side::Before,
-        )
-    })?;
+    let tooltip = tooltip(&world, document, &source, cursor, Side::After)
+        .or_else(|| tooltip(&world, document, &source, cursor, Side::Before))?;
     Some(match tooltip {
         IdeTooltip::Text(text) => text.to_string(),
         IdeTooltip::Code(code) => format!("```typst\n{code}\n```"),
@@ -3589,7 +3905,7 @@ fn signature_help_for(
 ) -> Option<SignatureHelp> {
     let Some(context) = function_call_context(text, clamp_to_char_boundary(text, utf8_offset)) else {
         lsp_debug("signature branch=no function call context");
-        return None;
+        return keyword_signature_help(text, utf8_offset);
     };
     lsp_debug(format!(
         "signature function='{}' active_parameter={}",
@@ -3601,6 +3917,7 @@ fn signature_help_for(
             signatures: vec![signature],
             active_signature: 0,
             active_parameter,
+            documentation_url: official_docs_url(&context.function_name),
         });
     }
 
@@ -3634,6 +3951,7 @@ fn signature_help_for(
         signatures: vec![signature],
         active_signature: 0,
         active_parameter,
+        documentation_url: None,
     })
 }
 
@@ -3728,6 +4046,8 @@ struct NativeParameterMetadata {
     positional: bool,
     named: bool,
     variadic: bool,
+    required: bool,
+    settable: bool,
 }
 
 fn native_function(name: &str) -> Option<Func> {
@@ -3766,6 +4086,8 @@ fn native_function_parameters(name: &str, func: &Func) -> Vec<NativeParameterMet
             positional: parameter.positional(),
             named: parameter.named(),
             variadic: parameter.variadic(),
+            required: parameter.required(),
+            settable: parameter.settable(),
         };
 
         if metadata.variadic {
@@ -3816,11 +4138,265 @@ fn native_function_signature(name: &str) -> Option<SignatureInformation> {
     })
 }
 
+/// The typst.app reference URL for a standard-library symbol. Scoped names
+/// (`image.decode`, `calc.pow`) link to their parent's page. Package symbols
+/// and unknown names get no link.
+fn official_docs_url(name: &str) -> Option<String> {
+    let base = name.strip_prefix("std.").unwrap_or(name);
+    if let Some(category) = official_docs_category(base) {
+        return Some(format!("https://typst.app/docs/reference/{category}/{base}/"));
+    }
+    let (parent, _) = base.split_once('.')?;
+    let category = official_docs_category(parent)?;
+    Some(format!("https://typst.app/docs/reference/{category}/{parent}/"))
+}
+
+fn official_docs_category(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "bibliography" | "cite" | "document" | "emph" | "enum" | "figure" | "footnote"
+        | "heading" | "link" | "list" | "numbering" | "outline" | "par" | "parbreak"
+        | "quote" | "ref" | "strong" | "table" | "terms" => "model",
+        "align" | "block" | "box" | "colbreak" | "columns" | "grid" | "h" | "hide"
+        | "layout" | "measure" | "move" | "pad" | "page" | "pagebreak" | "place"
+        | "repeat" | "rotate" | "scale" | "skew" | "stack" | "v" => "layout",
+        "highlight" | "linebreak" | "lorem" | "lower" | "overline" | "raw" | "smallcaps"
+        | "smartquote" | "strike" | "sub" | "super" | "text" | "underline" | "upper" => "text",
+        "circle" | "color" | "curve" | "ellipse" | "gradient" | "image" | "line" | "path"
+        | "pattern" | "polygon" | "rect" | "square" | "stroke" | "tiling" => "visualize",
+        "arguments" | "array" | "assert" | "bool" | "bytes" | "calc" | "content"
+        | "datetime" | "decimal" | "dictionary" | "duration" | "eval" | "float"
+        | "function" | "int" | "label" | "module" | "panic" | "plugin" | "regex" | "repr"
+        | "selector" | "str" | "symbol" | "sys" | "type" | "version" => "foundations",
+        "counter" | "here" | "locate" | "metadata" | "query" | "state" => "introspection",
+        "cbor" | "csv" | "json" | "read" | "toml" | "xml" | "yaml" => "data-loading",
+        _ => return None,
+    })
+}
+
+/// Documentation for language keywords (`#import`, `#set`, ...). Keywords have
+/// no entry in the standard library scope and parse as keyword tokens rather
+/// than identifiers, so hover and signature help resolve them through the
+/// syntax tree instead of the function tables.
+struct KeywordDoc {
+    forms: &'static [&'static str],
+    summary: &'static str,
+    url: &'static str,
+}
+
+impl KeywordDoc {
+    fn hover_markdown(&self) -> String {
+        format!("```typst\n{}\n```\n\n{}", self.forms.join("\n"), self.summary)
+    }
+}
+
+const SCRIPTING_DOCS: &str = "https://typst.app/docs/reference/scripting/";
+const STYLING_DOCS: &str = "https://typst.app/docs/reference/styling/";
+
+/// Maps a keyword construct's syntax kind to its documentation. Keyed on the
+/// construct (`ModuleImport`), not the token (`Import`), so related tokens
+/// like `as`, `in`, and `else` resolve to the construct that owns them.
+fn construct_keyword_doc(kind: SyntaxKind) -> Option<&'static KeywordDoc> {
+    Some(match kind {
+        SyntaxKind::ModuleImport => &KeywordDoc {
+            forms: &[
+                "#import \"utils.typ\"",
+                "#import \"utils.typ\": rect, item",
+                "#import \"@preview/example:0.1.0\": *",
+                "#import \"utils.typ\" as u",
+            ],
+            summary: "Imports definitions from another file, an installed package, or a \
+                module value. A plain import binds the module itself; `:` imports specific \
+                items (`*` for everything); `as` renames the binding.",
+            url: "https://typst.app/docs/reference/scripting/#modules",
+        },
+        SyntaxKind::ModuleInclude => &KeywordDoc {
+            forms: &["#include \"chapter.typ\""],
+            summary: "Evaluates another file and includes its content in the document. Use \
+                `import` instead to access a file's definitions without inserting its \
+                content.",
+            url: "https://typst.app/docs/reference/scripting/#modules",
+        },
+        SyntaxKind::LetBinding => &KeywordDoc {
+            forms: &[
+                "#let name = value",
+                "#let double(x) = 2 * x",
+                "#let (first, second) = pair",
+            ],
+            summary: "Binds a name to a value. With a parameter list it defines a function; \
+                with a pattern it destructures arrays and dictionaries.",
+            url: "https://typst.app/docs/reference/scripting/#bindings-and-destructuring",
+        },
+        SyntaxKind::SetRule => &KeywordDoc {
+            forms: &[
+                "#set text(size: 11pt)",
+                "#set par(justify: true) if condition",
+            ],
+            summary: "Configures default arguments for an element function from here to the \
+                end of the enclosing scope. A trailing `if` applies the rule conditionally.",
+            url: "https://typst.app/docs/reference/styling/#set-rules",
+        },
+        SyntaxKind::ShowRule => &KeywordDoc {
+            forms: &[
+                "#show heading: it => block(it.body)",
+                "#show \"Text\": smallcaps",
+                "#show emph: set text(blue)",
+                "#show: template",
+            ],
+            summary: "Transforms every element matching the selector with a function, \
+                replacement content, or a set rule. Without a selector (`#show: rule`) it \
+                applies to the rest of the document — commonly used to apply templates.",
+            url: "https://typst.app/docs/reference/styling/#show-rules",
+        },
+        SyntaxKind::Conditional => &KeywordDoc {
+            forms: &[
+                "#if condition [..] else [..]",
+                "#if a {..} else if b {..}",
+            ],
+            summary: "Evaluates one branch depending on a condition. Branches are content \
+                blocks `[..]` or code blocks `{..}`; `else` and `else if` are optional. The \
+                conditional is an expression that yields the taken branch's value.",
+            url: "https://typst.app/docs/reference/scripting/#conditionals",
+        },
+        SyntaxKind::ForLoop => &KeywordDoc {
+            forms: &[
+                "#for value in iterable [..]",
+                "#for (key, value) in dictionary [..]",
+            ],
+            summary: "Repeats its body for each item of an array, dictionary, string, or \
+                range. Patterns destructure items; `break` and `continue` control the \
+                iteration.",
+            url: "https://typst.app/docs/reference/scripting/#loops",
+        },
+        SyntaxKind::WhileLoop => &KeywordDoc {
+            forms: &["#while condition [..]"],
+            summary: "Repeats its body as long as the condition stays true.",
+            url: "https://typst.app/docs/reference/scripting/#loops",
+        },
+        SyntaxKind::LoopBreak => &KeywordDoc {
+            forms: &["#break"],
+            summary: "Exits the enclosing loop immediately.",
+            url: "https://typst.app/docs/reference/scripting/#loops",
+        },
+        SyntaxKind::LoopContinue => &KeywordDoc {
+            forms: &["#continue"],
+            summary: "Skips to the enclosing loop's next iteration.",
+            url: "https://typst.app/docs/reference/scripting/#loops",
+        },
+        SyntaxKind::FuncReturn => &KeywordDoc {
+            forms: &["#let f(x) = { return value }"],
+            summary: "Exits the enclosing function early, optionally with a value. Without \
+                `return`, a function yields the joined value of its body.",
+            url: "https://typst.app/docs/reference/scripting/#bindings-and-destructuring",
+        },
+        SyntaxKind::Contextual => &KeywordDoc {
+            forms: &["#context text.size", "#context { .. }"],
+            summary: "Provides access to contextual data — the current location in the \
+                document and the active style settings. Required to read properties like \
+                `text.size` or display counters and state.",
+            url: "https://typst.app/docs/reference/context/",
+        },
+        _ => return None,
+    })
+}
+
+/// Keyword tokens that may start or appear inside a documented construct.
+fn is_statement_keyword(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::Import
+            | SyntaxKind::Include
+            | SyntaxKind::Let
+            | SyntaxKind::Set
+            | SyntaxKind::Show
+            | SyntaxKind::If
+            | SyntaxKind::Else
+            | SyntaxKind::For
+            | SyntaxKind::While
+            | SyntaxKind::Break
+            | SyntaxKind::Continue
+            | SyntaxKind::Return
+            | SyntaxKind::Context
+            | SyntaxKind::As
+            | SyntaxKind::In
+    )
+}
+
+/// Finds the keyword construct governing `utf8_offset`. With
+/// `require_keyword_token` (hover), the leaf itself must be a keyword token;
+/// without it (signature help), any position inside the construct's header
+/// counts, but content/code bodies are excluded so the panel doesn't linger
+/// while writing `[..]` or `{..}` bodies.
+fn keyword_construct_at(
+    text: &str,
+    utf8_offset: usize,
+    require_keyword_token: bool,
+) -> Option<&'static KeywordDoc> {
+    let root = parse(text);
+    let cursor = clamp_to_char_boundary(text, utf8_offset);
+    let linked = LinkedNode::new(&root);
+    for side in [Side::Before, Side::After] {
+        let Some(mut leaf) = linked.leaf_at(cursor, side) else {
+            continue;
+        };
+        // A caret after trailing whitespace (`#import "utils.typ": |`) lands
+        // on a space token that is a sibling of the construct; hop to the
+        // previous leaf as long as the caret stays on the same line.
+        if !require_keyword_token
+            && leaf.kind() == SyntaxKind::Space
+            && !text[leaf.offset()..cursor].contains('\n')
+            && let Some(previous) = leaf.prev_leaf()
+        {
+            leaf = previous;
+        }
+        if require_keyword_token && !is_statement_keyword(leaf.kind()) {
+            continue;
+        }
+        let mut node = Some(leaf);
+        while let Some(current) = node {
+            if !require_keyword_token
+                && matches!(current.kind(), SyntaxKind::ContentBlock | SyntaxKind::CodeBlock)
+            {
+                break;
+            }
+            if let Some(doc) = construct_keyword_doc(current.kind()) {
+                return Some(doc);
+            }
+            node = current.parent().cloned();
+        }
+    }
+    None
+}
+
+fn keyword_signature_help(text: &str, utf8_offset: usize) -> Option<SignatureHelp> {
+    let doc = keyword_construct_at(text, utf8_offset, false)?;
+    lsp_debug(format!(
+        "signature branch=keyword '{}'",
+        doc.forms.first().copied().unwrap_or_default()
+    ));
+    Some(SignatureHelp {
+        signatures: vec![SignatureInformation {
+            label: doc.forms.join("\n"),
+            documentation: doc.summary.to_string(),
+            parameters: Vec::new(),
+        }],
+        active_signature: 0,
+        active_parameter: 0,
+        documentation_url: Some(doc.url.to_string()),
+    })
+}
+
 fn native_function_help(name: &str) -> Option<String> {
     let func = native_function(name)?;
     let display_name = func.name().unwrap_or(name.strip_prefix("std.").unwrap_or(name));
     let parameters = native_function_parameters(display_name, &func);
-    let mut output = String::from("```typst\nlet ");
+    // The `typst-signature` fence keeps the summary machine-readable so the
+    // UI can render type unions as colored pills; an `element` info token
+    // marks element functions (usable in set/show rules).
+    let mut output = String::from("```typst-signature");
+    if func.to_element().is_some() {
+        output.push_str(" element");
+    }
+    output.push('\n');
     output.push_str(display_name);
     output.push_str("(\n");
     for parameter in &parameters {
@@ -3839,7 +4415,7 @@ fn native_function_help(name: &str) -> Option<String> {
     }
     output.push_str(") -> ");
     output.push_str(&native_function_return_type(display_name, &func));
-    output.push_str(";\n```\n\n");
+    output.push_str("\n```\n\n");
     output.push_str(&typst_docs_to_markdown(func.docs().unwrap_or_default()));
 
     let positional = parameters
@@ -3870,17 +4446,45 @@ fn append_parameter_help(
     }
     output.push_str("\n\n# ");
     output.push_str(heading);
-    for (index, parameter) in parameters.iter().enumerate() {
+    for parameter in parameters {
         output.push_str("\n\n## ");
         output.push_str(&parameter.name);
-        if index > 0 {
-            output.push_str(" (named)");
-        }
         output.push_str("\n\n```typst\ntype: ");
         output.push_str(&parameter.type_label);
+        let flags = parameter_flags(parameter);
+        if !flags.is_empty() {
+            output.push_str("\nflags: ");
+            output.push_str(&flags.join(" "));
+        }
+        if let Some(default) = &parameter.default {
+            output.push_str("\ndefault: ");
+            output.push_str(default);
+        }
         output.push_str("\n```\n\n");
         output.push_str(parameter.documentation.trim());
     }
+}
+
+/// The specification chips shown after a parameter's name, mirroring the
+/// official documentation ("Required", "Positional", "Settable", ...).
+fn parameter_flags(parameter: &NativeParameterMetadata) -> Vec<&'static str> {
+    let mut flags = Vec::new();
+    if parameter.required {
+        flags.push("required");
+    }
+    if parameter.positional {
+        flags.push("positional");
+    }
+    if parameter.named && !parameter.positional {
+        flags.push("named");
+    }
+    if parameter.variadic {
+        flags.push("variadic");
+    }
+    if parameter.settable {
+        flags.push("settable");
+    }
+    flags
 }
 
 fn native_function_return_type(name: &str, func: &Func) -> String {
@@ -3947,6 +4551,10 @@ fn cast_info_label(info: &CastInfo) -> String {
 }
 
 fn typst_docs_to_markdown(docs: &str) -> String {
+    // Typst 0.15's stdlib docs use the same doc-site markup as packages
+    // (`#example(..)`, `#short-or-long[..][..]`, standalone illustration
+    // calls); rewrite all of it before line processing.
+    let docs = format_doc_site_markup(docs);
     let docs = docs.replace("```example", "```typst");
     let mut output = String::new();
     for (index, line) in docs.lines().enumerate() {
@@ -3986,19 +4594,25 @@ fn replace_typst_doc_references(line: &str) -> String {
         let has_trailing_period = raw_reference.ends_with('.');
         let reference = raw_reference.trim_end_matches('.');
         let following = &after[reference_len..];
+        let url = official_docs_url(reference);
         if let Some(content) = following.strip_prefix('[')
             && let Some(close) = content.find(']')
         {
-            output.push_str(&content[..close]);
+            push_doc_reference(&mut output, &content[..close], url.as_deref());
             rest = &content[close + 1..];
         } else {
             let display = reference
                 .rsplit(['.', ':'])
                 .next()
                 .unwrap_or(reference);
-            output.push('[');
-            output.push_str(display);
-            output.push(']');
+            match url.as_deref() {
+                Some(url) => push_doc_reference(&mut output, display, Some(url)),
+                None => {
+                    output.push('[');
+                    output.push_str(display);
+                    output.push(']');
+                }
+            }
             rest = following;
         }
         if has_trailing_period {
@@ -4007,6 +4621,21 @@ fn replace_typst_doc_references(line: &str) -> String {
     }
     output.push_str(rest);
     output
+}
+
+/// Writes a doc reference as a markdown link to its official page when one is
+/// known, or as plain display text otherwise.
+fn push_doc_reference(output: &mut String, display: &str, url: Option<&str>) {
+    match url {
+        Some(url) => {
+            output.push('[');
+            output.push_str(display);
+            output.push_str("](");
+            output.push_str(url);
+            output.push(')');
+        }
+        None => output.push_str(display),
+    }
 }
 
 fn function_name_before_open_paren(text: &str, open_paren: usize) -> Option<String> {
@@ -4555,7 +5184,7 @@ mod tests {
     }
 
     fn test_completions_for(text: &str, offset: usize, paths: &[String]) -> Vec<Completion> {
-        completions_for(text, offset, paths, "", "", &single_file(text), "main.typ")
+        completions_for(text, offset, paths, "", "", &single_file(text), "main.typ", None)
     }
 
     #[test]
@@ -4750,6 +5379,131 @@ mod tests {
     }
 
     #[test]
+    fn official_docs_urls_for_standard_functions() {
+        assert_eq!(
+            official_docs_url("figure").as_deref(),
+            Some("https://typst.app/docs/reference/model/figure/")
+        );
+        assert_eq!(
+            official_docs_url("image").as_deref(),
+            Some("https://typst.app/docs/reference/visualize/image/")
+        );
+        assert_eq!(
+            official_docs_url("image.decode").as_deref(),
+            Some("https://typst.app/docs/reference/visualize/image/")
+        );
+        assert_eq!(official_docs_url("diagram"), None);
+    }
+
+    #[test]
+    fn doc_references_link_to_official_documentation() {
+        assert_eq!(
+            typst_docs_to_markdown("Often, an @image[image]."),
+            "Often, an [image](https://typst.app/docs/reference/visualize/image/)."
+        );
+        let scoped = typst_docs_to_markdown("See @figure.caption for details.");
+        assert!(
+            scoped.contains("[caption](https://typst.app/docs/reference/model/figure/)"),
+            "{scoped}"
+        );
+    }
+
+    #[test]
+    fn doc_markup_handles_native_example_blocks() {
+        let doc = "Intro.\n\n#example(\n  title: \"Customizing the figure kind\",\n  ```\n  #figure(\n    circle(radius: 10pt),\n  )\n  ```\n)\n\nOutro.";
+        let formatted = typst_docs_to_markdown(doc);
+        assert!(formatted.contains("### Customizing the figure kind"), "{formatted}");
+        assert!(!formatted.contains("#example("), "{formatted}");
+        assert!(formatted.contains("Outro."), "{formatted}");
+    }
+
+    #[test]
+    fn doc_markup_picks_long_wording() {
+        assert_eq!(
+            format_doc_site_markup("#short-or-long[Page Level][Page-level columns]."),
+            "Page-level columns."
+        );
+    }
+
+    #[test]
+    fn native_help_emits_signature_fence_with_flags() {
+        let help = native_function_help("figure").unwrap();
+        assert!(help.starts_with("```typst-signature element\nfigure(\n"), "{help}");
+        assert!(help.contains("\nflags: required positional"), "{help}");
+        assert!(help.contains("\nflags: named settable"), "{help}");
+        assert!(help.contains("\ndefault: none"), "{help}");
+        assert!(!help.contains("(named)"), "{help}");
+
+        let range = native_function_help("range").unwrap();
+        assert!(range.starts_with("```typst-signature\nrange(\n"), "{range}");
+    }
+
+    #[test]
+    fn native_docs_convert_short_or_long_markup() {
+        assert_eq!(
+            typst_docs_to_markdown(
+                "= #short-or-long[Breaking Out][Breaking out of columns] <breaking-out>"
+            ),
+            "## Breaking out of columns"
+        );
+        let columns = native_function_help("columns").unwrap();
+        assert!(!columns.contains("#short-or-long"), "{columns}");
+        assert!(columns.contains("Breaking out of columns"), "{columns}");
+    }
+
+    #[test]
+    fn doc_markup_renders_param_references_inline() {
+        assert_eq!(
+            format_doc_site_markup("See #the-param[edge][corner-radius]."),
+            "See `edge.corner-radius`."
+        );
+    }
+
+    #[test]
+    fn doc_markup_formats_examples_as_titled_code() {
+        let doc = "Intro.\n#example(title: \"Customization\", ```typ\n#diagram(node((0,0)))\n```)\nOutro.";
+        let formatted = format_doc_site_markup(doc);
+        assert!(formatted.contains("### Customization"), "{formatted}");
+        assert!(formatted.contains("```typst\n#diagram(node((0,0)))\n```"), "{formatted}");
+        assert!(!formatted.contains("#example("), "{formatted}");
+    }
+
+    #[test]
+    fn doc_markup_fences_standalone_illustration_calls() {
+        let doc = "Axes:\n#stack(\n  dir: ltr,\n  fletcher.diagram(\n    node((0,0), $(0,0)$),\n  ),\n)\nDone.";
+        let formatted = format_doc_site_markup(doc);
+        assert!(formatted.contains("```typst\n#stack("), "{formatted}");
+        assert!(formatted.contains(")\n```"), "{formatted}");
+        assert!(formatted.contains("Done."), "{formatted}");
+    }
+
+    #[test]
+    fn doc_markup_leaves_prose_calls_alone() {
+        let doc = "Wrap with #box(..) to keep it inline.";
+        assert_eq!(format_doc_site_markup(doc), doc);
+        let trailing = "#image(\"a\") is nice.";
+        assert_eq!(format_doc_site_markup(trailing), trailing);
+    }
+
+    #[test]
+    fn reference_context_offers_only_labels() {
+        let (_local, cache) = test_package_storage();
+        write_test_package(&cache);
+        let text = "#import \"@preview/fletcher:0.5.8\": *\n@";
+        let completions = completions_for(
+            text,
+            text.len(),
+            &[],
+            "",
+            cache.to_str().unwrap(),
+            &single_file(text),
+            "main.typ",
+            None,
+        );
+        assert!(completions.iter().all(|completion| completion.kind == "reference"));
+    }
+
+    #[test]
     fn completes_installed_package_specs_inside_import_string() {
         let (_local, cache) = test_package_storage();
         write_test_package(&cache);
@@ -4762,6 +5516,7 @@ mod tests {
             cache.to_str().unwrap(),
             &single_file(text),
             "main.typ",
+            None,
         );
 
         assert!(completions
@@ -4782,6 +5537,7 @@ mod tests {
             cache.to_str().unwrap(),
             &single_file(text),
             "main.typ",
+            None,
         );
         let diagram = completions
             .iter()
@@ -4807,6 +5563,7 @@ mod tests {
             cache.to_str().unwrap(),
             &single_file(text),
             "main.typ",
+            None,
         );
         let diagram = completions
             .iter()
@@ -4832,6 +5589,7 @@ mod tests {
             cache.to_str().unwrap(),
             &single_file(text),
             "main.typ",
+            None,
         );
 
         assert!(completions
@@ -4852,6 +5610,7 @@ mod tests {
             cache.to_str().unwrap(),
             &single_file(text),
             "main.typ",
+            None,
         );
 
         assert!(completions
@@ -4903,7 +5662,7 @@ mod tests {
             .documentation
             .contains("A path to an image file or raw bytes"));
 
-        let hover = hover_for(text, 3, "", "", &HashMap::new(), "main.typ").unwrap();
+        let hover = hover_for(text, 3, "", "", &HashMap::new(), "main.typ", None).unwrap();
         assert!(hover.text.contains("A raster or vector graphic."));
         assert!(hover.text.contains("# Positional Parameters"));
         assert!(hover.text.contains("# Named Parameters"));
@@ -4969,17 +5728,18 @@ description = "Draw diagrams."
             "",
             &HashMap::new(),
             "main.typ",
+            None,
         )
         .unwrap();
         assert!(hover.text.contains("A raster or vector graphic."));
-        assert!(hover.text.contains("put it into a [box]."));
+        assert!(hover.text.contains("put it into a [box](https://typst.app/docs/reference/layout/box/)."));
     }
 
     #[test]
     fn returns_hover_for_columns_call() {
         let text = "#columns(2)[Hello]";
         let offset = text.find("columns").unwrap() + "columns".len() - 1;
-        let hover = hover_for(text, offset, "", "", &HashMap::new(), "main.typ")
+        let hover = hover_for(text, offset, "", "", &HashMap::new(), "main.typ", None)
             .expect("#columns should be recognized as Typst code");
 
         assert!(hover.text.contains("columns"), "{}", hover.text);
@@ -4998,6 +5758,7 @@ description = "Draw diagrams."
             cache.to_str().unwrap(),
             &HashMap::new(),
             "main.typ",
+            None,
         )
         .unwrap();
 
@@ -5018,6 +5779,7 @@ description = "Draw diagrams."
             cache.to_str().unwrap(),
             &HashMap::new(),
             "main.typ",
+            None,
         )
         .unwrap();
 
@@ -5035,6 +5797,7 @@ description = "Draw diagrams."
             "",
             &HashMap::new(),
             "main.typ",
+            None,
         )
         .is_none());
     }
@@ -5043,14 +5806,70 @@ description = "Draw diagrams."
     fn suppresses_builtin_function_name_in_plain_text() {
         let text = "This image is plain text";
         let offset = text.find("image").unwrap() + 2;
-        assert!(hover_for(text, offset, "", "", &HashMap::new(), "main.typ").is_none());
+        assert!(hover_for(text, offset, "", "", &HashMap::new(), "main.typ", None).is_none());
+    }
+
+    #[test]
+    fn keyword_hover_documents_import() {
+        let text = "#import \"utils.typ\": a";
+        let offset = text.find("import").unwrap() + 3;
+        let hover = hover_for(text, offset, "", "", &HashMap::new(), "main.typ", None).unwrap();
+        assert_eq!(&text[hover.start_utf8..hover.end_utf8], "import");
+        assert!(hover.text.contains("Imports definitions"), "{}", hover.text);
+        assert_eq!(
+            hover.documentation_url.as_deref(),
+            Some("https://typst.app/docs/reference/scripting/#modules")
+        );
+    }
+
+    #[test]
+    fn keyword_hover_resolves_in_to_enclosing_loop() {
+        let text = "#for x in range(3) [body]";
+        let offset = text.find(" in ").unwrap() + 2;
+        let hover = hover_for(text, offset, "", "", &HashMap::new(), "main.typ", None).unwrap();
+        assert!(hover.text.contains("Repeats its body"), "{}", hover.text);
+    }
+
+    #[test]
+    fn keyword_signature_help_for_import_line() {
+        let text = "#import \"@preview/cetz:0.3.1\": ";
+        let help = signature_help_for(text, text.len(), "", "").unwrap();
+        assert!(
+            help.signatures[0].label.contains("#import \"utils.typ\": rect, item"),
+            "{}",
+            help.signatures[0].label
+        );
+        assert!(help.signatures[0].parameters.is_empty());
+        assert_eq!(
+            help.documentation_url.as_deref(),
+            Some("https://typst.app/docs/reference/scripting/#modules")
+        );
+    }
+
+    #[test]
+    fn keyword_signature_help_after_set_rule_call() {
+        let text = "#set text(size: 11pt)";
+        let help = signature_help_for(text, text.len(), "", "").unwrap();
+        assert!(
+            help.signatures[0].label.starts_with("#set"),
+            "{}",
+            help.signatures[0].label
+        );
+    }
+
+    #[test]
+    fn keyword_signature_help_stays_out_of_bodies() {
+        let text = "#if true [some words]";
+        let offset = text.find("words").unwrap() + 2;
+        assert!(signature_help_for(text, offset, "", "").is_none());
+        assert!(signature_help_for("Just prose here", 8, "", "").is_none());
     }
 
     #[test]
     fn returns_hover_inside_multiline_code_block() {
         let text = "#{\n  image(\"a.png\")\n}";
         let offset = text.find("image").unwrap() + 2;
-        let hover = hover_for(text, offset, "", "", &HashMap::new(), "main.typ").unwrap();
+        let hover = hover_for(text, offset, "", "", &HashMap::new(), "main.typ", None).unwrap();
         assert!(hover.text.contains("A raster or vector graphic."));
     }
 
