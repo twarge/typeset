@@ -14,10 +14,9 @@ jobs:
     name: Build and test (SwiftPM)
     runs-on: macos-26
     steps:
-      # The Vendor/typst and Vendor/tinymist submodules are intentionally not
-      # checked out: the SwiftPM targets build without them. They are only
-      # needed for the Xcode app target, which bundles the Typst CLI and the
-      # TypesetTinymist xcframework.
+      # The Vendor/typst submodule is intentionally not checked out: the
+      # SwiftPM targets build without it. It is only needed for the Xcode app
+      # target, which bundles the Typst CLI and the TypesetLang xcframework.
       - uses: actions/checkout@v5
 
       - name: Show toolchain

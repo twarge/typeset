@@ -10,8 +10,8 @@
          <ExecutionAction
             ActionType = "Xcode.IDEStandardExecutionActionsCore.ExecutionActionType.ShellScriptAction">
             <ActionContent
-               title = "Ensure TypesetTinymist"
-               scriptText = "/bin/bash &quot;$SRCROOT/Scripts/ensure-typeset-tinymist-xcframework.sh&quot;">
+               title = "Ensure TypesetLang"
+               scriptText = "/bin/bash &quot;$SRCROOT/Scripts/ensure-typeset-lang-xcframework.sh&quot;">
                <EnvironmentBuildable>
                   <BuildableReference
                      BuildableIdentifier = "primary"

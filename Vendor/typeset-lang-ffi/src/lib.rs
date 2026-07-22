@@ -34,7 +34,7 @@ use typst_layout::PagedDocument;
 use typst_pdf::{PdfOptions, PdfStandards};
 use typst_syntax::{SyntaxKind, SyntaxNode, is_ident, is_valid_label_literal_id, parse};
 
-pub struct TypesetTinymistSession {
+pub struct TypesetLangSession {
     root: String,
     compile_target: String,
     package_path: String,
@@ -288,8 +288,8 @@ fn completion_labels(completions: &[Completion]) -> String {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_session_create() -> *mut TypesetTinymistSession {
-    Box::into_raw(Box::new(TypesetTinymistSession {
+pub extern "C" fn typeset_lang_session_create() -> *mut TypesetLangSession {
+    Box::into_raw(Box::new(TypesetLangSession {
         root: String::new(),
         compile_target: String::new(),
         package_path: String::new(),
@@ -299,7 +299,7 @@ pub extern "C" fn typeset_tinymist_session_create() -> *mut TypesetTinymistSessi
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_session_destroy(session: *mut TypesetTinymistSession) {
+pub extern "C" fn typeset_lang_session_destroy(session: *mut TypesetLangSession) {
     if !session.is_null() {
         unsafe {
             drop(Box::from_raw(session));
@@ -308,8 +308,8 @@ pub extern "C" fn typeset_tinymist_session_destroy(session: *mut TypesetTinymist
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_set_debug_logging(
-    _session: *mut TypesetTinymistSession,
+pub extern "C" fn typeset_lang_set_debug_logging(
+    _session: *mut TypesetLangSession,
     enabled: u8,
 ) -> *mut c_char {
     LSP_DEBUG_ENABLED.store(enabled != 0, Ordering::Relaxed);
@@ -317,8 +317,8 @@ pub extern "C" fn typeset_tinymist_set_debug_logging(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_set_workspace(
-    session: *mut TypesetTinymistSession,
+pub extern "C" fn typeset_lang_set_workspace(
+    session: *mut TypesetLangSession,
     root: *const c_char,
     compile_target: *const c_char,
 ) -> *mut c_char {
@@ -334,8 +334,8 @@ pub extern "C" fn typeset_tinymist_set_workspace(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_set_package_storage(
-    session: *mut TypesetTinymistSession,
+pub extern "C" fn typeset_lang_set_package_storage(
+    session: *mut TypesetLangSession,
     package_path: *const c_char,
     package_cache_path: *const c_char,
 ) -> *mut c_char {
@@ -354,8 +354,8 @@ pub extern "C" fn typeset_tinymist_set_package_storage(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_update_file(
-    session: *mut TypesetTinymistSession,
+pub extern "C" fn typeset_lang_update_file(
+    session: *mut TypesetLangSession,
     path: *const c_char,
     text: *const c_char,
 ) -> *mut c_char {
@@ -366,8 +366,8 @@ pub extern "C" fn typeset_tinymist_update_file(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_close_file(
-    session: *mut TypesetTinymistSession,
+pub extern "C" fn typeset_lang_close_file(
+    session: *mut TypesetLangSession,
     path: *const c_char,
 ) -> *mut c_char {
     with_session(session, |session| {
@@ -377,7 +377,7 @@ pub extern "C" fn typeset_tinymist_close_file(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_diagnostics(session: *mut TypesetTinymistSession) -> *mut c_char {
+pub extern "C" fn typeset_lang_diagnostics(session: *mut TypesetLangSession) -> *mut c_char {
     with_session(session, |session| {
         let mut diagnostics = Vec::new();
         for (path, text) in &session.files {
@@ -388,8 +388,8 @@ pub extern "C" fn typeset_tinymist_diagnostics(session: *mut TypesetTinymistSess
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_completions(
-    session: *mut TypesetTinymistSession,
+pub extern "C" fn typeset_lang_completions(
+    session: *mut TypesetLangSession,
     path: *const c_char,
     utf8_offset: u32,
 ) -> *mut c_char {
@@ -425,8 +425,8 @@ pub extern "C" fn typeset_tinymist_completions(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_hover(
-    session: *mut TypesetTinymistSession,
+pub extern "C" fn typeset_lang_hover(
+    session: *mut TypesetLangSession,
     path: *const c_char,
     utf8_offset: u32,
 ) -> *mut c_char {
@@ -447,8 +447,8 @@ pub extern "C" fn typeset_tinymist_hover(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_signature_help(
-    session: *mut TypesetTinymistSession,
+pub extern "C" fn typeset_lang_signature_help(
+    session: *mut TypesetLangSession,
     path: *const c_char,
     utf8_offset: u32,
 ) -> *mut c_char {
@@ -479,16 +479,16 @@ pub extern "C" fn typeset_tinymist_signature_help(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_prose_ranges(
-    session: *mut TypesetTinymistSession,
+pub extern "C" fn typeset_lang_prose_ranges(
+    session: *mut TypesetLangSession,
     path: *const c_char,
 ) -> *mut c_char {
-    typeset_tinymist_prose_ranges_with_options(session, path, 1)
+    typeset_lang_prose_ranges_with_options(session, path, 1)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_prose_ranges_with_options(
-    session: *mut TypesetTinymistSession,
+pub extern "C" fn typeset_lang_prose_ranges_with_options(
+    session: *mut TypesetLangSession,
     path: *const c_char,
     ignore_commands: u8,
 ) -> *mut c_char {
@@ -502,8 +502,8 @@ pub extern "C" fn typeset_tinymist_prose_ranges_with_options(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_document_symbols(
-    session: *mut TypesetTinymistSession,
+pub extern "C" fn typeset_lang_document_symbols(
+    session: *mut TypesetLangSession,
     path: *const c_char,
 ) -> *mut c_char {
     with_session(session, |session| {
@@ -514,8 +514,8 @@ pub extern "C" fn typeset_tinymist_document_symbols(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_definition(
-    session: *mut TypesetTinymistSession,
+pub extern "C" fn typeset_lang_definition(
+    session: *mut TypesetLangSession,
     path: *const c_char,
     utf8_offset: u32,
 ) -> *mut c_char {
@@ -528,8 +528,8 @@ pub extern "C" fn typeset_tinymist_definition(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_references(
-    session: *mut TypesetTinymistSession,
+pub extern "C" fn typeset_lang_references(
+    session: *mut TypesetLangSession,
     path: *const c_char,
     utf8_offset: u32,
 ) -> *mut c_char {
@@ -542,8 +542,8 @@ pub extern "C" fn typeset_tinymist_references(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_selection_ranges(
-    session: *mut TypesetTinymistSession,
+pub extern "C" fn typeset_lang_selection_ranges(
+    session: *mut TypesetLangSession,
     path: *const c_char,
     start_utf8: u32,
     end_utf8: u32,
@@ -562,8 +562,8 @@ pub extern "C" fn typeset_tinymist_selection_ranges(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_prepare_rename(
-    session: *mut TypesetTinymistSession,
+pub extern "C" fn typeset_lang_prepare_rename(
+    session: *mut TypesetLangSession,
     path: *const c_char,
     utf8_offset: u32,
 ) -> *mut c_char {
@@ -577,8 +577,8 @@ pub extern "C" fn typeset_tinymist_prepare_rename(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_rename(
-    session: *mut TypesetTinymistSession,
+pub extern "C" fn typeset_lang_rename(
+    session: *mut TypesetLangSession,
     path: *const c_char,
     utf8_offset: u32,
     new_name: *const c_char,
@@ -598,8 +598,8 @@ pub extern "C" fn typeset_tinymist_rename(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_format(
-    session: *mut TypesetTinymistSession,
+pub extern "C" fn typeset_lang_format(
+    session: *mut TypesetLangSession,
     path: *const c_char,
     start_utf8: u32,
     end_utf8: u32,
@@ -621,8 +621,8 @@ pub extern "C" fn typeset_tinymist_format(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_code_actions(
-    session: *mut TypesetTinymistSession,
+pub extern "C" fn typeset_lang_code_actions(
+    session: *mut TypesetLangSession,
     path: *const c_char,
     start_utf8: u32,
     end_utf8: u32,
@@ -686,7 +686,7 @@ pub extern "C" fn typeset_typst_version() -> *mut c_char {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn typeset_tinymist_string_free(string: *mut c_char) {
+pub extern "C" fn typeset_lang_string_free(string: *mut c_char) {
     if !string.is_null() {
         unsafe {
             drop(CString::from_raw(string));
@@ -694,12 +694,12 @@ pub extern "C" fn typeset_tinymist_string_free(string: *mut c_char) {
     }
 }
 
-fn with_session<F>(session: *mut TypesetTinymistSession, body: F) -> *mut c_char
+fn with_session<F>(session: *mut TypesetLangSession, body: F) -> *mut c_char
 where
-    F: FnOnce(&mut TypesetTinymistSession) -> Result<String, String>,
+    F: FnOnce(&mut TypesetLangSession) -> Result<String, String>,
 {
     let response = if session.is_null() {
-        Err("Tinymist session is null.".to_string())
+        Err("Language session is null.".to_string())
     } else {
         body(unsafe { &mut *session })
     };
@@ -4206,7 +4206,7 @@ fn is_escaped_quote(bytes: &[u8], quote_index: usize) -> bool {
     slash_count % 2 == 1
 }
 
-/// Collects the natural-language leaves that Tinymist's semantic-token pass
+/// Collects the natural-language leaves that the semantic-token pass
 /// treats as markup text. Strings, raw blocks, math, comments, identifiers, and
 /// other code leaves are excluded by construction rather than spell-checking
 /// the complement of a few known code nodes.
@@ -4915,7 +4915,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("typeset-tinymist-test-{stamp}"));
+        let root = std::env::temp_dir().join(format!("typeset-lang-test-{stamp}"));
         let local = root.join("local");
         let cache = root.join("cache");
         fs::create_dir_all(&local).unwrap();

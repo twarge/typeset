@@ -420,7 +420,7 @@ build_ios_app() {
 	require_command find
 	require_command xcodebuild
 	require_file /usr/libexec/PlistBuddy
-	require_dir "$ROOT_DIR/Vendor/TypesetTinymist.xcframework"
+	require_dir "$ROOT_DIR/Vendor/TypesetLang.xcframework"
 
 	local ios_configuration
 	local archive_path

@@ -146,7 +146,7 @@ struct PlatformTextView: NSViewRepresentable {
         context.coordinator.onLanguageOverlayAnchorChange = onLanguageOverlayAnchorChange
         // Typeset paints spelling indicators itself, but lets AppKit own the
         // correction indicator and Escape-to-reject interaction. Delegate
-        // filtering below limits native correction candidates to Tinymist's
+        // filtering below limits native correction candidates to the language service's
         // semantic prose ranges.
         textView.isContinuousSpellCheckingEnabled = false
         textView.isGrammarCheckingEnabled = false
@@ -676,7 +676,7 @@ struct PlatformTextView: NSViewRepresentable {
             range affectedCharRange: NSRange
         ) -> Int {
             // Native checking has no semantic-range API. Typeset renders its
-            // own spelling state from Tinymist prose ranges, so reject any
+            // own spelling state from the language service's prose ranges, so reject any
             // whole-document state AppKit attempts to install.
             0
         }

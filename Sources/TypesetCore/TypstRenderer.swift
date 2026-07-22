@@ -3,8 +3,8 @@
 
 import Foundation
 
-#if canImport(TypesetTinymist)
-import TypesetTinymist
+#if canImport(TypesetLang)
+import TypesetLang
 #endif
 
 public enum TypstRenderError: Error, LocalizedError, Sendable {
@@ -55,7 +55,7 @@ public struct TypstRenderer: TypstRendering {
     public func preview(package: DocumentPackage) async throws -> HTMLPreview {
         guard let mainPath = package.mainTypstPath else { throw TypstRenderError.noMainFile }
 
-        #if canImport(TypesetTinymist)
+        #if canImport(TypesetLang)
         let workspace = try TemporaryPackageWriter().write(package: package)
         defer { try? FileManager.default.removeItem(at: workspace) }
 
@@ -121,7 +121,7 @@ public struct TypstRenderer: TypstRendering {
     public func quickLookPreview(package: DocumentPackage) async throws -> HTMLPreview {
         guard let mainPath = package.mainTypstPath else { throw TypstRenderError.noMainFile }
 
-        #if canImport(TypesetTinymist)
+        #if canImport(TypesetLang)
         let workspace = try TemporaryPackageWriter().write(package: package)
         defer { try? FileManager.default.removeItem(at: workspace) }
 
@@ -174,7 +174,7 @@ public struct TypstRenderer: TypstRendering {
     public func previewPDF(package: DocumentPackage) async throws -> PDFPreview {
         guard let mainPath = package.mainTypstPath else { throw TypstRenderError.noMainFile }
 
-        #if canImport(TypesetTinymist)
+        #if canImport(TypesetLang)
         let workspace = try TemporaryPackageWriter().write(package: package)
         defer { try? FileManager.default.removeItem(at: workspace) }
 
@@ -230,7 +230,7 @@ public struct TypstRenderer: TypstRendering {
     public func exportPDF(package: DocumentPackage, to outputURL: URL) async throws {
         guard let mainPath = package.mainTypstPath else { throw TypstRenderError.noMainFile }
 
-        #if canImport(TypesetTinymist)
+        #if canImport(TypesetLang)
         let workspace = try TemporaryPackageWriter().write(package: package)
         defer { try? FileManager.default.removeItem(at: workspace) }
 
@@ -276,7 +276,7 @@ public struct TypstRenderer: TypstRendering {
         #endif
     }
 
-    #if canImport(TypesetTinymist)
+    #if canImport(TypesetLang)
     private func callEmbeddedTypst(
         _ body: @escaping @Sendable () -> UnsafeMutablePointer<CChar>?
     ) async throws -> EmbeddedTypstRenderResponse {
@@ -284,7 +284,7 @@ public struct TypstRenderer: TypstRendering {
             guard let pointer = body() else {
                 throw TypstRenderError.commandFailed("Embedded Typst returned no response.")
             }
-            defer { typeset_tinymist_string_free(pointer) }
+            defer { typeset_lang_string_free(pointer) }
             let json = String(cString: pointer)
             guard let data = json.data(using: .utf8),
                   let response = try? JSONDecoder().decode(EmbeddedTypstRenderResponse.self, from: data) else {
@@ -345,7 +345,7 @@ public struct TypstRenderer: TypstRendering {
     #endif
 }
 
-#if canImport(TypesetTinymist)
+#if canImport(TypesetLang)
 private struct EmbeddedTypstRenderResponse: Decodable, Sendable {
     var ok: Bool
     var message: String?

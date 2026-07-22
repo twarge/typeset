@@ -3,7 +3,7 @@
 
 import Foundation
 
-public actor TinymistWorkspaceStore {
+public actor LanguageWorkspaceStore {
     private var workspaces: [String: URL] = [:]
     private let fileManager: FileManager
 
@@ -48,9 +48,13 @@ public actor TinymistWorkspaceStore {
             throw TypstRenderError.packageStorageUnavailable
         }
 
-        let root = appSupport
-            .appending(path: "Typeset", directoryHint: .isDirectory)
-            .appending(path: "TinymistWorkspaces", directoryHint: .isDirectory)
+        let base = appSupport.appending(path: "Typeset", directoryHint: .isDirectory)
+        // One-time cleanup: this mirror lived under "TinymistWorkspaces" before
+        // the rename; stale copies of user documents shouldn't linger there.
+        try? fileManager.removeItem(at: base.appending(path: "TinymistWorkspaces", directoryHint: .isDirectory))
+
+        let root = base
+            .appending(path: "LanguageWorkspaces", directoryHint: .isDirectory)
             .appending(path: documentID, directoryHint: .isDirectory)
         workspaces[documentID] = root
         return root

@@ -1181,7 +1181,7 @@ enum SourceEditorSmartIndentation {
     }
 }
 
-/// Shared prose-only autocorrection support. Tinymist supplies the prose ranges;
+/// Shared prose-only autocorrection support. The language service supplies the prose ranges;
 /// this helper identifies a completed word and keeps the last verified ranges
 /// aligned while the next language-service snapshot is in flight.
 enum SourceEditorAutocorrection {
@@ -1276,7 +1276,7 @@ enum SourceEditorAutocorrection {
                 return proseRange
             }
             // An edit crossing a semantic boundary invalidates that range until
-            // Tinymist returns the next authoritative snapshot.
+            // the language service returns the next authoritative snapshot.
             return nil
         }
     }

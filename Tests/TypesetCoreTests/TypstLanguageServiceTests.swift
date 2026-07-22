@@ -207,9 +207,9 @@ import Testing
     #expect(hover?.text == "Typst symbol `image`")
 }
 
-#if canImport(TypesetTinymist)
+#if canImport(TypesetLang)
 @Test func embeddedLanguageServiceReturnsCodeActionsWithUTF16Edits() async {
-    let service = EmbeddedTinymistLanguageService()
+    let service = EmbeddedLanguageService()
     let text = "α\n== Details"
     let caret = (text as NSString).range(of: "Details").location
     await service.updateFile(path: "main.typ", text: text)
@@ -228,7 +228,7 @@ import Testing
 }
 
 @Test func embeddedLanguageServiceReturnsCrossFileRenameEditsInUTF16() async {
-    let service = EmbeddedTinymistLanguageService()
+    let service = EmbeddedLanguageService()
     let main = "α\n#import \"defs.typ\": greet\n#greet(\"Ada\")"
     let defs = "#let greet(name) = [Hello #name]"
     await service.updateFile(path: "main.typ", text: main)
@@ -245,7 +245,7 @@ import Testing
 }
 
 @Test func embeddedLanguageServiceReturnsNestedSelectionRangesInUTF16() async {
-    let service = EmbeddedTinymistLanguageService()
+    let service = EmbeddedLanguageService()
     let text = "α #let value = image(\"plot.svg\")"
     await service.updateFile(path: "main.typ", text: text)
     let stringRange = (text as NSString).range(of: "\"plot.svg\"")
@@ -293,7 +293,7 @@ import Testing
 
 @Test func tinymistWorkspaceStoreMaterializesAndUpdatesFiles() async throws {
     let store = TinymistWorkspaceStore()
-    let documentID = "TypesetTinymistStore-\(UUID().uuidString)"
+    let documentID = "TypesetLangStore-\(UUID().uuidString)"
     let package = try DocumentPackage(files: [
         PackageFile(path: "main.typ", data: Data("= First".utf8)),
         PackageFile(path: "assets/readme.txt", data: Data("asset".utf8)),

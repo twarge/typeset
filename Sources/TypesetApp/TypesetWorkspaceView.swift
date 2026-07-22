@@ -242,7 +242,7 @@ struct TypesetWorkspaceView: View {
 
     private let renderer = TypstRenderer()
     private let languageService = TypstLanguageServiceFactory.make()
-    private let tinymistWorkspaceStore = TinymistWorkspaceStore()
+    private let languageWorkspaceStore = LanguageWorkspaceStore()
     #if os(macOS)
     // Title-bar + toolbar height. The editor pane reaches the top of the window
     // (it ignores the top safe area), so this pins how far down the code starts:
@@ -1910,7 +1910,7 @@ struct TypesetWorkspaceView: View {
         let package = document.package
         Task {
             do {
-                let root = try await tinymistWorkspaceStore.materialize(package: package, documentID: documentID)
+                let root = try await languageWorkspaceStore.materialize(package: package, documentID: documentID)
                 let packageStorage = try TypstPackageStorage.appSupportStorage()
                 try packageStorage.createDirectories()
                 await languageService.setWorkspace(rootURL: root, compileTarget: package.compileTargetPath)
@@ -1942,7 +1942,7 @@ struct TypesetWorkspaceView: View {
         let documentID = languageServiceDocumentID
         languageSyncTask?.cancel()
         languageSyncTask = Task {
-            _ = try? await tinymistWorkspaceStore.updateFile(
+            _ = try? await languageWorkspaceStore.updateFile(
                 documentID: documentID,
                 path: path,
                 data: Data(text.utf8)
@@ -2364,7 +2364,7 @@ struct TypesetWorkspaceView: View {
 
         let documentID = languageServiceDocumentID
         for (path, text) in updatedTexts {
-            _ = try? await tinymistWorkspaceStore.updateFile(
+            _ = try? await languageWorkspaceStore.updateFile(
                 documentID: documentID,
                 path: path,
                 data: Data(text.utf8)
@@ -2664,7 +2664,7 @@ struct TypesetWorkspaceView: View {
     private static func filteredHover(_ hover: TypstHoverInfo?, in _: String) -> TypstHoverInfo? {
         // Semantic filtering belongs to the language service. Rechecking with a
         // same-line Swift heuristic dropped legitimate symbols inside multiline
-        // code blocks even after Tinymist had identified them as code.
+        // code blocks even after the language service had identified them as code.
         hover
     }
 

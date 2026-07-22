@@ -1,5 +1,0 @@
-framework module TypesetTinymist {
-  umbrella header "TypesetTinymist.h"
-  export *
-  module * { export * }
-}

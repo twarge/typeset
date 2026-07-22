@@ -3,8 +3,8 @@
 
 import Foundation
 
-#if canImport(TypesetTinymist)
-import TypesetTinymist
+#if canImport(TypesetLang)
+import TypesetLang
 #endif
 
 /// Information about the embedded Typst toolchain.
@@ -17,9 +17,9 @@ public enum TypstRuntime {
     /// linked, so we fall back to the version of the pinned `Vendor/typst`
     /// submodule.
     public static let typstVersion: String = {
-        #if canImport(TypesetTinymist)
+        #if canImport(TypesetLang)
         if let pointer = typeset_typst_version() {
-            defer { typeset_tinymist_string_free(pointer) }
+            defer { typeset_lang_string_free(pointer) }
             let value = String(cString: pointer)
             if !value.isEmpty { return value }
         }

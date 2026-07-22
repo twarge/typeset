@@ -1,0 +1,5 @@
+framework module TypesetLang {
+  umbrella header "TypesetLang.h"
+  export *
+  module * { export * }
+}

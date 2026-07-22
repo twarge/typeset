@@ -508,16 +508,16 @@ public protocol TypstLanguageService: Sendable {
 
 public enum TypstLanguageServiceFactory {
     public static func make() -> any TypstLanguageService {
-        #if canImport(TypesetTinymist)
-        EmbeddedTinymistLanguageService()
+        #if canImport(TypesetLang)
+        EmbeddedLanguageService()
         #else
         BasicTypstLanguageService()
         #endif
     }
 }
 
-#if canImport(TypesetTinymist)
-import TypesetTinymist
+#if canImport(TypesetLang)
+import TypesetLang
 
 final class EmbeddedRustWorkQueue: @unchecked Sendable {
     static let languageService = EmbeddedRustWorkQueue(label: "com.twarge.typeset.embedded-rust.language-service")
@@ -554,26 +554,26 @@ final class EmbeddedRustWorkQueue: @unchecked Sendable {
     }
 }
 
-public actor EmbeddedTinymistLanguageService: TypstLanguageService {
+public actor EmbeddedLanguageService: TypstLanguageService {
     private let sessionAddress: UInt
     private var files: [String: String] = [:]
     private var packageFilePaths: Set<String> = []
     private var packageStorageConfigured = false
 
     public init() {
-        sessionAddress = UInt(bitPattern: typeset_tinymist_session_create())
+        sessionAddress = UInt(bitPattern: typeset_lang_session_create())
     }
 
     deinit {
         let sessionAddress = sessionAddress
         EmbeddedRustWorkQueue.languageService.enqueue {
-            typeset_tinymist_session_destroy(OpaquePointer(bitPattern: sessionAddress))
+            typeset_lang_session_destroy(OpaquePointer(bitPattern: sessionAddress))
         }
     }
 
     public func setDebugLoggingEnabled(_ isEnabled: Bool) async {
         _ = await call { session in
-            typeset_tinymist_set_debug_logging(session, isEnabled ? 1 : 0)
+            typeset_lang_set_debug_logging(session, isEnabled ? 1 : 0)
         }
     }
 
@@ -581,7 +581,7 @@ public actor EmbeddedTinymistLanguageService: TypstLanguageService {
         let rootPath = rootURL.path
         TypstLanguageDebug.log("setWorkspace root=\(rootPath) target=\(compileTarget)")
         _ = await call { session in
-            typeset_tinymist_set_workspace(session, rootPath, compileTarget)
+            typeset_lang_set_workspace(session, rootPath, compileTarget)
         }
         await ensurePackageStorageConfigured()
     }
@@ -593,7 +593,7 @@ public actor EmbeddedTinymistLanguageService: TypstLanguageService {
             "setPackageStorage local=\(localPath) exists=\(FileManager.default.fileExists(atPath: localPath)) cache=\(cachePath) exists=\(FileManager.default.fileExists(atPath: cachePath))"
         )
         _ = await call { session in
-            typeset_tinymist_set_package_storage(session, localPath, cachePath)
+            typeset_lang_set_package_storage(session, localPath, cachePath)
         }
         packageStorageConfigured = true
     }
@@ -606,20 +606,20 @@ public actor EmbeddedTinymistLanguageService: TypstLanguageService {
     public func updateFile(path: String, text: String) async {
         files[path] = text
         _ = await call { session in
-            typeset_tinymist_update_file(session, path, text)
+            typeset_lang_update_file(session, path, text)
         }
     }
 
     public func closeFile(path: String) async {
         files[path] = nil
         _ = await call { session in
-            typeset_tinymist_close_file(session, path)
+            typeset_lang_close_file(session, path)
         }
     }
 
     public func diagnostics() async -> [TypstSourceDiagnostic] {
         guard let data = await call({ session in
-            typeset_tinymist_diagnostics(session)
+            typeset_lang_diagnostics(session)
         }).data(using: .utf8),
               let response = try? JSONDecoder().decode(FFIDiagnosticResponse.self, from: data) else {
             return []
@@ -660,7 +660,7 @@ public actor EmbeddedTinymistLanguageService: TypstLanguageService {
 
         let offset = TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: utf16Offset, in: text)
         let rawResponse = await call({ session in
-            typeset_tinymist_completions(session, path, UInt32(max(0, offset)))
+            typeset_lang_completions(session, path, UInt32(max(0, offset)))
         })
         guard let data = rawResponse.data(using: .utf8),
               let response = try? JSONDecoder().decode(FFICompletionResponse.self, from: data) else {
@@ -695,7 +695,7 @@ public actor EmbeddedTinymistLanguageService: TypstLanguageService {
         let offset = TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: utf16Offset, in: text)
         TypstLanguageDebug.log("hover request path=\(path) utf16=\(utf16Offset) utf8=\(offset)")
         let rawResponse = await call({ session in
-            typeset_tinymist_hover(session, path, UInt32(max(0, offset)))
+            typeset_lang_hover(session, path, UInt32(max(0, offset)))
         })
         guard let data = rawResponse.data(using: .utf8),
               let response = try? JSONDecoder().decode(FFIHoverResponse.self, from: data) else {
@@ -725,7 +725,7 @@ public actor EmbeddedTinymistLanguageService: TypstLanguageService {
         let offset = TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: queryOffset, in: text)
         TypstLanguageDebug.log("signature request path=\(path) utf16=\(utf16Offset) query=\(queryOffset) utf8=\(offset)")
         let rawResponse = await call({ session in
-            typeset_tinymist_signature_help(session, path, UInt32(max(0, offset)))
+            typeset_lang_signature_help(session, path, UInt32(max(0, offset)))
         })
         guard let data = rawResponse.data(using: .utf8),
               let response = try? JSONDecoder().decode(FFISignatureHelpResponse.self, from: data) else {
@@ -804,7 +804,7 @@ public actor EmbeddedTinymistLanguageService: TypstLanguageService {
 
     public func proseRanges(path: String, ignoringCommandsAndArguments: Bool) async -> [TypstProseRange] {
         guard let data = await call({ session in
-            typeset_tinymist_prose_ranges_with_options(
+            typeset_lang_prose_ranges_with_options(
                 session,
                 path,
                 ignoringCommandsAndArguments ? 1 : 0
@@ -821,7 +821,7 @@ public actor EmbeddedTinymistLanguageService: TypstLanguageService {
 
     public func documentSymbols(path: String) async -> TypstDocumentSymbols {
         guard let data = await call({ session in
-            typeset_tinymist_document_symbols(session, path)
+            typeset_lang_document_symbols(session, path)
         }).data(using: .utf8),
               let response = try? JSONDecoder().decode(FFIDocumentSymbolsResponse.self, from: data) else {
             return .empty
@@ -860,7 +860,7 @@ public actor EmbeddedTinymistLanguageService: TypstLanguageService {
         let text = files[path] ?? ""
         let offset = TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: utf16Offset, in: text)
         guard let data = await call({ session in
-            typeset_tinymist_definition(session, path, UInt32(clamping: offset))
+            typeset_lang_definition(session, path, UInt32(clamping: offset))
         }).data(using: .utf8),
               let response = try? JSONDecoder().decode(FFIDefinitionResponse.self, from: data),
               let location = response.location else { return nil }
@@ -871,7 +871,7 @@ public actor EmbeddedTinymistLanguageService: TypstLanguageService {
         let text = files[path] ?? ""
         let offset = TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: utf16Offset, in: text)
         guard let data = await call({ session in
-            typeset_tinymist_references(session, path, UInt32(clamping: offset))
+            typeset_lang_references(session, path, UInt32(clamping: offset))
         }).data(using: .utf8),
               let response = try? JSONDecoder().decode(FFIReferencesResponse.self, from: data) else {
             return []
@@ -896,7 +896,7 @@ public actor EmbeddedTinymistLanguageService: TypstLanguageService {
             in: text
         )
         guard let data = await call({ session in
-            typeset_tinymist_selection_ranges(
+            typeset_lang_selection_ranges(
                 session,
                 path,
                 UInt32(clamping: start),
@@ -919,7 +919,7 @@ public actor EmbeddedTinymistLanguageService: TypstLanguageService {
         let text = files[path] ?? ""
         let offset = TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: utf16Offset, in: text)
         guard let data = await call({ session in
-            typeset_tinymist_prepare_rename(session, path, UInt32(clamping: offset))
+            typeset_lang_prepare_rename(session, path, UInt32(clamping: offset))
         }).data(using: .utf8),
               let response = try? JSONDecoder().decode(FFIPrepareRenameResponse.self, from: data),
               let preparation = response.preparation else { return nil }
@@ -941,7 +941,7 @@ public actor EmbeddedTinymistLanguageService: TypstLanguageService {
         let text = files[path] ?? ""
         let offset = TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: utf16Offset, in: text)
         guard let data = await call({ session in
-            typeset_tinymist_rename(session, path, UInt32(clamping: offset), newName)
+            typeset_lang_rename(session, path, UInt32(clamping: offset), newName)
         }).data(using: .utf8),
               let response = try? JSONDecoder().decode(FFIRenameResponse.self, from: data),
               let edit = response.edit else { return nil }
@@ -979,7 +979,7 @@ public actor EmbeddedTinymistLanguageService: TypstLanguageService {
             in: text
         )
         guard let data = await call({ session in
-            typeset_tinymist_format(
+            typeset_lang_format(
                 session,
                 path,
                 UInt32(clamping: start),
@@ -1016,7 +1016,7 @@ public actor EmbeddedTinymistLanguageService: TypstLanguageService {
             in: text
         )
         guard let data = await call({ session in
-            typeset_tinymist_code_actions(
+            typeset_lang_code_actions(
                 session,
                 path,
                 UInt32(clamping: start),
@@ -1066,7 +1066,7 @@ public actor EmbeddedTinymistLanguageService: TypstLanguageService {
         return await EmbeddedRustWorkQueue.languageService.run {
             let session = OpaquePointer(bitPattern: sessionAddress)
             guard let pointer = body(session) else { return "" }
-            defer { typeset_tinymist_string_free(pointer) }
+            defer { typeset_lang_string_free(pointer) }
             return String(cString: pointer)
         }
     }

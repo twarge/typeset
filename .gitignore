@@ -7,8 +7,8 @@ build/
 dist/
 DerivedData/
 Vendor/Build/
-Vendor/TypesetTinymist.xcframework/**/TypesetTinymist.framework/TypesetTinymist
-Vendor/typeset-tinymist-ffi/target/
+Vendor/TypesetLang.xcframework/**/TypesetLang.framework/TypesetLang
+Vendor/typeset-lang-ffi/target/
 *.xcuserstate
 *.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
