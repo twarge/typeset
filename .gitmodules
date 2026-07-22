@@ -1,6 +1,3 @@
 [submodule "Vendor/typst"]
 	path = Vendor/typst
 	url = https://github.com/typst/typst.git
-[submodule "Vendor/tinymist"]
-	path = Vendor/tinymist
-	url = https://github.com/Myriad-Dreamin/tinymist.git
