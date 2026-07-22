@@ -325,6 +325,13 @@ private struct LanguageDocumentationBlock: Identifiable {
         case paragraph(String)
         case code(language: String?, text: String)
         case bullet(String)
+        /// A parameter entry: name plus its accepted types and specification
+        /// flags (required/positional/...), rendered like the official
+        /// typst.app reference (name + colored type pills + chips).
+        case parameter(name: String, types: [String], flags: [String], defaultValue: String?)
+        /// The function's parameter summary from a `typst-signature` fence:
+        /// header line, `name: type | type` rows, and a return-type footer.
+        case signature(text: String, isElement: Bool)
     }
 
     let id: Int
@@ -337,9 +344,16 @@ private struct LanguageDocumentationBlock: Identifiable {
         var codeLines: [String] = []
         var codeLanguage: String?
         var isInCodeFence = false
+        var openBullet: String?
 
         func append(_ content: Content) {
             blocks.append(LanguageDocumentationBlock(id: blocks.count, content: content))
+        }
+
+        func flushBullet() {
+            guard let bullet = openBullet else { return }
+            openBullet = nil
+            append(.bullet(bullet))
         }
 
         func flushParagraph() {
@@ -359,7 +373,11 @@ private struct LanguageDocumentationBlock: Identifiable {
                 .trimmingCharacters(in: .newlines)
             codeLines.removeAll(keepingCapacity: true)
             if !text.isEmpty {
-                append(.code(language: codeLanguage, text: text))
+                if let language = codeLanguage, language.hasPrefix("typst-signature") {
+                    append(.signature(text: text, isElement: language.contains("element")))
+                } else {
+                    append(.code(language: codeLanguage, text: text))
+                }
             }
             codeLanguage = nil
         }
@@ -371,6 +389,7 @@ private struct LanguageDocumentationBlock: Identifiable {
                     flushCode()
                     isInCodeFence = false
                 } else {
+                    flushBullet()
                     flushParagraph()
                     let language = String(trimmed.dropFirst(3))
                         .trimmingCharacters(in: .whitespaces)
@@ -386,16 +405,23 @@ private struct LanguageDocumentationBlock: Identifiable {
             }
 
             if trimmed.isEmpty {
+                flushBullet()
                 flushParagraph()
                 continue
             }
 
             if let heading = heading(in: trimmed) {
+                flushBullet()
                 flushParagraph()
                 append(.heading(level: heading.level, text: heading.text))
             } else if trimmed.hasPrefix("- ") {
+                flushBullet()
                 flushParagraph()
-                append(.bullet(String(trimmed.dropFirst(2))))
+                openBullet = String(trimmed.dropFirst(2))
+            } else if openBullet != nil {
+                // Lazy continuation: doc comments hard-wrap long bullets; the
+                // follow-on lines belong to the bullet, not a new paragraph.
+                openBullet! += " " + trimmed
             } else {
                 paragraphLines.append(line)
             }
@@ -404,8 +430,50 @@ private struct LanguageDocumentationBlock: Identifiable {
         if isInCodeFence {
             flushCode()
         }
+        flushBullet()
         flushParagraph()
-        return blocks
+        return groupingParameters(blocks)
+    }
+
+    /// Folds the `## name` + ```typst type: ... / flags: ... / default: ...```
+    /// blocks the documentation backend emits for each parameter into single
+    /// parameter blocks.
+    private static func groupingParameters(_ blocks: [LanguageDocumentationBlock]) -> [LanguageDocumentationBlock] {
+        var grouped: [LanguageDocumentationBlock] = []
+        var index = 0
+        while index < blocks.count {
+            if case .heading(let level, let name) = blocks[index].content, level == 2,
+               index + 1 < blocks.count,
+               case .code(let language, let code) = blocks[index + 1].content,
+               language == "typst", code.hasPrefix("type: ") {
+                var types: [String] = []
+                var flags: [String] = []
+                var defaultValue: String?
+                for line in code.components(separatedBy: "\n") {
+                    if line.hasPrefix("type: ") {
+                        types = line.dropFirst("type: ".count)
+                            .split(separator: "|")
+                            .map { $0.trimmingCharacters(in: .whitespaces) }
+                            .filter { !$0.isEmpty }
+                    } else if line.hasPrefix("flags: ") {
+                        flags = line.dropFirst("flags: ".count)
+                            .split(separator: " ")
+                            .map(String.init)
+                    } else if line.hasPrefix("default: ") {
+                        defaultValue = String(line.dropFirst("default: ".count))
+                    }
+                }
+                grouped.append(LanguageDocumentationBlock(
+                    id: grouped.count,
+                    content: .parameter(name: name, types: types, flags: flags, defaultValue: defaultValue)
+                ))
+                index += 2
+                continue
+            }
+            grouped.append(LanguageDocumentationBlock(id: grouped.count, content: blocks[index].content))
+            index += 1
+        }
+        return grouped
     }
 
     private static func heading(in line: String) -> (level: Int, text: String)? {
@@ -416,6 +484,89 @@ private struct LanguageDocumentationBlock: Identifiable {
             }
         }
         return nil
+    }
+}
+
+/// One `name: type | type = default,` row of a signature summary or of a
+/// signature-help label.
+private struct SignatureSummaryRow {
+    var name: String
+    var types: [String]
+    var defaultValue: String?
+
+    init?(line: String) {
+        var content = line.trimmingCharacters(in: .whitespaces)
+        if content.hasSuffix(",") {
+            content = String(content.dropLast())
+        }
+        guard let colon = content.range(of: ": ") else { return nil }
+        name = String(content[..<colon.lowerBound])
+        var rest = String(content[colon.upperBound...])
+        if let equals = rest.range(of: " = ") {
+            defaultValue = String(rest[equals.upperBound...])
+            rest = String(rest[..<equals.lowerBound])
+        }
+        types = rest.split(separator: "|")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard !name.isEmpty, !types.isEmpty else { return nil }
+    }
+
+    /// Whether every type token looks like a type name or literal value, as
+    /// opposed to arbitrary code (package defaults, expressions) that should
+    /// stay as plain text.
+    var typesArePillable: Bool {
+        types.allSatisfy { type in
+            if type.hasPrefix("\""), type.hasSuffix("\""), type.count >= 2 {
+                return true
+            }
+            return type.first?.isLowercase == true
+                && type.allSatisfy { $0.isLowercase || $0.isNumber || $0 == "-" || $0 == "." }
+        }
+    }
+}
+
+/// Lays out pills and text runs horizontally, wrapping to new rows when the
+/// available width runs out — the parameter rows can hold many type pills.
+private nonisolated struct DocumentationFlowLayout: Layout {
+    var spacing: CGFloat = 5
+    var rowSpacing: CGFloat = 4
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var maxX: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width {
+                x = 0
+                y += rowHeight + rowSpacing
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            maxX = max(maxX, x - spacing)
+        }
+        return CGSize(width: proposal.width ?? maxX, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + rowSpacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }
 
@@ -443,7 +594,11 @@ private struct SourceEditorLanguageOverlay: View {
             let maxX = max(8, proxy.size.width - size.width - 8)
             let x = min(max(8, anchor.x - preferredArrowX), maxX)
             let preferredY = anchor.y
-            let fallbackY = anchor.y - size.height
+            // When flipping above the caret, clear the caret's whole line: the
+            // anchor sits at the line's bottom, so lift the panel by one editor
+            // line height and let the arrow point at the line's top instead of
+            // covering the text being edited.
+            let fallbackY = anchor.y - size.height - editorLineHeight
             let placeBelow = preferredY + size.height <= proxy.size.height - 8
             let y = placeBelow ? preferredY : max(8, fallbackY)
             let arrowX = min(max(18, anchor.x - x), size.width - 18)
@@ -470,6 +625,7 @@ private struct SourceEditorLanguageOverlay: View {
                         hoverPanel(
                             hoverInfo.text,
                             diagnostic: cursorDiagnostic,
+                            documentationURL: hoverInfo.documentationURL,
                             contentHeight: size.height - PopoverBubbleShape.arrowHeight
                         )
                     }
@@ -505,7 +661,7 @@ private struct SourceEditorLanguageOverlay: View {
         } else if !completions.isEmpty {
             return CGSize(
                 width: min(320, availableWidth),
-                height: min(CGFloat(min(completions.count, 8)) * 48 + 34, availableHeight)
+                height: min(CGFloat(min(completions.count, 8)) * 48 + 8, availableHeight)
             )
         } else if signatureHelp != nil {
             return CGSize(width: min(560, availableWidth), height: min(360, availableHeight))
@@ -533,6 +689,17 @@ private struct SourceEditorLanguageOverlay: View {
     /// medium weight. Shared by the diagnostic popover so it matches the badge.
     private var diagnosticFontSize: CGFloat {
         max(9, CGFloat(fontSize) - 2)
+    }
+
+    /// The editor's line height for the current font — how far the flipped
+    /// popover must rise to sit above the caret's line rather than on it.
+    private var editorLineHeight: CGFloat {
+        let font = SourceEditorFont.regular(size: fontSize)
+        #if os(macOS)
+        return NSLayoutManager().defaultLineHeight(for: font)
+        #else
+        return font.lineHeight
+        #endif
     }
 
     /// Height of `message` wrapped to `width` in the badge font, so `panelSize`
@@ -585,17 +752,6 @@ private struct SourceEditorLanguageOverlay: View {
                 }
             }
 
-            Divider()
-                .opacity(0.45)
-
-            Text("Dismiss")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture(perform: onCompletionDismiss)
         }
     }
 
@@ -705,6 +861,14 @@ private struct SourceEditorLanguageOverlay: View {
         #endif
     }
 
+    private static var panelBackground: Color {
+        #if os(macOS)
+        Color(nsColor: .controlBackgroundColor)
+        #else
+        Color(uiColor: .secondarySystemBackground)
+        #endif
+    }
+
     private func calloutPanel<Content: View>(
         arrowX: CGFloat,
         pointsUp: Bool,
@@ -725,9 +889,11 @@ private struct SourceEditorLanguageOverlay: View {
             textColor = .black
             strokeColor = Color.orange.opacity(0.7)
         default:
-            fill = AnyShapeStyle(.regularMaterial)
+            // Solid, elevated background (rather than a translucent material) so
+            // documentation reads at full contrast over any editor content.
+            fill = AnyShapeStyle(Self.panelBackground)
             textColor = .primary
-            strokeColor = Color.secondary.opacity(0.18)
+            strokeColor = Color.primary.opacity(0.16)
         }
 
         return ZStack(alignment: .topLeading) {
@@ -760,6 +926,7 @@ private struct SourceEditorLanguageOverlay: View {
     private func hoverPanel(
         _ text: String,
         diagnostic: TypstSourceDiagnostic?,
+        documentationURL: URL?,
         contentHeight: CGFloat
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -779,8 +946,31 @@ private struct SourceEditorLanguageOverlay: View {
                     .padding(.vertical, 10)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            documentationLinkFooter(documentationURL)
         }
         .frame(height: max(64, contentHeight))
+    }
+
+    /// A pinned footer linking to the symbol's official typst.app page.
+    @ViewBuilder
+    private func documentationLinkFooter(_ url: URL?) -> some View {
+        if let url {
+            Divider()
+            Link(destination: url) {
+                HStack(spacing: 5) {
+                    Image(systemName: "book.closed")
+                    Text("typst.app documentation")
+                    Spacer(minLength: 0)
+                    Image(systemName: "arrow.up.right")
+                }
+                .font(.caption)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.accentColor)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+        }
     }
 
     private func inlineMarkdownText(_ markdown: String) -> Text {
@@ -816,7 +1006,7 @@ private struct SourceEditorLanguageOverlay: View {
         case .paragraph(let text):
             inlineMarkdownText(text)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.primary.opacity(0.85))
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .code(let language, let text):
@@ -844,10 +1034,165 @@ private struct SourceEditorLanguageOverlay: View {
                     .foregroundStyle(.secondary)
                 inlineMarkdownText(text)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.primary.opacity(0.85))
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+        case .parameter(let name, let types, let flags, let defaultValue):
+            DocumentationFlowLayout(spacing: 6, rowSpacing: 5) {
+                Text(name)
+                    .font(.system(.caption, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(.primary)
+                ForEach(types, id: \.self) { type in
+                    typePill(type)
+                }
+                ForEach(flags, id: \.self) { flag in
+                    specificationChip(flag)
+                }
+                if let defaultValue {
+                    Text("= \(defaultValue)")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.top, 6)
+        case .signature(let text, let isElement):
+            signatureSummaryView(text, isElement: isElement)
+        }
+    }
+
+    /// The colored parameter summary for a `typst-signature` fence, matching
+    /// the official documentation's "Parameters" box.
+    private func signatureSummaryView(_ text: String, isElement: Bool) -> some View {
+        let lines = text.components(separatedBy: "\n")
+        return VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                signatureSummaryLine(line, isFirst: index == 0, isElement: isElement)
+            }
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 5))
+    }
+
+    @ViewBuilder
+    private func signatureSummaryLine(_ line: String, isFirst: Bool, isElement: Bool) -> some View {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if isFirst, trimmed.hasSuffix("(") {
+            HStack(spacing: 6) {
+                HStack(spacing: 0) {
+                    Text(trimmed.dropLast())
+                        .font(.system(.caption, design: .monospaced).weight(.semibold))
+                        .foregroundStyle(.blue)
+                    Text("(")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.primary)
+                }
+                if isElement {
+                    specificationChip("element")
+                }
+            }
+        } else if trimmed.hasPrefix(")") {
+            HStack(spacing: 6) {
+                Text(")")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.primary)
+                if let arrow = trimmed.range(of: "-> ") {
+                    Text("→")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(returnTypes(String(trimmed[arrow.upperBound...])), id: \.self) { type in
+                        typePill(type)
+                    }
+                }
+            }
+        } else if let row = SignatureSummaryRow(line: trimmed), row.typesArePillable {
+            DocumentationFlowLayout(spacing: 5, rowSpacing: 4) {
+                Text(row.name + ":")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.primary)
+                ForEach(row.types, id: \.self) { type in
+                    typePill(type)
+                }
+                if let defaultValue = row.defaultValue {
+                    Text("= \(defaultValue)")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Text(",")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.leading, 12)
+        } else {
+            Text(line)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.primary)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func returnTypes(_ label: String) -> [String] {
+        label.split(separator: "|")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// A specification chip like the official documentation's "Required",
+    /// "Positional", "Settable", and "Element" markers.
+    private func specificationChip(_ label: String) -> some View {
+        Text(label.capitalized)
+            .font(.system(size: 9, weight: .medium))
+            .italic()
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1.5)
+            .background(Color.secondary.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
+            .foregroundStyle(.secondary)
+    }
+
+    /// A colored type badge matching the official documentation's pills.
+    private func typePill(_ type: String) -> some View {
+        let color = Self.typePillColor(type)
+        return Text(type)
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.16), in: Capsule())
+            .foregroundStyle(color)
+    }
+
+    private static func typePillColor(_ type: String) -> Color {
+        if type.hasPrefix("\"") {
+            return .green
+        }
+        let base = type.trimmingCharacters(in: CharacterSet(charactersIn: "\"'`"))
+        switch base {
+        case "content":
+            return .teal
+        case "str", "string", "regex", "bytes":
+            return .green
+        case "int", "float", "decimal", "version":
+            return .purple
+        case "bool":
+            return .orange
+        case "length", "relative", "ratio", "fraction", "angle":
+            return .brown
+        case "auto", "none":
+            return .red
+        case "function":
+            return .blue
+        case "color", "gradient", "tiling", "pattern", "stroke":
+            return .indigo
+        case "alignment", "direction", "side":
+            return .cyan
+        case "label", "selector", "location", "counter", "state":
+            return .pink
+        default:
+            return .secondary
         }
     }
 
@@ -866,29 +1211,33 @@ private struct SourceEditorLanguageOverlay: View {
         let signature = help.signatures[min(max(0, help.activeSignature), max(0, help.signatures.count - 1))]
         let parameter = signature.parameters.indices.contains(help.activeParameter) ? signature.parameters[help.activeParameter] : nil
 
-        return ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 10) {
-                formattedSignature(signature, activeParameter: help.activeParameter)
-                    .padding(.bottom, 2)
+        return VStack(alignment: .leading, spacing: 0) {
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 10) {
+                    formattedSignature(signature, activeParameter: help.activeParameter)
+                        .padding(.bottom, 2)
 
-                if let parameter {
-                    Text(parameter.label)
-                        .font(.caption.weight(.semibold))
-                    if !parameter.documentation.isEmpty {
-                        documentationView(parameter.documentation)
+                    if let parameter {
+                        Text(parameter.label)
+                            .font(.system(.caption, design: .monospaced).weight(.semibold))
+                        if !parameter.documentation.isEmpty {
+                            documentationView(parameter.documentation)
+                        }
+                    }
+
+                    if !signature.documentation.isEmpty {
+                        if parameter != nil {
+                            Divider()
+                        }
+                        documentationView(signature.documentation)
                     }
                 }
-
-                if !signature.documentation.isEmpty {
-                    if parameter != nil {
-                        Divider()
-                    }
-                    documentationView(signature.documentation)
-                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            documentationLinkFooter(help.documentationURL)
         }
         .frame(height: max(80, contentHeight), alignment: .top)
     }
@@ -897,22 +1246,87 @@ private struct SourceEditorLanguageOverlay: View {
     private func formattedSignature(_ signature: TypstSignatureInformation, activeParameter: Int) -> some View {
         if let layout = SignatureDisplayLayout(signature.label) {
             VStack(alignment: .leading, spacing: 3) {
-                signatureLine(layout.header)
+                signatureHeaderLine(layout.header)
 
                 ForEach(Array(layout.parameters.enumerated()), id: \.offset) { index, parameter in
-                    signatureLine(parameter + (index == layout.parameters.count - 1 ? "" : ","))
-                        .foregroundStyle(index == activeParameter ? Color.accentColor : Color.primary)
-                        .fontWeight(index == activeParameter ? .semibold : .regular)
-                        .padding(.leading, 14)
+                    signatureParameterLine(
+                        parameter,
+                        isActive: index == activeParameter,
+                        isLast: index == layout.parameters.count - 1
+                    )
+                    .padding(.leading, 14)
                 }
 
-                signatureLine(layout.footer)
+                signatureFooterLine(layout.footer)
             }
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             signatureLine(signature.label)
                 .textSelection(.enabled)
+        }
+    }
+
+    @ViewBuilder
+    private func signatureHeaderLine(_ header: String) -> some View {
+        if header.hasSuffix("(") {
+            HStack(spacing: 0) {
+                Text(header.dropLast())
+                    .font(.system(.callout, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(.blue)
+                Text("(")
+                    .font(.system(.callout, design: .monospaced))
+            }
+        } else {
+            signatureLine(header)
+        }
+    }
+
+    @ViewBuilder
+    private func signatureParameterLine(_ parameter: String, isActive: Bool, isLast: Bool) -> some View {
+        if let row = SignatureSummaryRow(line: parameter), row.typesArePillable {
+            DocumentationFlowLayout(spacing: 5, rowSpacing: 4) {
+                Text(row.name + ":")
+                    .font(.system(.callout, design: .monospaced))
+                    .fontWeight(isActive ? .semibold : .regular)
+                    .foregroundStyle(isActive ? Color.accentColor : Color.primary)
+                ForEach(row.types, id: \.self) { type in
+                    typePill(type)
+                }
+                if let defaultValue = row.defaultValue {
+                    Text("= \(defaultValue)")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                if !isLast {
+                    Text(",")
+                        .font(.system(.callout, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        } else {
+            signatureLine(parameter + (isLast ? "" : ","))
+                .foregroundStyle(isActive ? Color.accentColor : Color.primary)
+                .fontWeight(isActive ? .semibold : .regular)
+        }
+    }
+
+    @ViewBuilder
+    private func signatureFooterLine(_ footer: String) -> some View {
+        if let arrow = footer.range(of: "-> "), footer.hasPrefix(")") {
+            HStack(spacing: 6) {
+                Text(")")
+                    .font(.system(.callout, design: .monospaced))
+                Text("→")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                ForEach(returnTypes(String(footer[arrow.upperBound...])), id: \.self) { type in
+                    typePill(type)
+                }
+            }
+        } else {
+            signatureLine(footer)
         }
     }
 
@@ -930,6 +1344,8 @@ private struct SourceEditorLanguageOverlay: View {
             return "function"
         case "file":
             return "doc"
+        case "reference":
+            return "tag"
         default:
             return "textformat"
         }
@@ -945,6 +1361,9 @@ private struct SignatureDisplayLayout {
     var footer: String
 
     init?(_ signature: String) {
+        // Multi-line labels (keyword syntax forms) are pre-formatted; render
+        // them verbatim instead of splitting on parameter commas.
+        guard !signature.contains("\n") else { return nil }
         let characters = Array(signature)
         guard let open = characters.firstIndex(of: "(") else { return nil }
 
@@ -1123,6 +1542,73 @@ enum SourceEditorSymbol {
         CharacterSet.alphanumerics.contains(UnicodeScalar(character) ?? "\0")
             || character == 95 || character == 45 || character == 46
             || character == 64 || character == 60 || character == 62
+    }
+
+    /// Statement keywords the language service documents (`#import`, `#set`,
+    /// ...); help is offered for these even without a call form. Mirrors the
+    /// FFI's keyword documentation table.
+    static let statementKeywords: Set<String> = [
+        "import", "include", "let", "set", "show", "if", "else",
+        "for", "while", "break", "continue", "return", "context", "as", "in",
+    ]
+
+    /// The range to request function or keyword help for: the name of the
+    /// function call at `location`, or a documented keyword. Keywords are
+    /// suppressed in prose, where words like "in" and "for" are just English.
+    static func helpRange(in text: String, at location: Int, isProse: Bool) -> NSRange? {
+        if let call = functionCallRange(in: text, at: location) {
+            return call
+        }
+        guard !isProse,
+              let range = range(in: text, at: location),
+              statementKeywords.contains((text as NSString).substring(with: range))
+        else { return nil }
+        return range
+    }
+
+    /// The name range of the function call whose identifier touches
+    /// `location` and is followed (ignoring whitespace) by an open paren.
+    static func functionCallRange(in text: String, at location: Int) -> NSRange? {
+        let text = text as NSString
+        let length = text.length
+        guard length > 0 else { return nil }
+
+        var probe = min(max(0, location), length - 1)
+        if !isFunctionSymbolCharacter(text.character(at: probe)) {
+            guard probe > 0, isFunctionSymbolCharacter(text.character(at: probe - 1)) else {
+                return nil
+            }
+            probe -= 1
+        }
+
+        var start = probe
+        while start > 0, isFunctionSymbolCharacter(text.character(at: start - 1)) {
+            start -= 1
+        }
+        var end = probe + 1
+        while end < length, isFunctionSymbolCharacter(text.character(at: end)) {
+            end += 1
+        }
+
+        let symbol = text.substring(with: NSRange(location: start, length: end - start))
+        guard !symbol.hasPrefix("."), !symbol.hasSuffix("."), !symbol.contains("..") else {
+            return nil
+        }
+
+        var next = end
+        while next < length,
+              CharacterSet.whitespacesAndNewlines.contains(UnicodeScalar(text.character(at: next)) ?? "\0") {
+            next += 1
+        }
+        guard next < length, text.character(at: next) == 40 else { return nil }
+        return NSRange(location: start, length: end - start)
+    }
+
+    private static func isFunctionSymbolCharacter(_ character: unichar) -> Bool {
+        CharacterSet.alphanumerics.contains(UnicodeScalar(character) ?? "\0")
+            || character == 95
+            || character == 45
+            || character == 46
     }
 }
 

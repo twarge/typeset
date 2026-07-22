@@ -633,10 +633,21 @@ struct PlatformTextView: UIViewRepresentable {
             let quickActions = UIAction(title: "Quick Actions…", image: UIImage(systemName: "lightbulb")) { [weak self] _ in
                 self?.onShowCodeActions(actionRange, actionAnchor)
             }
-            guard let symbolRange = SourceEditorSymbol.range(in: textView.text ?? "", at: location) else {
+            let text = textView.text ?? ""
+            guard let symbolRange = SourceEditorSymbol.range(in: text, at: location) else {
                 return UIMenu(children: [quickActions, UIMenu(options: .displayInline, children: suggestedActions)])
             }
             let anchor = navigationAnchor(for: symbolRange, in: textView)
+            var children: [UIMenuElement] = [quickActions]
+            if let helpRange = SourceEditorSymbol.helpRange(in: text, at: location, isProse: isProseLocation(location)) {
+                let helpAnchor = navigationAnchor(for: helpRange, in: textView)
+                children.append(UIAction(title: "Show Function Help", image: UIImage(systemName: "questionmark.circle")) { [weak self] _ in
+                    self?.onShowFunctionHelp(helpRange, helpAnchor)
+                })
+                children.append(UIAction(title: "Show Signature Help", image: UIImage(systemName: "function")) { [weak self] _ in
+                    self?.onShowSignatureHelp(helpRange, helpAnchor)
+                })
+            }
             let definition = UIAction(title: "Go to Definition", image: UIImage(systemName: "arrow.turn.down.right")) { [weak self] _ in
                 self?.onGoToDefinition(symbolRange, anchor)
             }
@@ -646,7 +657,12 @@ struct PlatformTextView: UIViewRepresentable {
             let rename = UIAction(title: "Rename Symbol…", image: UIImage(systemName: "pencil")) { [weak self] _ in
                 self?.onRenameSymbol(symbolRange, anchor)
             }
-            return UIMenu(children: [quickActions, definition, rename, references, UIMenu(options: .displayInline, children: suggestedActions)])
+            children += [definition, rename, references, UIMenu(options: .displayInline, children: suggestedActions)]
+            return UIMenu(children: children)
+        }
+
+        private func isProseLocation(_ location: Int) -> Bool {
+            proseRanges.contains { NSLocationInRange(location, $0.range) }
         }
 
         private func focus(_ textView: UITextView, remainingAttempts: Int) {
@@ -980,9 +996,11 @@ struct PlatformTextView: UIViewRepresentable {
                               misspelled.location >= proseRange.range.location,
                               NSMaxRange(misspelled) <= rangeEnd
                         else { break }
+                        // Match the macOS native spelling squiggle's look (UIKit
+                        // has no spelling-state attribute): red dotted underline.
                         addUnderline(
                             NSUnderlineStyle.patternDot.rawValue | NSUnderlineStyle.single.rawValue,
-                            color: .systemBlue,
+                            color: .systemRed,
                             range: misspelled
                         )
                         let nextLocation = NSMaxRange(misspelled)

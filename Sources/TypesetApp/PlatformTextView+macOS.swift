@@ -92,6 +92,9 @@ struct PlatformTextView: NSViewRepresentable {
         }
         textView.onShowFunctionHelp = onShowFunctionHelp
         textView.onShowSignatureHelp = onShowSignatureHelp
+        textView.isProseLocation = { [weak coordinator = context.coordinator] location in
+            coordinator?.isProseLocation(location) ?? false
+        }
         textView.onGoToDefinition = onGoToDefinition
         textView.onFindReferences = onFindReferences
         textView.onRenameSymbol = onRenameSymbol
@@ -160,6 +163,9 @@ struct PlatformTextView: NSViewRepresentable {
         if let packageTextView = textView as? PackagePathTextView {
             packageTextView.onShowFunctionHelp = onShowFunctionHelp
             packageTextView.onShowSignatureHelp = onShowSignatureHelp
+            packageTextView.isProseLocation = { [weak coordinator = context.coordinator] location in
+                coordinator?.isProseLocation(location) ?? false
+            }
             packageTextView.onGoToDefinition = onGoToDefinition
             packageTextView.onFindReferences = onFindReferences
             packageTextView.onRenameSymbol = onRenameSymbol
@@ -862,6 +868,10 @@ struct PlatformTextView: NSViewRepresentable {
             return false
         }
 
+        func isProseLocation(_ location: Int) -> Bool {
+            proseRanges.contains { NSLocationInRange(location, $0.range) }
+        }
+
         func updateProseRanges(
             _ ranges: [TypstProseRange],
             isCurrent: Bool,
@@ -1070,9 +1080,11 @@ struct PlatformTextView: NSViewRepresentable {
                         )
                         guard misspelled.location != NSNotFound else { break }
                         let range = NSRange(location: proseRange.range.location + misspelled.location, length: misspelled.length)
+                        // The genuine macOS spelling squiggle: the spelling-state
+                        // temporary attribute makes AppKit draw its native red
+                        // dotted underline, exactly like the system checker.
                         layoutManager.addTemporaryAttributes([
-                            .underlineStyle: NSUnderlineStyle.patternDot.rawValue | NSUnderlineStyle.single.rawValue,
-                            .underlineColor: NSColor.systemBlue,
+                            .spellingState: NSAttributedString.SpellingState.spelling.rawValue,
                         ], forCharacterRange: range)
                         let nextLocation = NSMaxRange(misspelled)
                         guard nextLocation > searchLocation else { break }
@@ -1143,6 +1155,9 @@ struct PlatformTextView: NSViewRepresentable {
         var onCheckSpelling: (() -> Bool)?
         var onShowFunctionHelp: ((NSRange, CGPoint) -> Void)?
         var onShowSignatureHelp: ((NSRange, CGPoint) -> Void)?
+        /// Whether a character index falls inside prose (used to suppress
+        /// keyword help for English words like "in" and "for").
+        var isProseLocation: ((Int) -> Bool)?
         var onGoToDefinition: ((NSRange, CGPoint) -> Void)?
         var onFindReferences: ((NSRange, CGPoint) -> Void)?
         var onRenameSymbol: ((NSRange, CGPoint) -> Void)?
@@ -1264,7 +1279,11 @@ struct PlatformTextView: NSViewRepresentable {
 
             guard let symbolRange = SourceEditorSymbol.range(in: string, at: location) else { return menu }
             contextSymbolRange = symbolRange
-            let functionRange = functionCallRange(at: location)
+            let functionRange = SourceEditorSymbol.helpRange(
+                in: string,
+                at: location,
+                isProse: isProseLocation?(location) == true
+            )
             contextFunctionRange = functionRange
 
             let definition = NSMenuItem(
@@ -1364,49 +1383,6 @@ struct PlatformTextView: NSViewRepresentable {
             let representedRange = (sender.representedObject as? NSValue)?.rangeValue
             guard let range = representedRange ?? contextSymbolRange else { return }
             action?(range, languageOverlayAnchor(for: range))
-        }
-
-        private func functionCallRange(at location: Int) -> NSRange? {
-            let text = string as NSString
-            let length = text.length
-            guard length > 0 else { return nil }
-
-            var probe = min(max(0, location), length - 1)
-            if !Self.isFunctionSymbolCharacter(text.character(at: probe)) {
-                guard probe > 0, Self.isFunctionSymbolCharacter(text.character(at: probe - 1)) else {
-                    return nil
-                }
-                probe -= 1
-            }
-
-            var start = probe
-            while start > 0, Self.isFunctionSymbolCharacter(text.character(at: start - 1)) {
-                start -= 1
-            }
-            var end = probe + 1
-            while end < length, Self.isFunctionSymbolCharacter(text.character(at: end)) {
-                end += 1
-            }
-
-            let symbol = text.substring(with: NSRange(location: start, length: end - start))
-            guard !symbol.hasPrefix("."), !symbol.hasSuffix("."), !symbol.contains("..") else {
-                return nil
-            }
-
-            var next = end
-            while next < length,
-                  CharacterSet.whitespacesAndNewlines.contains(UnicodeScalar(text.character(at: next)) ?? "\0") {
-                next += 1
-            }
-            guard next < length, text.character(at: next) == 40 else { return nil }
-            return NSRange(location: start, length: end - start)
-        }
-
-        private static func isFunctionSymbolCharacter(_ character: unichar) -> Bool {
-            CharacterSet.alphanumerics.contains(UnicodeScalar(character) ?? "\0")
-                || character == 95
-                || character == 45
-                || character == 46
         }
 
         private func languageOverlayAnchor(for range: NSRange) -> CGPoint {

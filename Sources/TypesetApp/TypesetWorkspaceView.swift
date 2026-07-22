@@ -214,7 +214,7 @@ struct TypesetWorkspaceView: View {
     /// so this lets the watcher tell a genuine external write (disk != baseline
     /// and disk != editor) from our own saves echoing back (disk == editor).
     @State private var managedFileDiskHash: Int?
-    @AppStorage("workspace.splitBehavior") private var splitBehaviorRaw = SplitBehavior.automatic.rawValue
+    @AppStorage("workspace.splitBehavior") private var splitBehaviorRaw = SplitBehavior.sideBySide.rawValue
     @AppStorage("workspace.tallSplitThreshold") private var tallSplitThreshold = 1.12
     @AppStorage("appearance.theme") private var themePreferenceRaw = ThemePreference.system.rawValue
     @AppStorage("sourceEditor.imageInsertTemplate") private var imageInsertTemplate = SourceEditorDropSnippet.defaultImageTemplate
@@ -1268,7 +1268,7 @@ struct TypesetWorkspaceView: View {
     }
 
     private var splitBehavior: SplitBehavior {
-        SplitBehavior(rawValue: splitBehaviorRaw) ?? .automatic
+        SplitBehavior(rawValue: splitBehaviorRaw) ?? .sideBySide
     }
 
     private var themePreference: ThemePreference {
@@ -2923,7 +2923,10 @@ struct TypesetWorkspaceView: View {
         let nsText = text as NSString
         let range = completionFilterRange(in: nsText, at: location)
         let typedPrefix = range.length > 0 ? nsText.substring(with: range) : ""
-        return TypstCompletionRanking.filteredAndSorted(completions, typedPrefix: typedPrefix)
+        // Package machinery (elembic, lilaq, …) publishes `__`-prefixed internal
+        // labels and symbols; they're never something a user wants to reference.
+        let visible = completions.filter { !$0.label.hasPrefix("__") }
+        return TypstCompletionRanking.filteredAndSorted(visible, typedPrefix: typedPrefix)
     }
 
     private static func completionFilterRange(in nsText: NSString, at location: Int) -> NSRange {
@@ -2957,7 +2960,9 @@ struct TypesetWorkspaceView: View {
         let clampedLocation = min(max(0, location), nsText.length)
         guard clampedLocation > 0 else { return false }
         let previous = nsText.character(at: clampedLocation - 1)
-        guard isCompletionCharacter(previous) else {
+        // Sigils request completions immediately: `#` opens the function list,
+        // `@` the label/bibliography references (document-aware).
+        guard isCompletionCharacter(previous) || previous == 35 || previous == 64 else {
             return false
         }
 
@@ -2970,7 +2975,8 @@ struct TypesetWorkspaceView: View {
         } else {
             isCommandCandidate = false
         }
-        guard prefixLength >= (isCommandCandidate ? 1 : 2) else { return false }
+        // A bare sigil (`#` / `@`, prefix length 0) is itself a request.
+        guard prefixLength >= (isCommandCandidate ? 0 : 2) else { return false }
 
         let prefixRange = NSRange(location: clampedLocation - prefixLength, length: prefixLength)
         if isCodeContext(for: prefixRange, in: text) {
