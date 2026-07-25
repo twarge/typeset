@@ -915,7 +915,6 @@ struct TypesetWorkspaceView: View {
             onDuplicateFile: duplicateFile,
             onDeleteFolder: deleteFolder,
             onSetCompileTarget: setCompileTarget,
-            onRunPythonScript: runPythonScriptInTerminal,
             onError: { title, message in
                 recordLog(title, message: message, level: .error, present: true)
             }
@@ -2726,6 +2725,7 @@ struct TypesetWorkspaceView: View {
             fallback: SourceEditorDropSnippet.defaultTableTemplate
         )
     }
+
     /// Adds a Python generator script to the package and wires it into the
     /// document. The script runs inside the compiler through the `pyrunner`
     /// package, so the document recompiles against fresh output whenever the
@@ -2754,7 +2754,6 @@ struct TypesetWorkspaceView: View {
             fallback: ScriptedDocument.documentSnippet
         )
     }
-
 
     /// Hands the insertion to the editor (via a one-shot request) so it goes
     /// through the text view: the edit is undoable and wraps the live selection.
@@ -3793,87 +3792,6 @@ struct TypesetWorkspaceView: View {
             recordLog("Target selection failed", message: error.localizedDescription, level: .error, present: true)
         }
     }
-
-    private func runPythonScriptInTerminal(_ path: String) {
-        #if os(macOS)
-        guard let file = document.package.files.first(where: { $0.path == path }),
-              file.isPythonScript else {
-            return
-        }
-
-        guard let packageRootURL else {
-            recordLog(
-                "Run failed",
-                message: "Save the document before running a Python script from the package.",
-                level: .error,
-                present: true
-            )
-            return
-        }
-
-        let scriptURL = packageRootURL
-            .appendingPathComponent(path)
-            .standardizedFileURL
-        let didAccess = packageRootURL.startAccessingSecurityScopedResource()
-        defer {
-            if didAccess {
-                packageRootURL.stopAccessingSecurityScopedResource()
-            }
-        }
-
-        do {
-            try FileManager.default.createDirectory(
-                at: scriptURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try file.data.write(to: scriptURL, options: .atomic)
-
-            let launcherURL = try Self.makePythonTerminalLauncher(for: scriptURL)
-            NSWorkspace.shared.open(launcherURL)
-        } catch {
-            recordLog("Run failed", message: error.localizedDescription, level: .error, present: true)
-        }
-        #else
-        recordLog(
-            "Run unavailable",
-            message: "Python scripts can be run in Terminal on macOS.",
-            level: .error,
-            present: true
-        )
-        #endif
-    }
-
-    #if os(macOS)
-    private static func makePythonTerminalLauncher(for scriptURL: URL) throws -> URL {
-        let launcherDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("TypesetScriptRuns", isDirectory: true)
-        try FileManager.default.createDirectory(at: launcherDirectory, withIntermediateDirectories: true)
-
-        let launcherURL = launcherDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("command")
-        let workingDirectory = scriptURL.deletingLastPathComponent().path
-        let scriptName = "./\(scriptURL.lastPathComponent)"
-        let command = """
-        #!/bin/zsh
-        cd \(shellQuoted(workingDirectory)) || exit 1
-        /usr/bin/env python3 -- \(shellQuoted(scriptName))
-        status=$?
-        printf '\\nTypeset: script exited with status %d.\\n' "$status"
-        printf 'Press Return to close this window.'
-        read -r _
-        exit "$status"
-        """
-
-        try command.write(to: launcherURL, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: launcherURL.path)
-        return launcherURL
-    }
-
-    private static func shellQuoted(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
-    }
-    #endif
 
     private static func isImageFile(path: String) -> Bool {
         let fileExtension = URL(fileURLWithPath: path).pathExtension

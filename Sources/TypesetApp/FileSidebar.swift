@@ -56,7 +56,6 @@ struct FileSidebar: View {
     var onDuplicateFile: (String) -> Void
     var onDeleteFolder: (String) -> Void
     var onSetCompileTarget: (String) -> Void
-    var onRunPythonScript: (String) -> Void
     var onError: (String, String) -> Void
 
     @State private var editingTarget: FileTreeEditingTarget?
@@ -600,7 +599,6 @@ struct FileSidebar: View {
                 onDeleteFile: onDeleteFile,
                 onDuplicateFile: onDuplicateFile,
                 onDeleteFolder: onDeleteFolder,
-                onRunPythonScript: onRunPythonScript,
                 onError: onError
             )
         }
@@ -697,7 +695,6 @@ struct FileTreeRow: View {
     var onDeleteFile: (String) -> Void
     var onDuplicateFile: (String) -> Void
     var onDeleteFolder: (String) -> Void
-    var onRunPythonScript: (String) -> Void
     var onError: (String, String) -> Void
 
     @State private var previewedImageFile: PackageFile?
@@ -765,7 +762,6 @@ struct FileTreeRow: View {
                 onDeleteFile: onDeleteFile,
                 onDuplicateFile: onDuplicateFile,
                 onDeleteFolder: onDeleteFolder,
-                onRunPythonScript: onRunPythonScript,
                 onError: onError
             )
         }
@@ -997,15 +993,6 @@ struct FileTreeRow: View {
                     }
                 }
                 .contextMenu {
-                    #if os(macOS)
-                    if file.isPythonScript {
-                        Button("Run in Terminal") {
-                            onRunPythonScript(file.path)
-                        }
-                        Divider()
-                    }
-                    #endif
-
                     if canSetCompileTarget && file.isTypstSource {
                         Button("Set as Compile Target") {
                             onSetCompileTarget(file.path)
