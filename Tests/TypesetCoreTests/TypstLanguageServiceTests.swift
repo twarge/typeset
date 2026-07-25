@@ -291,8 +291,8 @@ import Testing
     #expect(diagnostics.first?.message == "something odd")
 }
 
-@Test func tinymistWorkspaceStoreMaterializesAndUpdatesFiles() async throws {
-    let store = TinymistWorkspaceStore()
+@Test func languageWorkspaceStoreMaterializesAndUpdatesFiles() async throws {
+    let store = LanguageWorkspaceStore()
     let documentID = "TypesetLangStore-\(UUID().uuidString)"
     let package = try DocumentPackage(files: [
         PackageFile(path: "main.typ", data: Data("= First".utf8)),
