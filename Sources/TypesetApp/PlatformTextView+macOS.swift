@@ -32,6 +32,7 @@ struct PlatformTextView: NSViewRepresentable {
     var proseRangesAreCurrent: Bool
     var showLineNumbers: Bool
     var spellCheckingEnabled: Bool
+    var syntax: SourceSyntax
     var fixedTopContentInset: CGFloat?
     var onTextChange: (String, NSRange) -> Void
     var onSelectionChange: (NSRange) -> Void
@@ -140,6 +141,7 @@ struct PlatformTextView: NSViewRepresentable {
             representedText: text
         )
         context.coordinator.spellCheckingEnabled = spellCheckingEnabled
+        context.coordinator.syntax = syntax
         context.coordinator.onTextChange = onTextChange
         context.coordinator.onSelectionChange = onSelectionChange
         context.coordinator.isCompletionPresented = isCompletionPresented
@@ -225,6 +227,7 @@ struct PlatformTextView: NSViewRepresentable {
             proseRanges: proseRanges,
             proseRangesAreCurrent: proseRangesAreCurrent,
             spellCheckingEnabled: spellCheckingEnabled,
+            syntax: syntax,
             onTextChange: onTextChange,
             onSelectionChange: onSelectionChange,
             isCompletionPresented: isCompletionPresented,
@@ -368,6 +371,7 @@ struct PlatformTextView: NSViewRepresentable {
         var proseRanges: [TypstProseRange]
         var proseRangesAreCurrent: Bool
         var spellCheckingEnabled: Bool
+        var syntax: SourceSyntax
         var onTextChange: (String, NSRange) -> Void
         var onSelectionChange: (NSRange) -> Void
         var isCompletionPresented: Bool
@@ -405,6 +409,7 @@ struct PlatformTextView: NSViewRepresentable {
             proseRanges: [TypstProseRange],
             proseRangesAreCurrent: Bool,
             spellCheckingEnabled: Bool,
+            syntax: SourceSyntax,
             onTextChange: @escaping (String, NSRange) -> Void,
             onSelectionChange: @escaping (NSRange) -> Void,
             isCompletionPresented: Bool,
@@ -425,6 +430,7 @@ struct PlatformTextView: NSViewRepresentable {
             self.proseRanges = proseRanges
             self.proseRangesAreCurrent = proseRangesAreCurrent
             self.spellCheckingEnabled = spellCheckingEnabled
+            self.syntax = syntax
             self.autocorrectionProseRanges = proseRangesAreCurrent ? proseRanges : []
             self.autocorrectionTextLength = (text.wrappedValue as NSString).length
             self.onTextChange = onTextChange
@@ -1007,7 +1013,7 @@ struct PlatformTextView: NSViewRepresentable {
         fileprivate func repaintSyntaxOnly(in textView: NSTextView) {
             let size = appliedFontSize > 0 ? appliedFontSize : fontSize
             let font = SourceEditorFont.regular(size: size)
-            TypstSyntaxHighlighter.applyTemporaryTokens(to: textView, text: textView.string, font: font)
+            TypstSyntaxHighlighter.applyTemporaryTokens(to: textView, text: textView.string, font: font, syntax: syntax)
             applyDiagnosticsAndSpelling(to: textView)
         }
 
@@ -1035,7 +1041,7 @@ struct PlatformTextView: NSViewRepresentable {
                 textView.undoManager?.enableUndoRegistration()
             }
 
-            TypstSyntaxHighlighter.applyTemporaryTokens(to: textView, text: text, font: font)
+            TypstSyntaxHighlighter.applyTemporaryTokens(to: textView, text: text, font: font, syntax: syntax)
             applyDiagnosticsAndSpelling(to: textView)
             let textLength = (textView.string as NSString).length
             textView.setSelectedRange(NSRange(

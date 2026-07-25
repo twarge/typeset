@@ -718,3 +718,37 @@ import Testing
     #expect(exists)
     #expect(isDirectory.boolValue)
 }
+
+@Test func scriptsAndDataFilesAreTextEditable() throws {
+    // A package holds the data a document reads and the scripts that generate
+    // it; those are editable in place. Binary assets still are not.
+    var package = try DocumentPackage(files: [
+        PackageFile(path: "main.typ", data: Data()),
+    ])
+    for path in ["generate.py", "data.csv", "series.tsv", "config.toml", "refs.bib", "values.json"] {
+        _ = try package.addFile(named: path, data: Data())
+        let file = try #require(package.files.first { $0.path == path })
+        #expect(file.isTextEditable, "\(path) should be editable")
+        #expect(!file.isTypstSource, "\(path) is not Typst source")
+    }
+
+    _ = try package.addFile(named: "figure.png", data: Data([0x89, 0x50]))
+    let image = try #require(package.files.first { $0.path == "figure.png" })
+    #expect(!image.isTextEditable)
+}
+
+@Test func editingAScriptGoesThroughTheTextPath() throws {
+    var package = try DocumentPackage(files: [
+        PackageFile(path: "main.typ", data: Data()),
+    ])
+    _ = try package.addFile(named: "generate.py", data: Data("def rows():\n    return []\n".utf8))
+
+    try package.updateText("def rows():\n    return [[\"1\"]]\n", for: "generate.py")
+    #expect(package.text(for: "generate.py").contains("[[\"1\"]]"))
+
+    // Binary assets still reject text edits.
+    _ = try package.addFile(named: "figure.png", data: Data([0x89, 0x50]))
+    #expect(throws: (any Error).self) {
+        try package.updateText("nope", for: "figure.png")
+    }
+}

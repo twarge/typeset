@@ -82,6 +82,7 @@ struct TypesetCommandSet: Equatable {
     var formatSelection: () -> Void
     var insertFigure: () -> Void
     var insertTable: () -> Void
+    var insertPythonScript: () -> Void
     var showLineNumbers: Bool
     var setShowLineNumbers: (Bool) -> Void
     var showSettings: () -> Void
@@ -237,6 +238,14 @@ struct TypesetCommands: Commands {
                 commands?.insertTable()
             }
             .keyboardShortcut("t", modifiers: [.command, .option])
+            .disabled(commands == nil)
+
+            Divider()
+
+            Button("Insert Python Script") {
+                commands?.insertPythonScript()
+            }
+            .keyboardShortcut("p", modifiers: [.command, .option])
             .disabled(commands == nil)
         }
 

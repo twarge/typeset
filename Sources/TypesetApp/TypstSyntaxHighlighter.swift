@@ -31,10 +31,143 @@ struct TypstSyntaxToken {
     var range: NSRange
 }
 
+/// Which tokenizer colors a file. Packages hold data and generator scripts
+/// alongside the Typst sources, and Typst's tokenizer would mis-color them —
+/// worse, its notion of "prose" would invite autocorrection into code.
+enum SourceSyntax {
+    case typst
+    case python
+    case plainText
+
+    /// The syntax for a package-relative path. Anything without a tokenizer of
+    /// its own (`.csv`, `.json`, …) is left unstyled rather than mis-styled.
+    static func forPath(_ path: String) -> SourceSyntax {
+        switch (path as NSString).pathExtension.lowercased() {
+        case "typ":
+            return .typst
+        case "py":
+            return .python
+        default:
+            return .plainText
+        }
+    }
+}
+
 enum TypstSyntaxHighlighter {
     static let keywords: Set<String> = [
         "as", "auto", "break", "continue", "else", "false", "for", "if", "import", "in",
         "include", "let", "none", "return", "set", "show", "true", "while"
+    ]
+
+    static func tokens(in text: String, syntax: SourceSyntax) -> [TypstSyntaxToken] {
+        switch syntax {
+        case .typst:
+            return tokens(in: text)
+        case .python:
+            return pythonTokens(in: text)
+        case .plainText:
+            return []
+        }
+    }
+
+    /// Tokenizes Python into the shared token kinds, so generator scripts get
+    /// the same styling pipeline as Typst sources. Comments and strings win
+    /// over everything else; triple-quoted strings span lines.
+    static func pythonTokens(in text: String) -> [TypstSyntaxToken] {
+        let scalars = Array(text.unicodeScalars)
+        var tokens: [TypstSyntaxToken] = []
+        var index = 0
+
+        func isIdentifierScalar(_ scalar: Unicode.Scalar) -> Bool {
+            CharacterSet.alphanumerics.contains(scalar) || scalar == "_"
+        }
+
+        while index < scalars.count {
+            let scalar = scalars[index]
+
+            if scalar == "#" {
+                var end = index
+                while end < scalars.count, scalars[end] != "\n" { end += 1 }
+                tokens.append(TypstSyntaxToken(kind: .comment, range: NSRange(location: index, length: end - index)))
+                index = end
+                continue
+            }
+
+            if scalar == "\"" || scalar == "'" {
+                let quote = scalar
+                let isTriple = index + 2 < scalars.count
+                    && scalars[index + 1] == quote
+                    && scalars[index + 2] == quote
+                let delimiterLength = isTriple ? 3 : 1
+                var end = index + delimiterLength
+                while end < scalars.count {
+                    if scalars[end] == "\\" {
+                        end += 2
+                        continue
+                    }
+                    if scalars[end] == quote {
+                        if !isTriple {
+                            end += 1
+                            break
+                        }
+                        if end + 2 < scalars.count, scalars[end + 1] == quote, scalars[end + 2] == quote {
+                            end += 3
+                            break
+                        }
+                    }
+                    // An unterminated single-quoted string ends at the newline,
+                    // so one stray quote can't paint the rest of the file.
+                    if !isTriple, scalars[end] == "\n" { break }
+                    end += 1
+                }
+                let clamped = min(end, scalars.count)
+                tokens.append(TypstSyntaxToken(kind: .string, range: NSRange(location: index, length: clamped - index)))
+                index = clamped
+                continue
+            }
+
+            if CharacterSet.decimalDigits.contains(scalar),
+               index == 0 || !isIdentifierScalar(scalars[index - 1]) {
+                var end = index
+                while end < scalars.count,
+                      CharacterSet.alphanumerics.contains(scalars[end]) || scalars[end] == "." || scalars[end] == "_" {
+                    end += 1
+                }
+                tokens.append(TypstSyntaxToken(kind: .number, range: NSRange(location: index, length: end - index)))
+                index = end
+                continue
+            }
+
+            if isIdentifierScalar(scalar), !CharacterSet.decimalDigits.contains(scalar) {
+                var end = index
+                while end < scalars.count, isIdentifierScalar(scalars[end]) { end += 1 }
+                let word = String(String.UnicodeScalarView(scalars[index..<end]))
+                if pythonKeywords.contains(word) {
+                    tokens.append(TypstSyntaxToken(kind: .keyword, range: NSRange(location: index, length: end - index)))
+                } else if pythonBuiltins.contains(word) {
+                    tokens.append(TypstSyntaxToken(kind: .command, range: NSRange(location: index, length: end - index)))
+                }
+                index = end
+                continue
+            }
+
+            index += 1
+        }
+
+        return tokens
+    }
+
+    static let pythonKeywords: Set<String> = [
+        "False", "None", "True", "and", "as", "assert", "async", "await", "break",
+        "class", "continue", "def", "del", "elif", "else", "except", "finally",
+        "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal",
+        "not", "or", "pass", "raise", "return", "try", "while", "with", "yield",
+    ]
+
+    static let pythonBuiltins: Set<String> = [
+        "abs", "all", "any", "bool", "dict", "enumerate", "filter", "float",
+        "format", "int", "len", "list", "map", "max", "min", "print", "range",
+        "repr", "reversed", "round", "set", "sorted", "str", "sum", "tuple", "zip",
     ]
 
     static func tokens(in text: String) -> [TypstSyntaxToken] {
@@ -211,9 +344,9 @@ extension TypstSyntaxHighlighter {
         ]
     }
 
-    static func attributedString(for text: String, font: NSFont) -> NSAttributedString {
+    static func attributedString(for text: String, font: NSFont, syntax: SourceSyntax) -> NSAttributedString {
         let attributed = NSMutableAttributedString(string: text, attributes: baseAttributes(font: font))
-        applyTokens(to: attributed, text: text, font: font)
+        applyTokens(to: attributed, text: text, font: font, syntax: syntax)
         return attributed
     }
 
@@ -222,14 +355,14 @@ extension TypstSyntaxHighlighter {
     // "macOS editor TextKit 2 migration" stash), so token styling uses
     // NSLayoutManager temporary attributes: display-only, no storage churn.
     @MainActor
-    static func applyTemporaryTokens(to textView: NSTextView, text: String, font: NSFont) {
+    static func applyTemporaryTokens(to textView: NSTextView, text: String, font: NSFont, syntax: SourceSyntax) {
         guard let layoutManager = textView.layoutManager, let textStorage = textView.textStorage else { return }
         let fullRange = NSRange(location: 0, length: textStorage.length)
         layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: fullRange)
         layoutManager.removeTemporaryAttribute(.font, forCharacterRange: fullRange)
         layoutManager.addTemporaryAttributes([.font: font], forCharacterRange: fullRange)
 
-        for token in tokens(in: text) where NSMaxRange(token.range) <= textStorage.length {
+        for token in tokens(in: text, syntax: syntax) where NSMaxRange(token.range) <= textStorage.length {
             layoutManager.addTemporaryAttributes(attributes(for: token.kind, font: font), forCharacterRange: token.range)
         }
     }
@@ -242,8 +375,8 @@ extension TypstSyntaxHighlighter {
         layoutManager.addTemporaryAttributes([.font: font], forCharacterRange: fullRange)
     }
 
-    static func applyTokens(to attributed: NSMutableAttributedString, text: String, font: NSFont) {
-        for token in tokens(in: text) where NSMaxRange(token.range) <= attributed.length {
+    static func applyTokens(to attributed: NSMutableAttributedString, text: String, font: NSFont, syntax: SourceSyntax) {
+        for token in tokens(in: text, syntax: syntax) where NSMaxRange(token.range) <= attributed.length {
             attributed.addAttributes(attributes(for: token.kind, font: font), range: token.range)
         }
     }
@@ -291,22 +424,22 @@ extension TypstSyntaxHighlighter {
         ]
     }
 
-    static func attributedString(for text: String, font: UIFont) -> NSAttributedString {
+    static func attributedString(for text: String, font: UIFont, syntax: SourceSyntax) -> NSAttributedString {
         let attributed = NSMutableAttributedString(string: text, attributes: baseAttributes(font: font))
-        applyTokens(to: attributed, text: text, font: font)
+        applyTokens(to: attributed, text: text, font: font, syntax: syntax)
         return attributed
     }
 
     @MainActor
-    static func applyTokenStyling(to textView: UITextView, text: String, font: UIFont) {
+    static func applyTokenStyling(to textView: UITextView, text: String, font: UIFont, syntax: SourceSyntax) {
         textView.textStorage.beginEditing()
         textView.textStorage.setAttributes(baseAttributes(font: font), range: NSRange(location: 0, length: textView.textStorage.length))
-        applyTokens(to: textView.textStorage, text: text, font: font)
+        applyTokens(to: textView.textStorage, text: text, font: font, syntax: syntax)
         textView.textStorage.endEditing()
     }
 
-    static func applyTokens(to attributed: NSMutableAttributedString, text: String, font: UIFont) {
-        for token in tokens(in: text) where NSMaxRange(token.range) <= attributed.length {
+    static func applyTokens(to attributed: NSMutableAttributedString, text: String, font: UIFont, syntax: SourceSyntax) {
+        for token in tokens(in: text, syntax: syntax) where NSMaxRange(token.range) <= attributed.length {
             attributed.addAttributes(attributes(for: token.kind, font: font), range: token.range)
         }
     }

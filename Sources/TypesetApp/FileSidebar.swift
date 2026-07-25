@@ -1080,10 +1080,17 @@ struct FileTreeRow: View {
     private func icon(for file: PackageFile) -> String {
         if file.path == compileTargetPath { return "smallcircle.filled.circle" }
         if file.isTypstSource { return "doc.plaintext" }
-        if file.path.lowercased().hasSuffix(".png") || file.path.lowercased().hasSuffix(".jpg") {
+        if file.isPythonScript { return "chevron.left.forwardslash.chevron.right" }
+        switch (file.path as NSString).pathExtension.lowercased() {
+        case "png", "jpg", "jpeg", "heic", "gif", "webp", "svg":
             return "photo"
+        case "csv", "tsv", "json", "toml", "yaml", "yml":
+            return "tablecells"
+        case "bib":
+            return "text.book.closed"
+        default:
+            return "doc"
         }
-        return "doc"
     }
 
     @ViewBuilder

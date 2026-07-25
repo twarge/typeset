@@ -92,6 +92,7 @@ struct SourceEditor: View {
     var selectedCompletionIndex = 0
     var showLineNumbers = false
     var spellCheckingEnabled = true
+    var syntax: SourceSyntax = .typst
     var fixedTopContentInset: CGFloat?
     var onTextChange: (String, NSRange) -> Void = { _, _ in }
     var onSelectionChange: (NSRange) -> Void = { _ in }
@@ -139,6 +140,7 @@ struct SourceEditor: View {
             proseRangesAreCurrent: proseRangesAreCurrent,
             showLineNumbers: showLineNumbers,
             spellCheckingEnabled: spellCheckingEnabled,
+            syntax: syntax,
             fixedTopContentInset: fixedTopContentInset,
             onTextChange: onTextChange,
             onSelectionChange: onSelectionChange,
@@ -1975,6 +1977,53 @@ enum SourceEditorCommentToggle {
     }
 }
 
+
+/// Starter content for a document whose data is produced by a Python script.
+///
+/// The script runs inside the Typst compiler via the `pyrunner` package
+/// (RustPython compiled to WebAssembly), which is why it works identically on
+/// macOS and iOS with no interpreter to install. The same sandbox that makes
+/// that safe also means the script gets the standard library but no file or
+/// network access, and no C extensions — so no numpy, pandas, or matplotlib.
+enum ScriptedDocument {
+    static let scriptPath = "generate.py"
+
+    static let starterScript = """
+    \"\"\"Generates data for the document.
+
+    Called from the Typst source with `py.call(generate, \"<function>\")`.
+    Return strings, or lists of strings, and Typst lays them out.
+    \"\"\"
+
+    MEASUREMENTS = [2.03, 3.95, 6.10, 8.02, 9.98]
+
+
+    def summary():
+        mean = sum(MEASUREMENTS) / len(MEASUREMENTS)
+        return f"{len(MEASUREMENTS)} measurements, mean {mean:.2f}"
+
+
+    def rows():
+        return [
+            [str(index), f"{value:.2f}"]
+            for index, value in enumerate(MEASUREMENTS, start=1)
+        ]
+
+    """
+
+    static let documentSnippet = """
+    #import "@preview/pyrunner:0.3.0" as py
+    #let generate = py.compile(read("generate.py"))
+
+    #py.call(generate, "summary")
+
+    #table(
+      columns: 2,
+      [*n*], [*value*],
+      ..py.call(generate, "rows").flatten(),
+    ){cursor}
+    """
+}
 
 enum SourceEditorDropSnippet {
     static let defaultImageTemplate = "#image(\"{path}\")"

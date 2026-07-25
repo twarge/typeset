@@ -960,6 +960,7 @@ struct TypesetWorkspaceView: View {
             formatSelection: { formatSource(selectionOnly: true) },
             insertFigure: insertFigure,
             insertTable: insertTable,
+            insertPythonScript: insertPythonScript,
             showLineNumbers: showLineNumbers,
             setShowLineNumbers: { showLineNumbers = $0 },
             showSettings: { isSettingsPresented = true }
@@ -1177,7 +1178,11 @@ struct TypesetWorkspaceView: View {
                     codeActions: codeActions,
                     selectedCompletionIndex: selectedCompletionIndex,
                     showLineNumbers: showLineNumbers,
-                    spellCheckingEnabled: spellCheckingEnabled,
+                    // Spell-checking (and the autocorrection that rides along
+                    // with it) is prose tooling: it would rewrite words inside
+                    // a data file or a generator script.
+                    spellCheckingEnabled: spellCheckingEnabled && selectedFile.isTypstSource,
+                    syntax: SourceSyntax.forPath(selectedFile.path),
                     fixedTopContentInset: fixedEditorTopContentInset,
                     onTextChange: { text, range in
                         updateSource(text, selectionRange: range)
@@ -1940,6 +1945,10 @@ struct TypesetWorkspaceView: View {
 
     private func syncLanguageServiceFile(path: String, text: String, selectionRange: NSRange? = nil) {
         let documentID = languageServiceDocumentID
+        // Data files and scripts still reach the session — the document reads
+        // them at compile time — but they aren't Typst, so nothing downstream
+        // should analyze them as if they were.
+        let isTypstSource = (path as NSString).pathExtension.lowercased() == "typ"
         languageSyncTask?.cancel()
         languageSyncTask = Task {
             _ = try? await languageWorkspaceStore.updateFile(
@@ -1949,7 +1958,7 @@ struct TypesetWorkspaceView: View {
             )
             guard !Task.isCancelled else { return }
             await languageService.updateFile(path: path, text: text)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, isTypstSource else { return }
             await requestLanguageIntelligenceForCurrentSelection(
                 forceCompletion: false,
                 allowAutomaticCompletion: true,
@@ -2717,6 +2726,35 @@ struct TypesetWorkspaceView: View {
             fallback: SourceEditorDropSnippet.defaultTableTemplate
         )
     }
+    /// Adds a Python generator script to the package and wires it into the
+    /// document. The script runs inside the compiler through the `pyrunner`
+    /// package, so the document recompiles against fresh output whenever the
+    /// script is edited — no external interpreter, and it works on iOS too.
+    private func insertPythonScript() {
+        guard selectedFile?.isTextEditable == true else { return }
+        let existing = document.package.files.first { $0.path == ScriptedDocument.scriptPath }
+        if existing == nil {
+            do {
+                _ = try document.package.addFile(
+                    named: ScriptedDocument.scriptPath,
+                    data: Data(ScriptedDocument.starterScript.utf8)
+                )
+            } catch {
+                recordLog(
+                    "Add script failed",
+                    message: error.localizedDescription,
+                    level: .error,
+                    present: true
+                )
+                return
+            }
+        }
+        requestSnippetInsertion(
+            template: ScriptedDocument.documentSnippet,
+            fallback: ScriptedDocument.documentSnippet
+        )
+    }
+
 
     /// Hands the insertion to the editor (via a one-shot request) so it goes
     /// through the text view: the edit is undoable and wraps the live selection.

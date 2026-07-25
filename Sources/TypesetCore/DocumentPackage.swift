@@ -36,8 +36,17 @@ public struct PackageFile: Identifiable, Hashable, Sendable {
     public var id: String { path }
     public var name: String { URL(fileURLWithPath: path).lastPathComponent }
     public var isTypstSource: Bool { path.lowercased().hasSuffix(".typ") }
+    /// Plain-text formats the editor can open. Beyond prose, a package holds
+    /// the data a document reads (`read`/`csv`/`json`) and the scripts that
+    /// generate it, and those are worth editing in place rather than only
+    /// through a preview.
+    public static let editableTextExtensions: Set<String> = [
+        "typ", "txt", "md", "py", "csv", "tsv", "json", "toml", "yaml", "yml", "bib",
+    ]
+
     public var isTextEditable: Bool {
-        isTypstSource || path.lowercased().hasSuffix(".txt") || path.lowercased().hasSuffix(".md")
+        let fileExtension = (path as NSString).pathExtension.lowercased()
+        return Self.editableTextExtensions.contains(fileExtension)
     }
 
     public init(path: String, data: Data) {
