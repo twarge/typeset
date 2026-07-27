@@ -55,6 +55,33 @@ struct TypesetApp: App {
     }
 }
 
+#if os(iOS)
+/// Opens an additional window on iPadOS.
+///
+/// SwiftUI has no route to this for a document app: `newDocument` is
+/// macOS-only and `openWindow` addresses a `WindowGroup` by identifier, which
+/// a `DocumentGroup` doesn't have. UIKit's scene activation is the supported
+/// path — the new scene starts at the document launcher, the same place the
+/// app opens from cold.
+@MainActor
+enum TypesetWindowOpener {
+    /// False on iPhone, which never allows more than one scene, so the menu
+    /// item can be disabled rather than failing when invoked.
+    static var isSupported: Bool {
+        UIApplication.shared.supportsMultipleScenes
+    }
+
+    static func openNewWindow() {
+        guard isSupported else { return }
+        UIApplication.shared.activateSceneSession(
+            for: UISceneSessionActivationRequest()
+        ) { error in
+            typesetLSPDebug("new window failed: \(error.localizedDescription)")
+        }
+    }
+}
+#endif
+
 struct TypesetCommandSet: Equatable {
     var showSource: () -> Void
     var showSourceAndPreview: () -> Void
@@ -117,6 +144,18 @@ struct TypesetCommands: Commands {
 
     var body: some Commands {
         CommandGroup(after: .newItem) {
+            // macOS gets ⌘N from the DocumentGroup itself (New Document, which
+            // opens in its own window). iPadOS gets no such command, so add it
+            // here; on iPhone it stays disabled, since there is only ever one
+            // scene.
+            #if os(iOS)
+            Button("New Window") {
+                TypesetWindowOpener.openNewWindow()
+            }
+            .keyboardShortcut("n", modifiers: .command)
+            .disabled(!TypesetWindowOpener.isSupported)
+            #endif
+
             Button("New Folder") {
                 commands?.newFolder()
             }
