@@ -141,6 +141,11 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
+          # Sign the archive with the cloud-managed Apple Distribution identity directly.
+          # The default (Apple Development at archive, re-sign at export) mints a fresh
+          # Development certificate on every ephemeral runner until the account hits
+          # Apple's certificate cap; the managed Distribution certificate is created once
+          # and reused by every run.
           xcodebuild archive \
             -project Typeset.xcodeproj \
             -scheme Typeset \
@@ -148,6 +153,7 @@ jobs:
             -destination '${{ matrix.destination }}' \
             -archivePath '${{ matrix.archive }}' \
             MARKETING_VERSION='${{ steps.version.outputs.version }}' \
+            CODE_SIGN_IDENTITY='Apple Distribution' \
             -allowProvisioningUpdates \
             -authenticationKeyPath ~/private_keys/AuthKey_"$ASC_KEY_ID".p8 \
             -authenticationKeyID "$ASC_KEY_ID" \
