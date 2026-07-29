@@ -17,6 +17,8 @@
 		100000000000000000000008 /* TypesetCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; };
 		100000000000000000000009 /* TypesetCore.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		10000000000000000000000A /* DocumentPackageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000108 /* DocumentPackageTests.swift */; };
+		100000000000000000000E1 /* TextSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001E0 /* TextSearchTests.swift */; };
+		100000000000000000000E2 /* TypstLanguageServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001E1 /* TypstLanguageServiceTests.swift */; };
 		10000000000000000000000B /* TypesetCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; };
 		10000000000000000000000C /* TypstLanguageService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000010C /* TypstLanguageService.swift */; };
 		10000000000000000000000D /* LanguageWorkspaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000010D /* LanguageWorkspaceStore.swift */; };
@@ -137,6 +139,8 @@
 		100000000000000000000106 /* SourceEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditor.swift; sourceTree = "<group>"; };
 		100000000000000000000107 /* TypstVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstVersion.swift; sourceTree = "<group>"; };
 		100000000000000000000108 /* DocumentPackageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentPackageTests.swift; sourceTree = "<group>"; };
+		1000000000000000000001E0 /* TextSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSearchTests.swift; sourceTree = "<group>"; };
+		1000000000000000000001E1 /* TypstLanguageServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstLanguageServiceTests.swift; sourceTree = "<group>"; };
 		100000000000000000000109 /* Typeset-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Typeset-Info.plist"; sourceTree = "<group>"; };
 		10000000000000000000010C /* TypstLanguageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstLanguageService.swift; sourceTree = "<group>"; };
 		10000000000000000000010D /* LanguageWorkspaceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageWorkspaceStore.swift; sourceTree = "<group>"; };
@@ -299,6 +303,8 @@
 			isa = PBXGroup;
 			children = (
 				100000000000000000000108 /* DocumentPackageTests.swift */,
+				1000000000000000000001E0 /* TextSearchTests.swift */,
+				1000000000000000000001E1 /* TypstLanguageServiceTests.swift */,
 			);
 			path = TypesetCoreTests;
 			sourceTree = "<group>";
@@ -612,6 +618,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				10000000000000000000000A /* DocumentPackageTests.swift in Sources */,
+				100000000000000000000E1 /* TextSearchTests.swift in Sources */,
+				100000000000000000000E2 /* TypstLanguageServiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

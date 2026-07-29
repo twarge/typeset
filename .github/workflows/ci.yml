@@ -5,25 +5,39 @@ on:
     branches: [master]
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   test:
-    name: Build and test (SwiftPM)
+    name: Build and test
     runs-on: macos-26
     steps:
-      # The Vendor/typst submodule is intentionally not checked out: the
-      # SwiftPM targets build without it. It is only needed for the Xcode app
-      # target, which bundles the Typst CLI and the TypesetLang xcframework.
+      # The build phases can check the submodule out themselves, but doing it
+      # here keeps the network work out of the build.
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive
 
       - name: Show toolchain
-        run: swift --version
+        run: |
+          xcodebuild -version
+          cargo --version
 
-      - name: Build
-        run: swift build
-
-      - name: Test
-        run: swift test
+      # xcodebuild builds the dependencies itself: TypesetCore's first build
+      # phase produces TypesetLang.xcframework and the app target's builds the
+      # bundled Typst CLI.
+      - name: Build and test
+        run: |
+          xcodebuild \
+            -project Typeset.xcodeproj \
+            -scheme Typeset \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath build/Xcode \
+            CODE_SIGNING_ALLOWED=NO \
+            test

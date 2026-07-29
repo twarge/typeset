@@ -30,8 +30,31 @@ build_target() {
   sdk_path="$(xcrun --sdk "$sdk" --show-sdk-path)"
 
   export SDKROOT="$sdk_path"
-  export MACOSX_DEPLOYMENT_TARGET="$min_version"
-  export IPHONEOS_DEPLOYMENT_TARGET="$min_version"
+  # Deliberately NOT exporting MACOSX_/IPHONEOS_DEPLOYMENT_TARGET. Cargo runs
+  # host proc-macros in the same environment as the target units, and on
+  # macOS 27 beta 2 a proc-macro dylib linked with an explicit deployment
+  # target produces metadata rustc can't read back ("can't find crate for
+  # <x>_derive"; before Xcode 27A5228h it surfaced as dyld rejecting the
+  # dylib outright). Verified empirically: any value fails, unset works.
+  # The cost is only that the staticlib's objects are stamped with the
+  # toolchain's default minimum instead of $min_version — harmless, since the
+  # final app link warns only when an object's minimum is NEWER than the
+  # app's.
+  unset MACOSX_DEPLOYMENT_TARGET IPHONEOS_DEPLOYMENT_TARGET
+
+  # The min-version stamp still matters for C/asm objects built by the `cc`
+  # crate (psm's assembly, notably): without direction they stamp at the host
+  # OS, which can be newer than the app's target and draws an ld warning.
+  # Scope the deployment target to the C compiler alone via cc's per-target
+  # CFLAGS — those flags never reach rustc, so the dylib problem above can't
+  # come back through this path.
+  local version_min_flag
+  case "$sdk" in
+    macosx) version_min_flag="-mmacosx-version-min=$min_version" ;;
+    iphoneos) version_min_flag="-miphoneos-version-min=$min_version" ;;
+    iphonesimulator) version_min_flag="-mios-simulator-version-min=$min_version" ;;
+  esac
+  export "CFLAGS_${rust_target//-/_}=$version_min_flag"
 
   "$CARGO_BIN" build \
     --manifest-path "$CRATE_DIR/Cargo.toml" \

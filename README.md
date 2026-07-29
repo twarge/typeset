@@ -50,11 +50,29 @@ The current HTML renderer is intentionally simple starter infrastructure. The ne
 
 ## Development
 
+Open `Typeset.xcodeproj` and press Run. Xcode builds its own dependencies: the
+`TypesetCore` target's first build phase produces `TypesetLang.xcframework`
+from the Rust FFI crate, and the app target's builds the bundled Typst CLI.
+Both check out the pinned `Vendor/typst` submodule and install the Apple Rust
+targets on first use, so a fresh clone needs no terminal step.
+
+From the command line it's the same build:
+
 ```sh
-swift build
-swift test
+xcodebuild -project Typeset.xcodeproj -scheme Typeset -destination 'platform=macOS' build
 ```
 
-Open the package in Xcode to run the SwiftUI app on macOS. The app sources use platform wrappers for AppKit and UIKit so the same workspace UI can be hosted by an iOS app target as the project grows.
+```sh
+xcodebuild -project Typeset.xcodeproj -scheme Typeset -destination 'platform=macOS' test
+```
 
-You can also open `Typeset.xcodeproj`, which contains a unified multiplatform `Typeset` app target, plus shared `TypesetCore`, `TypesetQuickLook`, and `TypesetCoreTests` targets.
+Icons are generated separately, since they are checked in:
+
+```sh
+swift Scripts/generate-icons.swift
+```
+
+The project contains a unified multiplatform `Typeset` app target plus shared
+`TypesetCore`, `TypesetQuickLook`, and `TypesetCoreTests` targets. The app
+sources use platform wrappers for AppKit and UIKit so the same workspace UI is
+hosted on both macOS and iOS.

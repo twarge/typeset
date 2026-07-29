@@ -34,6 +34,7 @@ IOS_SIGNING_CERTIFICATE="${IOS_SIGNING_CERTIFICATE:-Apple Distribution}"
 IOS_PROVISIONING_PROFILE="${IOS_PROVISIONING_PROFILE:-}"
 IOS_BUNDLE_ID="${IOS_BUNDLE_ID:-com.twarge.app.typeset}"
 IOS_EXPORT_METHOD="${IOS_EXPORT_METHOD:-app-store-connect}"
+IOS_DESTINATION="${IOS_DESTINATION:-export}"
 IOS_UPLOAD_SYMBOLS="${IOS_UPLOAD_SYMBOLS:-YES}"
 IOS_MANAGE_APP_VERSION_AND_BUILD_NUMBER="${IOS_MANAGE_APP_VERSION_AND_BUILD_NUMBER:-NO}"
 IOS_ALLOW_PROVISIONING_UPDATES="${IOS_ALLOW_PROVISIONING_UPDATES:-1}"
@@ -81,6 +82,9 @@ Options:
   --no-ios-provisioning-updates
                              Do not let xcodebuild create/update iOS signing assets.
   --ios-export-method METHOD App export method. Defaults to app-store-connect.
+  --ios-destination DEST     export writes the IPA to disk (default); upload sends
+                             the archive to App Store Connect instead. Uploading
+                             requires App Store Connect API key authentication.
   -h, --help                 Show this help.
 
 Notarization authentication:
@@ -189,6 +193,11 @@ while [[ $# -gt 0 ]]; do
 		--ios-export-method)
 			[[ $# -ge 2 ]] || fail "--ios-export-method requires a value"
 			IOS_EXPORT_METHOD="$2"
+			shift 2
+			;;
+		--ios-destination)
+			[[ $# -ge 2 ]] || fail "--ios-destination requires a value"
+			IOS_DESTINATION="$2"
 			shift 2
 			;;
 		-h|--help)
@@ -363,6 +372,11 @@ write_ios_export_options() {
 		*) fail "--ios-signing-style must be automatic or manual" ;;
 	esac
 
+	case "$IOS_DESTINATION" in
+		export|upload) ;;
+		*) fail "--ios-destination must be export or upload" ;;
+	esac
+
 	if [[ "$signing_style" == "manual" ]]; then
 		[[ -n "$IOS_TEAM_ID" ]] || fail "manual iOS signing requires --ios-team-id or IOS_TEAM_ID."
 		[[ -n "$IOS_PROVISIONING_PROFILE" ]] || fail "manual iOS signing requires --ios-provisioning-profile."
@@ -378,7 +392,7 @@ PLIST
 
 	/usr/libexec/PlistBuddy -c "Clear dict" "$export_options_plist"
 	/usr/libexec/PlistBuddy -c "Add :method string $IOS_EXPORT_METHOD" "$export_options_plist"
-	/usr/libexec/PlistBuddy -c "Add :destination string export" "$export_options_plist"
+	/usr/libexec/PlistBuddy -c "Add :destination string $IOS_DESTINATION" "$export_options_plist"
 	/usr/libexec/PlistBuddy -c "Add :signingStyle string $signing_style" "$export_options_plist"
 	/usr/libexec/PlistBuddy -c "Add :stripSwiftSymbols bool true" "$export_options_plist"
 	/usr/libexec/PlistBuddy -c "Add :uploadSymbols bool $(plist_bool "$IOS_UPLOAD_SYMBOLS")" "$export_options_plist"
@@ -487,6 +501,11 @@ build_ios_app() {
 			-archivePath "$archive_path" \
 			-exportPath "$export_path" \
 			-exportOptionsPlist "$export_options_plist"
+	fi
+
+	if [[ "$IOS_DESTINATION" == "upload" ]]; then
+		echo "iOS build uploaded to App Store Connect (archive: $archive_path)"
+		return 0
 	fi
 
 	exported_ipa="$(find "$export_path" -name "*.ipa" -print -quit)"
