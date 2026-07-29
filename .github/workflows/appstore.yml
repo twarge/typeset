@@ -14,9 +14,9 @@ name: App Store
 # App Store Connect API, with the Admin role (needed for cloud signing).
 #
 # Archive signing reuses the Apple Development identity imported from the p12.
-# Export signing and provisioning remain cloud-managed through the API key, and
-# manageAppVersionAndBuildNumber lets it bump CFBundleVersion past whatever
-# App Store Connect already has, so uploads never collide.
+# Export signing and provisioning remain cloud-managed through the API key.
+# CI sets CFBundleVersion from the workflow run and attempt numbers so every
+# upload, including a retry, has an explicit monotonically increasing build.
 
 on:
   workflow_dispatch:
@@ -111,8 +111,18 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH"
           security find-identity -v -p codesigning "$KEYCHAIN_PATH" |
-            grep -q "Apple Development:.*($EXPECTED_TEAM_ID)" ||
-            { echo "::error::The p12 does not contain an Apple Development identity for team $EXPECTED_TEAM_ID"; exit 1; }
+            grep -q "Apple Development:" ||
+            { echo "::error::The p12 does not contain an Apple Development identity"; exit 1; }
+          CERTIFICATE_SUBJECT="$(
+            security find-certificate \
+              -a \
+              -c "Apple Development" \
+              -p "$KEYCHAIN_PATH" |
+              openssl x509 -in /dev/stdin -noout -subject
+          )"
+          printf "%s\n" "$CERTIFICATE_SUBJECT" |
+            grep -Eq "OU[[:space:]]*=[[:space:]]*$EXPECTED_TEAM_ID([/,]|$)" ||
+            { echo "::error::The Apple Development certificate belongs to a different team; expected $EXPECTED_TEAM_ID"; exit 1; }
 
       - name: Determine marketing version
         id: version
@@ -161,7 +171,7 @@ jobs:
             <key>uploadSymbols</key>
             <true/>
             <key>manageAppVersionAndBuildNumber</key>
-            <true/>
+            <false/>
           </dict>
           </plist>
           PLIST
@@ -182,6 +192,7 @@ jobs:
             -destination '${{ matrix.destination }}' \
             -archivePath '${{ matrix.archive }}' \
             MARKETING_VERSION='${{ steps.version.outputs.version }}' \
+            CURRENT_PROJECT_VERSION='${{ github.run_number }}.${{ github.run_attempt }}' \
             -allowProvisioningUpdates \
             -authenticationKeyPath ~/private_keys/AuthKey_"$ASC_KEY_ID".p8 \
             -authenticationKeyID "$ASC_KEY_ID" \
