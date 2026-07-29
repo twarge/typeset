@@ -8,11 +8,13 @@ name: App Store
 #   ASC_KEY_ID     App Store Connect API key ID
 #   ASC_ISSUER_ID  App Store Connect issuer ID
 #   ASC_KEY_P8     Contents of the AuthKey_<KEYID>.p8 file
+#   BUILD_CERTIFICATE_BASE64  Base64-encoded Apple Development .p12
+#   P12_PASSWORD              Password used when exporting the .p12
 # Create the key at App Store Connect → Users and Access → Integrations →
-# App Store Connect API, with the App Manager role (needed for cloud signing).
+# App Store Connect API, with the Admin role (needed for cloud signing).
 #
-# Signing is fully cloud-managed: xcodebuild uses the API key to create and
-# fetch distribution certificates and profiles, and
+# Archive signing reuses the Apple Development identity imported from the p12.
+# Export signing and provisioning remain cloud-managed through the API key, and
 # manageAppVersionAndBuildNumber lets it bump CFBundleVersion past whatever
 # App Store Connect already has, so uploads never collide.
 
@@ -34,8 +36,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  build:
+    name: CI prerequisite
+    uses: ./.github/workflows/ci.yml
+
   upload:
     name: Upload (${{ matrix.name }})
+    needs: build
     runs-on: macos-26
     # The first build phase compiles the Rust FFI crate into
     # TypesetLang.xcframework, which dominates the build time.
@@ -83,6 +90,29 @@ jobs:
           [ "${#ASC_KEY_ID}" -eq 10 ] || { echo "::error::ASC_KEY_ID length is ${#ASC_KEY_ID}, expected 10"; exit 1; }
           [ "${#ASC_ISSUER_ID}" -eq 36 ] || { echo "::error::ASC_ISSUER_ID length is ${#ASC_ISSUER_ID}, expected a 36-char UUID"; exit 1; }
           grep -q "BEGIN PRIVATE KEY" ~/private_keys/AuthKey_"$ASC_KEY_ID".p8 || { echo "::error::ASC_KEY_P8 does not look like a raw .p8 (missing BEGIN PRIVATE KEY — paste the file contents, not base64)"; exit 1; }
+
+      - name: Install reusable Apple Development certificate
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          EXPECTED_TEAM_ID: 257KW9ZJFP
+        run: |
+          [ -n "$BUILD_CERTIFICATE_BASE64" ] || { echo "::error::BUILD_CERTIFICATE_BASE64 is not set"; exit 1; }
+          [ -n "$P12_PASSWORD" ] || { echo "::error::P12_PASSWORD is not set"; exit 1; }
+
+          CERTIFICATE_PATH="$RUNNER_TEMP/apple-development.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          printf '%s' "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" |
+            grep -q "Apple Development:.*($EXPECTED_TEAM_ID)" ||
+            { echo "::error::The p12 does not contain an Apple Development identity for team $EXPECTED_TEAM_ID"; exit 1; }
 
       - name: Determine marketing version
         id: version
@@ -141,11 +171,10 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
-          # Sign the archive with the cloud-managed Apple Distribution identity directly.
-          # The default (Apple Development at archive, re-sign at export) mints a fresh
-          # Development certificate on every ephemeral runner until the account hits
-          # Apple's certificate cap; the managed Distribution certificate is created once
-          # and reused by every run.
+          # The imported Apple Development identity signs the archive. Forcing
+          # Apple Distribution conflicts with automatic signing and also affects
+          # the TypesetCore framework, which takes no provisioning. Export then
+          # re-signs the app with the cloud-managed Distribution identity.
           xcodebuild archive \
             -project Typeset.xcodeproj \
             -scheme Typeset \
@@ -153,7 +182,6 @@ jobs:
             -destination '${{ matrix.destination }}' \
             -archivePath '${{ matrix.archive }}' \
             MARKETING_VERSION='${{ steps.version.outputs.version }}' \
-            CODE_SIGN_IDENTITY='Apple Distribution' \
             -allowProvisioningUpdates \
             -authenticationKeyPath ~/private_keys/AuthKey_"$ASC_KEY_ID".p8 \
             -authenticationKeyID "$ASC_KEY_ID" \
