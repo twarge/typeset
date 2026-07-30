@@ -50,27 +50,28 @@ The current HTML renderer is intentionally simple starter infrastructure. The ne
 
 ## Development
 
-Open `Typeset.xcodeproj` and press Run. Xcode builds its own dependencies: the
-`TypesetCore` target's first build phase produces `TypesetLang.xcframework`
-from the Rust FFI crate, and the app target's builds the bundled Typst CLI.
-Both check out the pinned `Vendor/typst` submodule and install the Apple Rust
-targets on first use, so a fresh clone needs no terminal step.
+Open `Typeset.xcodeproj` and press Run — that is the build system, in its
+entirety. Xcode builds its own dependencies: the `TypesetCore` target's first
+build phase produces `TypesetLang.xcframework` from the Rust FFI crate, and
+the app target's builds the bundled Typst CLI. Both check out the pinned
+`Vendor/typst` submodule and install the Apple Rust targets on first use, so
+a fresh clone needs no terminal step.
 
-From the command line it's the same build:
+`make` is the same build from the command line (plain `xcodebuild`, no
+overrides):
 
 ```sh
-xcodebuild -project Typeset.xcodeproj -scheme Typeset -destination 'platform=macOS' build
+make          # macOS app
 ```
 
 ```sh
-xcodebuild -project Typeset.xcodeproj -scheme Typeset -destination 'platform=macOS' test
+make ios      # iOS Simulator
 ```
 
-Icons are generated separately, since they are checked in:
-
-```sh
-swift Scripts/generate-icons.swift
-```
+`make icons` regenerates the checked-in icon artwork; `make clean` cleans
+both platforms. Releases are the App Store workflow
+(`.github/workflows/appstore.yml`), which archives and uploads both apps
+with the same xcodebuild invocations.
 
 The project contains a unified multiplatform `Typeset` app target plus shared
 `TypesetCore`, `TypesetQuickLook`, and `TypesetCoreTests` targets. The app
