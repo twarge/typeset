@@ -529,7 +529,6 @@
 			inputFileListPaths = (
 			);
 			inputPaths = (
-				"$(SRCROOT)/Scripts/ensure-typeset-lang-xcframework.sh",
 				"$(SRCROOT)/Scripts/build-typeset-lang-xcframework.sh",
 				"$(SRCROOT)/Vendor/typeset-lang-ffi/Cargo.toml",
 				"$(SRCROOT)/Vendor/typeset-lang-ffi/Cargo.lock",
@@ -543,7 +542,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "set -euo pipefail\n\n/bin/bash \"$SRCROOT/Scripts/ensure-typeset-lang-xcframework.sh\"\n";
+			shellScript = "set -euo pipefail\n\n/bin/bash \"$SRCROOT/Scripts/build-typeset-lang-xcframework.sh\"\n";
 		};
 		200000000000000000000704 /* Build Bundled Typst */ = {
 			isa = PBXShellScriptBuildPhase;

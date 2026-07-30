@@ -1,15 +1,88 @@
 #!/bin/bash
 # Copyright (c) 2026 Twarge LLC.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Builds Vendor/TypesetLang.xcframework from the Rust FFI crate.
+#
+# Incremental by default: when the built binaries are newer than every input
+# (this script, the crate manifest/lock, the header, lib.rs) it exits
+# immediately, so the Xcode build phase can run it on every build for
+# effectively nothing. Pass --force to rebuild regardless. On first use it
+# also checks out the Vendor/typst submodule and installs the Apple Rust
+# targets, so a fresh clone builds from Xcode alone.
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+FORCE=0
+case "${1:-}" in
+  "") ;;
+  --force) FORCE=1 ;;
+  *) echo "usage: $0 [--force]" >&2; exit 64 ;;
+esac
+
+ROOT_DIR="${SRCROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 CRATE_DIR="$ROOT_DIR/Vendor/typeset-lang-ffi"
 BUILD_DIR="$ROOT_DIR/Vendor/Build/TypesetLang"
 OUT_DIR="$ROOT_DIR/Vendor/TypesetLang.xcframework"
 CARGO_BIN="${CARGO:-$HOME/.cargo/bin/cargo}"
 MACOS_MIN_VERSION="${MACOS_MIN_VERSION:-15.0}"
 IOS_MIN_VERSION="${IOS_MIN_VERSION:-26.0}"
+
+RUST_TARGETS=(
+  aarch64-apple-darwin
+  aarch64-apple-ios
+  aarch64-apple-ios-sim
+  x86_64-apple-ios
+)
+
+has_all_binaries() {
+  [ -f "$OUT_DIR/macos-arm64/TypesetLang.framework/TypesetLang" ] &&
+    [ -f "$OUT_DIR/ios-arm64/TypesetLang.framework/TypesetLang" ] &&
+    [ -f "$OUT_DIR/ios-arm64_x86_64-simulator/TypesetLang.framework/TypesetLang" ]
+}
+
+up_to_date() {
+  has_all_binaries || return 1
+
+  local marker="$OUT_DIR/macos-arm64/TypesetLang.framework/TypesetLang"
+  local inputs=(
+    "${BASH_SOURCE[0]}"
+    "$CRATE_DIR/Cargo.toml"
+    "$CRATE_DIR/Cargo.lock"
+    "$CRATE_DIR/include/typeset_lang.h"
+    "$CRATE_DIR/src/lib.rs"
+  )
+
+  local input
+  for input in "${inputs[@]}"; do
+    if [ "$input" -nt "$marker" ]; then
+      return 1
+    fi
+  done
+}
+
+if [ "$FORCE" -eq 0 ] && up_to_date; then
+  exit 0
+fi
+
+# Everything cargo needs before it can resolve the FFI crate; runs only when
+# a rebuild is actually due, so incremental builds stay free.
+
+# The crate reaches the pinned Typst fork through path dependencies, so a
+# fresh clone has nothing for cargo to resolve until this is checked out.
+if [ ! -f "$ROOT_DIR/Vendor/typst/Cargo.toml" ]; then
+  echo "note: checking out the Vendor/typst submodule"
+  git -C "$ROOT_DIR" submodule update --init --recursive Vendor/typst
+fi
+
+# Xcode's build phases run with a trimmed PATH, so look where rustup installs
+# itself before falling back to the environment's.
+RUSTUP_BIN="${RUSTUP:-$HOME/.cargo/bin/rustup}"
+if [ ! -x "$RUSTUP_BIN" ]; then
+  RUSTUP_BIN="$(command -v rustup || true)"
+fi
+if [ -n "$RUSTUP_BIN" ] && [ -x "$RUSTUP_BIN" ]; then
+  "$RUSTUP_BIN" target add "${RUST_TARGETS[@]}" >/dev/null
+fi
 
 if [ ! -x "$CARGO_BIN" ]; then
   CARGO_BIN="$(command -v cargo || true)"
@@ -108,3 +181,8 @@ xcodebuild -create-xcframework \
   -framework "$BUILD_DIR/ios-arm64/TypesetLang.framework" \
   -framework "$BUILD_DIR/ios-simulator-universal/TypesetLang.framework" \
   -output "$OUT_DIR"
+
+if ! has_all_binaries; then
+  echo "error: TypesetLang.xcframework is incomplete after build." >&2
+  exit 1
+fi

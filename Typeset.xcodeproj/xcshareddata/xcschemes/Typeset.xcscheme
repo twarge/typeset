@@ -10,8 +10,8 @@
          <ExecutionAction
             ActionType = "Xcode.IDEStandardExecutionActionsCore.ExecutionActionType.ShellScriptAction">
             <ActionContent
-               title = "Ensure TypesetLang"
-               scriptText = "/bin/bash &quot;$SRCROOT/Scripts/ensure-typeset-lang-xcframework.sh&quot;">
+               title = "Build TypesetLang"
+               scriptText = "/bin/bash &quot;$SRCROOT/Scripts/build-typeset-lang-xcframework.sh&quot;">
                <EnvironmentBuildable>
                   <BuildableReference
                      BuildableIdentifier = "primary"
