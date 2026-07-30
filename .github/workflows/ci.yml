@@ -20,7 +20,7 @@ jobs:
     steps:
       # The build phases can check the submodule out themselves, but doing it
       # here keeps the network work out of the build.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
