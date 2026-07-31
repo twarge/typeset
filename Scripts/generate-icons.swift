@@ -233,22 +233,63 @@ func renderImage(size: Int, draw: (CGFloat) -> Void) -> NSImage {
     return image
 }
 
-func appIcon(size: Int) -> NSImage {
+/// The macOS icon: Apple's canonical grid — an 824x824 squircle centered in
+/// the 1024 canvas with 100px transparent margins — at the current system
+/// corner radius. macOS 26 recognizes artwork on this grid and adopts it
+/// into the system shape; off-grid artwork is shrunk onto the white plate,
+/// and an off-radius corner gets visibly warped during adoption.
+///
+/// The radius is measured, not documented: Calculator's displayed icon on
+/// macOS 27 beta has a 824x824 box at exactly 100px margins and a circular
+/// corner of r=218 (fit rms 4.2px; every pure superellipse fits worse).
+/// 185.4 was the Big Sur-era radius.
+func macAppIcon(size: Int) -> NSImage {
     renderImage(size: size) { side in
         let scale = side / 1024.0
 
-        let rect = CGRect(x: 62 * scale, y: 62 * scale, width: 900 * scale, height: 900 * scale)
-        let radius = 182 * scale
-        let borderWidth = max(1.0, 58 * scale)
-        let fillPath = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+        let rect = CGRect(x: 100 * scale, y: 100 * scale, width: 824 * scale, height: 824 * scale)
+        let radius = 218.0 * scale
+        let ringWidth = max(1.0, 54 * scale)
+
+        let shadow = NSShadow()
+        shadow.shadowBlurRadius = 36 * scale
+        shadow.shadowOffset = CGSize(width: 0, height: -12 * scale)
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.30)
+        shadow.set()
+
+        let silhouette = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+        white.setFill()
+        silhouette.fill()
+        NSShadow().set()
 
         NSGraphicsContext.saveGraphicsState()
-        fillPath.addClip()
+        silhouette.addClip()
         gradient().draw(in: rect, angle: gradientAngle)
-        drawDiagonalTyp(in: rect.insetBy(dx: borderWidth * 1.4, dy: borderWidth * 1.4))
+        drawDiagonalTyp(in: rect.insetBy(dx: ringWidth * 1.4, dy: ringWidth * 1.4))
         NSGraphicsContext.restoreGraphicsState()
 
-        drawGradientRing(in: rect, cornerRadius: radius, width: borderWidth)
+        drawGradientRing(in: rect, cornerRadius: radius, width: ringWidth)
+    }
+}
+
+/// The iOS icon: full-bleed — the system applies the squircle mask itself.
+/// The ring floats inset from the edges so the mask can never clip it.
+func iosAppIcon(size: Int) -> NSImage {
+    renderImage(size: size) { side in
+        let scale = side / 1024.0
+
+        let canvas = CGRect(x: 0, y: 0, width: side, height: side)
+        gradient().draw(in: canvas, angle: gradientAngle)
+
+        let ringWidth = max(1.0, 58 * scale)
+        let ring = canvas.insetBy(dx: 56 * scale, dy: 56 * scale)
+        // Concentric with the system mask: the measured corner ratio (218/824)
+        // puts the full-canvas mask near r=271, so an inset-56 ring is
+        // parallel to it at 271-56.
+        let ringRadius = 215 * scale
+        drawGradientRing(in: ring, cornerRadius: ringRadius, width: ringWidth)
+
+        drawDiagonalTyp(in: ring.insetBy(dx: ringWidth * 1.4, dy: ringWidth * 1.4))
     }
 }
 
@@ -340,11 +381,36 @@ func run(_ executable: String, _ arguments: [String]) throws {
 }
 
 func generateAppIcons() throws {
-    let sizes = [16, 20, 29, 32, 40, 58, 60, 64, 76, 80, 87, 120, 128, 152, 167, 180, 256, 512, 1024]
     try FileManager.default.createDirectory(at: appIconSet, withIntermediateDirectories: true)
-    for size in sizes {
-        try writeOpaquePNG(appIcon(size: size), to: appIconSet.appending(path: "Icon-\(size).png"))
+
+    // iOS is single-size: the catalog carries one full-bleed 1024 (no alpha,
+    // as App Store validation requires) and the system derives the rest.
+    try writeOpaquePNG(iosAppIcon(size: 1024), to: appIconSet.appending(path: "icon-ios-1024.png"))
+
+    // macOS keeps per-size artwork with transparency for the margins.
+    for size in [16, 32, 64, 128, 256, 512, 1024] {
+        try writePNG(macAppIcon(size: size), to: appIconSet.appending(path: "icon-mac-\(size).png"))
     }
+
+    let contents = """
+    {
+      "images" : [
+        { "idiom" : "universal", "platform" : "ios", "size" : "1024x1024", "filename" : "icon-ios-1024.png" },
+        { "idiom" : "mac", "scale" : "1x", "size" : "16x16", "filename" : "icon-mac-16.png" },
+        { "idiom" : "mac", "scale" : "2x", "size" : "16x16", "filename" : "icon-mac-32.png" },
+        { "idiom" : "mac", "scale" : "1x", "size" : "32x32", "filename" : "icon-mac-32.png" },
+        { "idiom" : "mac", "scale" : "2x", "size" : "32x32", "filename" : "icon-mac-64.png" },
+        { "idiom" : "mac", "scale" : "1x", "size" : "128x128", "filename" : "icon-mac-128.png" },
+        { "idiom" : "mac", "scale" : "2x", "size" : "128x128", "filename" : "icon-mac-256.png" },
+        { "idiom" : "mac", "scale" : "1x", "size" : "256x256", "filename" : "icon-mac-256.png" },
+        { "idiom" : "mac", "scale" : "2x", "size" : "256x256", "filename" : "icon-mac-512.png" },
+        { "idiom" : "mac", "scale" : "1x", "size" : "512x512", "filename" : "icon-mac-512.png" },
+        { "idiom" : "mac", "scale" : "2x", "size" : "512x512", "filename" : "icon-mac-1024.png" }
+      ],
+      "info" : { "author" : "xcode", "version" : 1 }
+    }
+    """
+    try contents.write(to: appIconSet.appending(path: "Contents.json"), atomically: true, encoding: .utf8)
 }
 
 func generateDocumentIcon(name: String, kind: IconKind) throws {
