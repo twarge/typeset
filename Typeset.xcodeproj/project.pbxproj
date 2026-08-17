@@ -10,6 +10,7 @@
 		100000000000000000000001 /* DocumentPackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000101 /* DocumentPackage.swift */; };
 		100000000000000000000002 /* PreviewHTMLBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000102 /* PreviewHTMLBuilder.swift */; };
 		100000000000000000000003 /* TypstRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000103 /* TypstRenderer.swift */; };
+		1000000000000000000000F1 /* Intents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001F1 /* Intents.swift */; };
 		100000000000000000000004 /* TypesetApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000104 /* TypesetApp.swift */; };
 		100000000000000000000005 /* TypesetWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000105 /* TypesetWorkspaceView.swift */; };
 		100000000000000000000006 /* SourceEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000106 /* SourceEditor.swift */; };
@@ -134,6 +135,7 @@
 		100000000000000000000101 /* DocumentPackage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentPackage.swift; sourceTree = "<group>"; };
 		100000000000000000000102 /* PreviewHTMLBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewHTMLBuilder.swift; sourceTree = "<group>"; };
 		100000000000000000000103 /* TypstRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstRenderer.swift; sourceTree = "<group>"; };
+		1000000000000000000001F1 /* Intents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Intents.swift; sourceTree = "<group>"; };
 		100000000000000000000104 /* TypesetApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypesetApp.swift; sourceTree = "<group>"; };
 		100000000000000000000105 /* TypesetWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypesetWorkspaceView.swift; sourceTree = "<group>"; };
 		100000000000000000000106 /* SourceEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditor.swift; sourceTree = "<group>"; };
@@ -268,6 +270,7 @@
 			isa = PBXGroup;
 			children = (
 				100000000000000000000104 /* TypesetApp.swift */,
+				1000000000000000000001F1 /* Intents.swift */,
 				100000000000000000000105 /* TypesetWorkspaceView.swift */,
 				100000000000000000000106 /* SourceEditor.swift */,
 				100000000000000000000E01 /* PlatformTextView+macOS.swift */,
@@ -590,6 +593,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				100000000000000000000004 /* TypesetApp.swift in Sources */,
+				1000000000000000000000F1 /* Intents.swift in Sources */,
 				100000000000000000000005 /* TypesetWorkspaceView.swift in Sources */,
 				100000000000000000000006 /* SourceEditor.swift in Sources */,
 				100000000000000000000F01 /* PlatformTextView+macOS.swift in Sources */,

@@ -10,6 +10,10 @@ import AppKit
 
 @main
 struct TypesetApp: App {
+    #if os(macOS)
+    @NSApplicationDelegateAdaptor(TypesetAppDelegate.self) private var appDelegate
+    #endif
+
     init() {
         TypesetBundledFonts.register()
         UserDefaults.standard.register(defaults: [

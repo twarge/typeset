@@ -17,6 +17,11 @@ Typeset's source code is licensed under the Apache License 2.0. See [LICENSE](LI
 - A WebKit preview view with source-position metadata embedded in the generated HTML.
 - Click-to-seek from preview back to the source editor.
 - PDF export through the Typst command-line tool.
+- The compiler as a system verb: a `Compile Typst` App Intent for Shortcuts
+  (source text in, a PDF file out — on iOS too), and a macOS Service,
+  `Compile Typst to PDF`, that other apps can call with Typst text on a
+  pasteboard and get PDF data back. Calcium's Typeset PDF command uses the
+  service when Typeset is installed.
 - Typst checked in as a Git submodule at `Vendor/typst`.
 
 ## Typst Integration

@@ -66,6 +66,29 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright (c) 2026 Twarge LLC.</string>
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>Compile Typst to PDF</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>compileTypst</string>
+			<key>NSPortName</key>
+			<string>Typeset</string>
+			<key>NSSendTypes</key>
+			<array>
+				<string>NSStringPboardType</string>
+			</array>
+			<key>NSReturnTypes</key>
+			<array>
+				<string>com.adobe.pdf</string>
+				<string>Apple PDF pasteboard type</string>
+			</array>
+		</dict>
+	</array>
 	<key>UIAppFonts</key>
 	<array>
 		<string>FiraCode-Light.ttf</string>
