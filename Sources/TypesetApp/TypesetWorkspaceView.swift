@@ -669,11 +669,17 @@ struct TypesetWorkspaceView: View {
     }
 
     private var exportToolbarButton: some View {
-        Button(action: exportPDF) {
-            Label("Export PDF", systemImage: "square.and.arrow.up")
+        // iOS presents the system share sheet, macOS a save panel — label each honestly.
+        #if os(iOS)
+        let exportTitle = "Share"
+        #else
+        let exportTitle = "Export PDF"
+        #endif
+        return Button(action: exportPDF) {
+            Label(exportTitle, systemImage: "square.and.arrow.up")
         }
         .disabled(!supportsPDFExport)
-        .help("Export PDF")
+        .help(exportTitle)
     }
 
     private var settingsToolbarButton: some View {
