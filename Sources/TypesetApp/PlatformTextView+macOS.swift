@@ -153,8 +153,19 @@ struct PlatformTextView: NSViewRepresentable {
         // correction indicator and Escape-to-reject interaction. Delegate
         // filtering below limits native correction candidates to the language service's
         // semantic prose ranges.
-        textView.isContinuousSpellCheckingEnabled = false
-        textView.isGrammarCheckingEnabled = false
+        //
+        // Assign only on change: `setContinuousSpellCheckingEnabled:` strips
+        // the spelling-state temporary attributes over the whole document even
+        // when the value is unchanged, and this runs on every SwiftUI update
+        // pass — several per keystroke — so an unconditional write erased
+        // Typeset's squiggles until the next coalesced repaint, flashing the
+        // underlines on every keystroke.
+        if textView.isContinuousSpellCheckingEnabled {
+            textView.isContinuousSpellCheckingEnabled = false
+        }
+        if textView.isGrammarCheckingEnabled {
+            textView.isGrammarCheckingEnabled = false
+        }
         if textView.isAutomaticSpellingCorrectionEnabled != spellCheckingEnabled {
             textView.isAutomaticSpellingCorrectionEnabled = spellCheckingEnabled
         }
@@ -261,9 +272,13 @@ struct PlatformTextView: NSViewRepresentable {
         )
     }
 
+    // Correction only — no `.spelling`. Typeset draws its own squiggles from
+    // the language service's prose ranges; enabling the native spelling pass
+    // just makes AppKit re-check the edited region after every keystroke and
+    // install state the delegate rejects, erasing Typeset's squiggles there
+    // until the next coalesced repaint — visible as flashing underlines.
     private static let nativeTextCheckingTypes =
-        NSTextCheckingResult.CheckingType.spelling.rawValue
-            | NSTextCheckingResult.CheckingType.correction.rawValue
+        NSTextCheckingResult.CheckingType.correction.rawValue
 
     private func applyEditorContentInsets(to scrollView: NSScrollView) {
         // Assign only on change: these AppKit setters invalidate layout even
@@ -726,9 +741,20 @@ struct PlatformTextView: NSViewRepresentable {
             range affectedCharRange: NSRange
         ) -> Int {
             // Native checking has no semantic-range API. Typeset renders its
-            // own spelling state from the language service's prose ranges, so reject any
-            // whole-document state AppKit attempts to install.
-            0
+            // own spelling state from the language service's prose ranges, so
+            // whatever the native pass concluded — install or clear — answer
+            // with the state already drawn there. Returning a flat 0 would let
+            // a native clear blank Typeset's squiggles until the next
+            // coalesced repaint.
+            guard let layoutManager = textView.layoutManager,
+                  affectedCharRange.location < (textView.string as NSString).length,
+                  let current = layoutManager.temporaryAttribute(
+                      .spellingState,
+                      atCharacterIndex: affectedCharRange.location,
+                      effectiveRange: nil
+                  ) as? Int
+            else { return 0 }
+            return current
         }
 
         func textView(
@@ -1994,4 +2020,5 @@ final class LineNumberRulerView: NSRulerView {
         }
     }
 }
+
 #endif
