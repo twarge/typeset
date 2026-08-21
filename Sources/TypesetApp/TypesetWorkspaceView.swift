@@ -1770,10 +1770,20 @@ struct TypesetWorkspaceView: View {
             )
         }
         do {
+            // Encode once and share the immutable Data buffer with both the
+            // document package and the language-service workspace. Previously
+            // every keystroke encoded the complete source twice on the main
+            // actor before either downstream pipeline could make progress.
+            let encodedText = Data(text.utf8)
             try withoutDocumentUndo {
-                try document.package.updateSelectedText(text)
+                try document.package.updateFileData(encodedText, for: path)
             }
-            syncLanguageServiceFile(path: path, text: text, selectionRange: selectionRange)
+            syncLanguageServiceFile(
+                path: path,
+                text: text,
+                data: encodedText,
+                selectionRange: selectionRange
+            )
             refreshPreview()
         } catch {
             recordLog("Source update failed", message: error.localizedDescription, level: .error, present: true)
@@ -1948,7 +1958,12 @@ struct TypesetWorkspaceView: View {
         }
     }
 
-    private func syncLanguageServiceFile(path: String, text: String, selectionRange: NSRange? = nil) {
+    private func syncLanguageServiceFile(
+        path: String,
+        text: String,
+        data: Data? = nil,
+        selectionRange: NSRange? = nil
+    ) {
         let documentID = languageServiceDocumentID
         // Data files and scripts still reach the session — the document reads
         // them at compile time — but they aren't Typst, so nothing downstream
@@ -1959,7 +1974,7 @@ struct TypesetWorkspaceView: View {
             _ = try? await languageWorkspaceStore.updateFile(
                 documentID: documentID,
                 path: path,
-                data: Data(text.utf8)
+                data: data ?? Data(text.utf8)
             )
             guard !Task.isCancelled else { return }
             await languageService.updateFile(path: path, text: text)

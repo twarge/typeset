@@ -13,7 +13,7 @@ import AppKit
 import UIKit
 #endif
 
-enum TypstSyntaxKind {
+enum TypstSyntaxKind: Sendable {
     case comment
     case string
     case heading
@@ -26,7 +26,7 @@ enum TypstSyntaxKind {
     case emphasis
 }
 
-struct TypstSyntaxToken {
+struct TypstSyntaxToken: Sendable {
     var kind: TypstSyntaxKind
     var range: NSRange
 }
@@ -34,7 +34,7 @@ struct TypstSyntaxToken {
 /// Which tokenizer colors a file. Packages hold data and generator scripts
 /// alongside the Typst sources, and Typst's tokenizer would mis-color them —
 /// worse, its notion of "prose" would invite autocorrection into code.
-enum SourceSyntax {
+enum SourceSyntax: Equatable, Sendable {
     case typst
     case python
     case plainText
@@ -54,12 +54,12 @@ enum SourceSyntax {
 }
 
 enum TypstSyntaxHighlighter {
-    static let keywords: Set<String> = [
+    nonisolated static let keywords: Set<String> = [
         "as", "auto", "break", "continue", "else", "false", "for", "if", "import", "in",
         "include", "let", "none", "return", "set", "show", "true", "while"
     ]
 
-    static func tokens(in text: String, syntax: SourceSyntax) -> [TypstSyntaxToken] {
+    nonisolated static func tokens(in text: String, syntax: SourceSyntax) -> [TypstSyntaxToken] {
         switch syntax {
         case .typst:
             return tokens(in: text)
@@ -73,7 +73,7 @@ enum TypstSyntaxHighlighter {
     /// Tokenizes Python into the shared token kinds, so generator scripts get
     /// the same styling pipeline as Typst sources. Comments and strings win
     /// over everything else; triple-quoted strings span lines.
-    static func pythonTokens(in text: String) -> [TypstSyntaxToken] {
+    nonisolated static func pythonTokens(in text: String) -> [TypstSyntaxToken] {
         let scalars = Array(text.unicodeScalars)
         var tokens: [TypstSyntaxToken] = []
         var index = 0
@@ -157,20 +157,20 @@ enum TypstSyntaxHighlighter {
         return tokens
     }
 
-    static let pythonKeywords: Set<String> = [
+    nonisolated static let pythonKeywords: Set<String> = [
         "False", "None", "True", "and", "as", "assert", "async", "await", "break",
         "class", "continue", "def", "del", "elif", "else", "except", "finally",
         "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal",
         "not", "or", "pass", "raise", "return", "try", "while", "with", "yield",
     ]
 
-    static let pythonBuiltins: Set<String> = [
+    nonisolated static let pythonBuiltins: Set<String> = [
         "abs", "all", "any", "bool", "dict", "enumerate", "filter", "float",
         "format", "int", "len", "list", "map", "max", "min", "print", "range",
         "repr", "reversed", "round", "set", "sorted", "str", "sum", "tuple", "zip",
     ]
 
-    static func tokens(in text: String) -> [TypstSyntaxToken] {
+    nonisolated static func tokens(in text: String) -> [TypstSyntaxToken] {
         let nsText = text as NSString
         var tokens: [TypstSyntaxToken] = []
         var offset = 0
@@ -209,7 +209,7 @@ enum TypstSyntaxHighlighter {
         return tokens
     }
 
-    private static func tokenizeInline(_ line: String, lineOffset: Int, tokens: inout [TypstSyntaxToken]) {
+    nonisolated private static func tokenizeInline(_ line: String, lineOffset: Int, tokens: inout [TypstSyntaxToken]) {
         let scalars = Array(line.unicodeScalars)
         var index = 0
 
@@ -283,7 +283,7 @@ enum TypstSyntaxHighlighter {
         }
     }
 
-    private static func scanString(_ scalars: [Unicode.Scalar], from start: Int) -> Int {
+    nonisolated private static func scanString(_ scalars: [Unicode.Scalar], from start: Int) -> Int {
         var index = start + 1
         var escaped = false
         while index < scalars.count {
@@ -299,7 +299,7 @@ enum TypstSyntaxHighlighter {
         return scalars.count
     }
 
-    private static func scanUntil(_ scalars: [Unicode.Scalar], from start: Int, delimiter: Unicode.Scalar) -> Int {
+    nonisolated private static func scanUntil(_ scalars: [Unicode.Scalar], from start: Int, delimiter: Unicode.Scalar) -> Int {
         var index = start
         while index < scalars.count {
             if scalars[index] == delimiter {
@@ -310,7 +310,7 @@ enum TypstSyntaxHighlighter {
         return scalars.count
     }
 
-    private static func scanIdentifierLike(_ scalars: [Unicode.Scalar], from start: Int) -> Int {
+    nonisolated private static func scanIdentifierLike(_ scalars: [Unicode.Scalar], from start: Int) -> Int {
         var index = start
         while index < scalars.count {
             let scalar = scalars[index]
@@ -322,7 +322,7 @@ enum TypstSyntaxHighlighter {
         return index
     }
 
-    private static func scanNumber(_ scalars: [Unicode.Scalar], from start: Int) -> Int {
+    nonisolated private static func scanNumber(_ scalars: [Unicode.Scalar], from start: Int) -> Int {
         var index = start
         while index < scalars.count {
             let scalar = scalars[index]
@@ -356,13 +356,25 @@ extension TypstSyntaxHighlighter {
     // NSLayoutManager temporary attributes: display-only, no storage churn.
     @MainActor
     static func applyTemporaryTokens(to textView: NSTextView, text: String, font: NSFont, syntax: SourceSyntax) {
+        applyTemporaryTokens(
+            to: textView,
+            tokens: tokens(in: text, syntax: syntax),
+            font: font
+        )
+    }
+
+    /// Applies tokens that may have been computed away from the main actor.
+    /// TextKit mutation still belongs to the main actor, but lexical analysis
+    /// does not need to hold up keyboard event processing.
+    @MainActor
+    static func applyTemporaryTokens(to textView: NSTextView, tokens: [TypstSyntaxToken], font: NSFont) {
         guard let layoutManager = textView.layoutManager, let textStorage = textView.textStorage else { return }
         let fullRange = NSRange(location: 0, length: textStorage.length)
         layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: fullRange)
         layoutManager.removeTemporaryAttribute(.font, forCharacterRange: fullRange)
         layoutManager.addTemporaryAttributes([.font: font], forCharacterRange: fullRange)
 
-        for token in tokens(in: text, syntax: syntax) where NSMaxRange(token.range) <= textStorage.length {
+        for token in tokens where NSMaxRange(token.range) <= textStorage.length {
             layoutManager.addTemporaryAttributes(attributes(for: token.kind, font: font), forCharacterRange: token.range)
         }
     }
@@ -432,9 +444,21 @@ extension TypstSyntaxHighlighter {
 
     @MainActor
     static func applyTokenStyling(to textView: UITextView, text: String, font: UIFont, syntax: SourceSyntax) {
+        applyTokenStyling(
+            to: textView,
+            tokens: tokens(in: text, syntax: syntax),
+            font: font
+        )
+    }
+
+    /// Applies tokens that may have been computed away from the main actor.
+    @MainActor
+    static func applyTokenStyling(to textView: UITextView, tokens: [TypstSyntaxToken], font: UIFont) {
         textView.textStorage.beginEditing()
         textView.textStorage.setAttributes(baseAttributes(font: font), range: NSRange(location: 0, length: textView.textStorage.length))
-        applyTokens(to: textView.textStorage, text: text, font: font, syntax: syntax)
+        for token in tokens where NSMaxRange(token.range) <= textView.textStorage.length {
+            textView.textStorage.addAttributes(attributes(for: token.kind, font: font), range: token.range)
+        }
         textView.textStorage.endEditing()
     }
 

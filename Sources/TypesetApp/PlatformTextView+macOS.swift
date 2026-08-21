@@ -179,21 +179,43 @@ struct PlatformTextView: NSViewRepresentable {
         }
         context.coordinator.isPackageDropTargeted = $isPackageDropTargeted
         context.coordinator.updateFontSize(fontSize, in: textView)
-        textView.textContainerInset = NSSize(width: 18, height: 18)
+        let containerInset = NSSize(width: 18, height: 18)
+        if textView.textContainerInset != containerInset {
+            textView.textContainerInset = containerInset
+        }
         applyEditorContentInsets(to: scrollView)
-        scrollView.hasVerticalRuler = showLineNumbers
-        scrollView.rulersVisible = showLineNumbers
+        if scrollView.hasVerticalRuler != showLineNumbers {
+            scrollView.hasVerticalRuler = showLineNumbers
+        }
+        if scrollView.rulersVisible != showLineNumbers {
+            scrollView.rulersVisible = showLineNumbers
+        }
         (scrollView.verticalRulerView as? LineNumberRulerView)?.invalidateLineNumbers()
+        let annotationsChanged = context.coordinator.consumeAnnotationChanges(
+            diagnostics: diagnostics,
+            proseRanges: context.coordinator.proseRanges,
+            spellCheckingEnabled: spellCheckingEnabled
+        )
 
         if textView.string != text {
-            if context.coordinator.shouldKeepNativeText(textView.string, representedText: text) {
-                context.coordinator.repaintSyntaxOnly(in: textView)
+            // Marked text makes `textView.string` disagree with the binding
+            // without any edit having been committed: inline predictive text
+            // inserts its gray suggestion as marked text, as do IME
+            // composition and dead keys. Replacing the storage then would
+            // cancel the composition mid-keystroke — eating letters typed
+            // since the last binding round-trip — and force a relayout inside
+            // this SwiftUI render pass (the reentrant NSHostingView warning).
+            if textView.hasMarkedText() ||
+                context.coordinator.shouldKeepNativeText(textView.string, representedText: text) {
+                context.coordinator.scheduleRepaint(in: textView)
             } else {
                 context.coordinator.applyHighlighting(to: textView, text: text)
             }
         } else {
             context.coordinator.markRepresentedTextSynced(text)
-            context.coordinator.repaintSyntaxOnly(in: textView)
+            if annotationsChanged {
+                context.coordinator.scheduleRepaint(in: textView)
+            }
         }
         textView.isEditable = isEditable
 
@@ -244,17 +266,26 @@ struct PlatformTextView: NSViewRepresentable {
             | NSTextCheckingResult.CheckingType.correction.rawValue
 
     private func applyEditorContentInsets(to scrollView: NSScrollView) {
+        // Assign only on change: these AppKit setters invalidate layout even
+        // for equal values, and this runs on every SwiftUI update pass.
         if let fixedTopContentInset {
-            scrollView.automaticallyAdjustsContentInsets = false
-            scrollView.contentInsets = NSEdgeInsets(
+            if scrollView.automaticallyAdjustsContentInsets {
+                scrollView.automaticallyAdjustsContentInsets = false
+            }
+            let insets = NSEdgeInsets(
                 top: fixedTopContentInset,
                 left: 0,
                 bottom: 0,
                 right: 0
             )
+            if !NSEdgeInsetsEqual(scrollView.contentInsets, insets) {
+                scrollView.contentInsets = insets
+            }
         } else {
-            scrollView.automaticallyAdjustsContentInsets = true
-            scrollView.contentInsets = NSEdgeInsetsZero
+            if !scrollView.automaticallyAdjustsContentInsets {
+                scrollView.automaticallyAdjustsContentInsets = true
+                scrollView.contentInsets = NSEdgeInsetsZero
+            }
         }
     }
 
@@ -392,8 +423,15 @@ struct PlatformTextView: NSViewRepresentable {
         private var lastSnippetToken = 0
         private var lastTextReplacementToken = 0
         private var nativeTextAwaitingBinding: String?
+        private var scheduledRepaintTask: Task<Void, Never>?
+        private var renderedDiagnostics: [TypstSourceDiagnostic] = []
+        private var renderedProseRanges: [TypstProseRange] = []
+        private var renderedSpellCheckingEnabled = false
+        private var lastLanguageOverlayAnchor: CGPoint?
+        private var isLanguageOverlayAnchorUpdatePending = false
 
         deinit {
+            scheduledRepaintTask?.cancel()
             NotificationCenter.default.removeObserver(self)
         }
 
@@ -647,7 +685,7 @@ struct PlatformTextView: NSViewRepresentable {
                 autocorrectionProseRanges = []
                 autocorrectionTextLength = nextLength
             }
-            repaintSyntaxOnly(in: textView)
+            scheduleRepaint(in: textView)
             let range = textView.selectedRange()
             sendTextChange(nextText, selectedRange: range)
             updateLanguageOverlayAnchor(in: textView, selectedRange: range)
@@ -886,7 +924,11 @@ struct PlatformTextView: NSViewRepresentable {
             proseRangesAreCurrent = isCurrent
             guard isCurrent else {
                 let nativeText = textView?.string
+                // Marked text (inline prediction, IME composition) diverges the
+                // native string from the last committed edit; it is still a
+                // pending edit, not staleness worth discarding ranges over.
                 let nativeEditIsPending = nativeText.map { nativeTextAwaitingBinding == $0 } ?? false
+                    || textView?.hasMarkedText() == true
                 if let nativeText, nativeText != representedText, !nativeEditIsPending {
                     proseRanges = []
                     autocorrectionProseRanges = []
@@ -943,6 +985,48 @@ struct PlatformTextView: NSViewRepresentable {
             }
         }
 
+        func consumeAnnotationChanges(
+            diagnostics: [TypstSourceDiagnostic],
+            proseRanges: [TypstProseRange],
+            spellCheckingEnabled: Bool
+        ) -> Bool {
+            let changed = renderedDiagnostics != diagnostics ||
+                renderedProseRanges != proseRanges ||
+                renderedSpellCheckingEnabled != spellCheckingEnabled
+            renderedDiagnostics = diagnostics
+            renderedProseRanges = proseRanges
+            renderedSpellCheckingEnabled = spellCheckingEnabled
+            return changed
+        }
+
+        /// Coalesces rapid edits, then performs the pure lexical pass off the
+        /// main actor. Only the final TextKit attribute update returns to the UI
+        /// thread, after keyboard input has had a chance to paint.
+        func scheduleRepaint(in textView: NSTextView, delayNanoseconds: UInt64 = 120_000_000) {
+            scheduledRepaintTask?.cancel()
+            let snapshot = textView.string
+            let snapshotSyntax = syntax
+            scheduledRepaintTask = Task { @MainActor [weak self, weak textView] in
+                do {
+                    try await Task.sleep(nanoseconds: delayNanoseconds)
+                } catch {
+                    return
+                }
+                let tokens = await Task.detached(priority: .userInitiated) {
+                    TypstSyntaxHighlighter.tokens(in: snapshot, syntax: snapshotSyntax)
+                }.value
+                guard !Task.isCancelled,
+                      let self,
+                      let textView,
+                      !textView.hasMarkedText(),
+                      textView.string == snapshot,
+                      self.syntax == snapshotSyntax,
+                      !self.isApplyingHighlighting
+                else { return }
+                self.repaintSyntaxOnly(in: textView, tokens: tokens)
+            }
+        }
+
         func shouldKeepNativeText(_ nativeText: String, representedText: String) -> Bool {
             nativeTextAwaitingBinding == nativeText && representedText != nativeText
         }
@@ -960,17 +1044,40 @@ struct PlatformTextView: NSViewRepresentable {
         }
 
         private func updateLanguageOverlayAnchor(in textView: NSTextView, selectedRange: NSRange) {
-            guard let layoutManager = textView.layoutManager,
-                  let textContainer = textView.textContainer else { return }
-            let textLength = (textView.string as NSString).length
-            let glyphIndex = layoutManager.glyphIndexForCharacter(at: min(selectedRange.location, max(0, textLength)))
-            let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphIndex, length: 0), in: textContainer)
-            let origin = textView.textContainerOrigin
-            let visibleRect = textView.visibleRect
-            onLanguageOverlayAnchorChange(CGPoint(
-                x: rect.minX + origin.x - visibleRect.minX,
-                y: rect.maxY + origin.y - visibleRect.minY
-            ))
+            // Selection and text notifications arrive inside AppKit's edit
+            // transaction, often more than once for one keystroke. Coalesce the
+            // geometry read onto the next run-loop turn so caret layout cannot
+            // delay native text insertion. Read the live selection then; the
+            // argument only documents which event requested the update.
+            _ = selectedRange
+            guard !isLanguageOverlayAnchorUpdatePending else { return }
+            isLanguageOverlayAnchorUpdatePending = true
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self else { return }
+                self.isLanguageOverlayAnchorUpdatePending = false
+                guard let textView,
+                      let layoutManager = textView.layoutManager,
+                      let textContainer = textView.textContainer else { return }
+                let textLength = (textView.string as NSString).length
+                let selection = textView.selectedRange()
+                let glyphIndex = layoutManager.glyphIndexForCharacter(
+                    at: min(selection.location, max(0, textLength))
+                )
+                let rect = layoutManager.boundingRect(
+                    forGlyphRange: NSRange(location: glyphIndex, length: 0),
+                    in: textContainer
+                )
+                let origin = textView.textContainerOrigin
+                let visibleRect = textView.visibleRect
+                let anchor = CGPoint(
+                    x: rect.minX + origin.x - visibleRect.minX,
+                    y: rect.maxY + origin.y - visibleRect.minY
+                )
+                if let last = self.lastLanguageOverlayAnchor,
+                   last.distance(to: anchor) <= 0.5 { return }
+                self.lastLanguageOverlayAnchor = anchor
+                self.onLanguageOverlayAnchorChange(anchor)
+            }
         }
 
         func updateFontSize(_ newSize: Double, in textView: NSTextView) {
@@ -1014,6 +1121,13 @@ struct PlatformTextView: NSViewRepresentable {
             let size = appliedFontSize > 0 ? appliedFontSize : fontSize
             let font = SourceEditorFont.regular(size: size)
             TypstSyntaxHighlighter.applyTemporaryTokens(to: textView, text: textView.string, font: font, syntax: syntax)
+            applyDiagnosticsAndSpelling(to: textView)
+        }
+
+        private func repaintSyntaxOnly(in textView: NSTextView, tokens: [TypstSyntaxToken]) {
+            let size = appliedFontSize > 0 ? appliedFontSize : fontSize
+            let font = SourceEditorFont.regular(size: size)
+            TypstSyntaxHighlighter.applyTemporaryTokens(to: textView, tokens: tokens, font: font)
             applyDiagnosticsAndSpelling(to: textView)
         }
 

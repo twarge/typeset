@@ -92,14 +92,24 @@ extension PDFPreviewView {
     @MainActor final class Coordinator: NSObject {
         var onSeek: (SourceRange) -> Void
         private var activeData: Data?
-        private var stagedData: Data?
-        private var stagedDocument: PDFDocument?
         private var activeRevision: Int?
-        private var stagedRevision: Int?
         private var activeSourceRects: [PreviewSourceRect] = []
-        private var stagedSourceRects: [PreviewSourceRect] = []
+        /// The newest compile result not yet handed to PDFKit. Overwritten
+        /// freely as results stream in; only the latest matters.
+        private var pendingData: Data?
+        private var pendingRevision: Int?
+        private var pendingSourceRects: [PreviewSourceRect] = []
+        /// The result currently installed in the off-screen view and warming
+        /// up toward the visible swap. Distinct from `pending` so results that
+        /// arrive mid-warmup queue behind it instead of resetting it.
+        private var preparingData: Data?
+        private var preparingDocument: PDFDocument?
+        private var preparingRevision: Int?
+        private var preparingSourceRects: [PreviewSourceRect] = []
         private var isSwapScheduled = false
+        private var isPreparationCycleActive = false
         private var preparationToken = 0
+        private var pendingApplyWorkItem: DispatchWorkItem?
         /// Saved preview viewport (zoom + scroll spot) to apply on the first load
         /// after reopening, so the preview comes up exactly where the user left
         /// it rather than at PDFKit's fit-to-width default. Applied once; after
@@ -107,7 +117,6 @@ extension PDFPreviewView {
         /// recompile anchor.
         private var restoredViewport: PreviewViewport?
         private var hasAppliedViewportRestore = false
-        #if os(iOS)
         /// Delay applying a freshly-compiled PDF into the live `PDFView`
         /// until the user has paused typing for this long. Compiles still
         /// fire on every keystroke (so the preview is always one compile
@@ -115,8 +124,8 @@ extension PDFPreviewView {
         /// is what causes PDFKit to mutate first responder on iOS. Each
         /// new compile arrival resets the timer, so during fast typing the
         /// PDF only refreshes when the user takes a breath.
+        #if os(iOS)
         private static let pdfApplyDebounce: TimeInterval = 0.3
-        private var pendingApplyWorkItem: DispatchWorkItem?
         #endif
 
         init(onSeek: @escaping (SourceRange) -> Void) {
@@ -131,51 +140,122 @@ extension PDFPreviewView {
             container.onViewportChange = onViewportChange
 
             guard let preview else {
-                #if os(iOS)
                 pendingApplyWorkItem?.cancel()
                 pendingApplyWorkItem = nil
-                #endif
                 activeData = nil
-                stagedData = nil
-                stagedDocument = nil
                 activeRevision = nil
-                stagedRevision = nil
                 activeSourceRects = []
-                stagedSourceRects = []
+                pendingData = nil
+                pendingRevision = nil
+                pendingSourceRects = []
+                preparingData = nil
+                preparingDocument = nil
+                preparingRevision = nil
+                preparingSourceRects = []
                 isSwapScheduled = false
+                isPreparationCycleActive = false
                 preparationToken += 1
                 container.clear()
                 return
             }
 
-            guard revision != activeRevision, revision != stagedRevision else { return }
+            guard revision != activeRevision,
+                  revision != preparingRevision,
+                  revision != pendingRevision else { return }
 
-            guard let document = PDFDocument(data: preview.data) else { return }
-            stagedData = preview.data
-            stagedDocument = document
-            stagedRevision = revision
-            stagedSourceRects = preview.sourceRects
+            // Merely stage immutable output while SwiftUI is updating the
+            // representable. Constructing and installing the PDF synchronously
+            // here can make PDFKit force AppKit layout while NSHostingView is
+            // already rendering, producing reentrant-layout warnings and a
+            // visible hitch in an otherwise-native text insertion.
+            pendingData = preview.data
+            pendingRevision = revision
+            pendingSourceRects = preview.sourceRects
 
             #if os(iOS)
             // Hold the visible PDF swap until typing pauses. The compile
             // already ran (this update is its result); we're only delaying
             // the moment we hand the new document to PDFKit, because that
-            // hand-off is what disturbs first responder.
+            // hand-off is what disturbs first responder. Each arrival abandons
+            // any in-flight preparation and restarts the pause timer.
             pendingApplyWorkItem?.cancel()
+            isSwapScheduled = false
+            isPreparationCycleActive = false
+            preparationToken += 1
             let workItem = DispatchWorkItem { [weak self, weak container] in
                 guard let self, let container else { return }
                 self.pendingApplyWorkItem = nil
-                self.applyStagedPreview(in: container, renderWarmupDelay: renderWarmupDelay)
+                self.isPreparationCycleActive = true
+                self.prepareNextPendingPreview(
+                    in: container,
+                    renderWarmupDelay: renderWarmupDelay
+                )
             }
             pendingApplyWorkItem = workItem
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.pdfApplyDebounce, execute: workItem)
             #else
-            applyStagedPreview(in: container, renderWarmupDelay: renderWarmupDelay)
+            // Keep the preview moving while the user types: a result that is
+            // already mid-warmup commits on schedule, and the commit chains
+            // straight into preparing the newest pending result. Preparation
+            // still starts on the next run-loop turn — never inside this
+            // SwiftUI update pass.
+            startPreparationCycleIfNeeded(in: container, renderWarmupDelay: renderWarmupDelay)
             #endif
         }
 
+        /// Begins a preparation cycle — parse, install off-screen, warm up,
+        /// swap — for the newest pending result, unless one is already
+        /// running; the running cycle's commit chains to the next result.
+        private func startPreparationCycleIfNeeded(
+            in container: BufferedPDFPreviewContainer,
+            renderWarmupDelay: TimeInterval
+        ) {
+            guard !isPreparationCycleActive, pendingRevision != nil else { return }
+            isPreparationCycleActive = true
+            let workItem = DispatchWorkItem { [weak self, weak container] in
+                guard let self, let container else { return }
+                self.pendingApplyWorkItem = nil
+                self.prepareNextPendingPreview(
+                    in: container,
+                    renderWarmupDelay: renderWarmupDelay
+                )
+            }
+            pendingApplyWorkItem = workItem
+            DispatchQueue.main.async(execute: workItem)
+        }
+
+        private func prepareNextPendingPreview(
+            in container: BufferedPDFPreviewContainer,
+            renderWarmupDelay: TimeInterval
+        ) {
+            guard let data = pendingData, let revision = pendingRevision else {
+                isPreparationCycleActive = false
+                return
+            }
+            let sourceRects = pendingSourceRects
+            // Consume the pending slot before parsing: PDF construction may
+            // service nested run-loop work, and a result arriving then stages
+            // behind this cycle rather than mutating it.
+            pendingData = nil
+            pendingRevision = nil
+            pendingSourceRects = []
+            guard let document = PDFDocument(data: data) else {
+                isPreparationCycleActive = false
+                startPreparationCycleIfNeeded(in: container, renderWarmupDelay: renderWarmupDelay)
+                return
+            }
+            preparingData = data
+            preparingDocument = document
+            preparingRevision = revision
+            preparingSourceRects = sourceRects
+            applyStagedPreview(in: container, renderWarmupDelay: renderWarmupDelay)
+        }
+
         private func applyStagedPreview(in container: BufferedPDFPreviewContainer, renderWarmupDelay: TimeInterval) {
-            guard let document = stagedDocument else { return }
+            guard let document = preparingDocument else {
+                isPreparationCycleActive = false
+                return
+            }
             container.prepareInactiveView(document: document)
 
             // Apply the target zoom + scroll to the OFF-SCREEN view *now*,
@@ -189,20 +269,21 @@ extension PDFPreviewView {
             // during the warmup window, so the swap is seamless.
             restoreZoom(in: container, document: document)
 
-            // ALWAYS restart the warmup, even when a swap is already scheduled:
-            // `prepareInactiveView` just reassigned the off-screen view's document,
-            // which resets PDFKit's async tile rendering. Letting an earlier
-            // timer's deadline stand would promote that view before it re-rendered
-            // — a partially blank frame on every mid-warmup recompile, which is
-            // exactly the flicker seen while typing. Bumping the token invalidates
-            // the in-flight commit; the freshly staged document gets its full
-            // warmup, so during sustained typing the visible swap simply waits
-            // for a pause.
+            // Preparation is serialized: only one document warms up at a time
+            // (results arriving meanwhile wait in the pending slot), so this
+            // warmup always covers a freshly assigned document and its timer
+            // is the only one outstanding. The token still invalidates the
+            // commit if the whole preview is torn down (or, on iOS, a new
+            // arrival abandons the cycle) before the deadline fires.
             isSwapScheduled = true
             preparationToken += 1
             let currentToken = preparationToken
             container.finishPreparingInactiveView(after: Self.clampedWarmupDelay(renderWarmupDelay)) {
-                self.commitStagedPreview(in: container, token: currentToken)
+                self.commitStagedPreview(
+                    in: container,
+                    renderWarmupDelay: renderWarmupDelay,
+                    token: currentToken
+                )
             }
         }
 
@@ -265,21 +346,33 @@ extension PDFPreviewView {
             }
         }
 
-        private func commitStagedPreview(in container: BufferedPDFPreviewContainer, token: Int) {
+        private func commitStagedPreview(
+            in container: BufferedPDFPreviewContainer,
+            renderWarmupDelay: TimeInterval,
+            token: Int
+        ) {
             guard isSwapScheduled, preparationToken == token else { return }
             isSwapScheduled = false
+            isPreparationCycleActive = false
 
-            guard let data = stagedData else { return }
+            // A result that arrived while this one warmed up gets prepared as
+            // soon as the swap lands, so the preview keeps advancing during
+            // sustained typing instead of waiting for a pause.
+            defer {
+                startPreparationCycleIfNeeded(in: container, renderWarmupDelay: renderWarmupDelay)
+            }
+
+            guard let data = preparingData else { return }
 
             // The off-screen view was already populated and zoom-restored in
             // `applyStagedPreview`; committing just promotes it to the front.
             activeData = data
-            activeRevision = stagedRevision
-            activeSourceRects = stagedSourceRects
-            stagedData = nil
-            stagedDocument = nil
-            stagedRevision = nil
-            stagedSourceRects = []
+            activeRevision = preparingRevision
+            activeSourceRects = preparingSourceRects
+            preparingData = nil
+            preparingDocument = nil
+            preparingRevision = nil
+            preparingSourceRects = []
             container.showInactiveView(animated: container.hasVisibleDocument)
         }
 
@@ -348,6 +441,8 @@ extension PDFPreviewView {
     /// position doesn't clobber the saved one.
     var isApplyingViewport = false
     private weak var observedScrollClipView: NSView?
+    private var isViewportReportPending = false
+    private var lastReportedViewport: PreviewViewport?
 
     var activePDFView: PDFView { pdfViews[activeIndex] }
     var inactivePDFView: PDFView { pdfViews[1 - activeIndex] }
@@ -405,8 +500,21 @@ extension PDFPreviewView {
     }
 
     private func reportViewport() {
-        guard !isApplyingViewport, let viewport = capturePreviewViewport(from: activePDFView) else { return }
-        onViewportChange?(viewport)
+        guard !isApplyingViewport, !isViewportReportPending else { return }
+        isViewportReportPending = true
+        // PDFKit posts scale and bounds notifications from inside its layout
+        // pass. Never feed those directly into SwiftUI state; doing so can make
+        // the hosting view start another layout before the current one finishes.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isViewportReportPending = false
+            guard !self.isApplyingViewport,
+                  let viewport = capturePreviewViewport(from: self.activePDFView),
+                  viewport != self.lastReportedViewport
+            else { return }
+            self.lastReportedViewport = viewport
+            self.onViewportChange?(viewport)
+        }
     }
 
     @available(*, unavailable)
@@ -504,7 +612,12 @@ extension PDFPreviewView {
 
     override func layout() {
         super.layout()
-        relayoutPDFViews()
+        // AppKit will lay out each PDFView after its frame changes. Forcing
+        // `layoutSubtreeIfNeeded()` from this override recursively enters the
+        // NSHostingView layout that called us.
+        for pdfView in pdfViews where pdfView.frame != bounds {
+            pdfView.frame = bounds
+        }
     }
 
     private func relayoutPDFViews() {
@@ -581,6 +694,8 @@ extension PDFPreviewView {
     /// Suppresses reports while we programmatically restore/swap.
     var isApplyingViewport = false
     private var scrollObservation: NSKeyValueObservation?
+    private var isViewportReportPending = false
+    private var lastReportedViewport: PreviewViewport?
 
     var activePDFView: PDFView { pdfViews[activeIndex] }
     var inactivePDFView: PDFView { pdfViews[1 - activeIndex] }
@@ -631,8 +746,18 @@ extension PDFPreviewView {
     }
 
     private func reportViewport() {
-        guard !isApplyingViewport, let viewport = capturePreviewViewport(from: activePDFView) else { return }
-        onViewportChange?(viewport)
+        guard !isApplyingViewport, !isViewportReportPending else { return }
+        isViewportReportPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isViewportReportPending = false
+            guard !self.isApplyingViewport,
+                  let viewport = capturePreviewViewport(from: self.activePDFView),
+                  viewport != self.lastReportedViewport
+            else { return }
+            self.lastReportedViewport = viewport
+            self.onViewportChange?(viewport)
+        }
     }
 
     @available(*, unavailable)

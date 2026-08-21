@@ -144,7 +144,14 @@ struct PlatformTextView: UIViewRepresentable {
         )
 
         if textView.text != text {
-            if context.coordinator.shouldKeepNativeText(textView.text, representedText: text) {
+            // Marked text makes `textView.text` disagree with the binding
+            // without any edit having been committed: inline predictive text,
+            // IME composition, and dictation all stage input as marked text.
+            // Replacing the storage then would cancel the composition
+            // mid-keystroke and eat letters typed since the last binding
+            // round-trip.
+            if textView.markedTextRange != nil ||
+                context.coordinator.shouldKeepNativeText(textView.text, representedText: text) {
                 context.coordinator.scheduleRepaint(in: textView)
             } else {
                 context.coordinator.applyHighlighting(to: textView, text: text)
@@ -252,7 +259,7 @@ struct PlatformTextView: UIViewRepresentable {
         private var lastSnippetToken = 0
         private var lastTextReplacementToken = 0
         private var nativeTextAwaitingBinding: String?
-        private var scheduledRepaintWorkItem: DispatchWorkItem?
+        private var scheduledRepaintTask: Task<Void, Never>?
         private var renderedDiagnostics: [TypstSourceDiagnostic] = []
         private var renderedProseRanges: [TypstProseRange] = []
         private var renderedSpellCheckingEnabled = false
@@ -260,6 +267,10 @@ struct PlatformTextView: UIViewRepresentable {
         private var lastSentSelection = NSRange(location: NSNotFound, length: 0)
         private var lastLanguageOverlayAnchor: CGPoint?
         private var isLanguageOverlayAnchorUpdatePending = false
+
+        deinit {
+            scheduledRepaintTask?.cancel()
+        }
 
         init(
             text: Binding<String>,
@@ -892,15 +903,29 @@ struct PlatformTextView: UIViewRepresentable {
             return changed
         }
 
-        func scheduleRepaint(in textView: UITextView, delay: TimeInterval = 0.12) {
-            scheduledRepaintWorkItem?.cancel()
-            let workItem = DispatchWorkItem { [weak self, weak textView] in
-                guard let self, let textView else { return }
-                guard !self.isApplyingHighlighting else { return }
-                self.repaintSyntaxOnly(in: textView)
+        func scheduleRepaint(in textView: UITextView, delayNanoseconds: UInt64 = 120_000_000) {
+            scheduledRepaintTask?.cancel()
+            let snapshot = textView.text ?? ""
+            let snapshotSyntax = syntax
+            scheduledRepaintTask = Task { @MainActor [weak self, weak textView] in
+                do {
+                    try await Task.sleep(nanoseconds: delayNanoseconds)
+                } catch {
+                    return
+                }
+                let tokens = await Task.detached(priority: .userInitiated) {
+                    TypstSyntaxHighlighter.tokens(in: snapshot, syntax: snapshotSyntax)
+                }.value
+                guard !Task.isCancelled,
+                      let self,
+                      let textView,
+                      textView.markedTextRange == nil,
+                      textView.text == snapshot,
+                      self.syntax == snapshotSyntax,
+                      !self.isApplyingHighlighting
+                else { return }
+                self.repaintSyntaxOnly(in: textView, tokens: tokens)
             }
-            scheduledRepaintWorkItem = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
         }
 
         func updateFontSize(_ newSize: Double, in textView: UITextView) {
@@ -923,6 +948,13 @@ struct PlatformTextView: UIViewRepresentable {
             let size = appliedFontSize > 0 ? appliedFontSize : fontSize
             let font = SourceEditorFont.regular(size: size)
             TypstSyntaxHighlighter.applyTokenStyling(to: textView, text: textView.text, font: font, syntax: syntax)
+            applyDiagnosticsAndSpelling(to: textView)
+        }
+
+        private func repaintSyntaxOnly(in textView: UITextView, tokens: [TypstSyntaxToken]) {
+            let size = appliedFontSize > 0 ? appliedFontSize : fontSize
+            let font = SourceEditorFont.regular(size: size)
+            TypstSyntaxHighlighter.applyTokenStyling(to: textView, tokens: tokens, font: font)
             applyDiagnosticsAndSpelling(to: textView)
         }
 
