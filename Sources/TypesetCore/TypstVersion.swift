@@ -29,5 +29,5 @@ public enum TypstRuntime {
 
     /// Version of the `Vendor/typst` submodule this source tree is pinned to.
     /// Keep in sync when bumping the submodule.
-    static let bundledTypstVersion = "0.15.0"
+    static let bundledTypstVersion = "0.15.1"
 }
