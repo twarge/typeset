@@ -100,6 +100,9 @@ public struct TypstRenderer: TypstRendering {
             arguments: [
                 "compile",
                 "--root", workspace.path,
+                // Parity with the embedded compiler, which picks up font files
+                // anywhere in the project automatically.
+                "--font-path", workspace.path,
             ] + packageStorage.compileArguments + [
                 inputURL.path,
                 outputTemplate.path,
@@ -159,6 +162,9 @@ public struct TypstRenderer: TypstRendering {
                 "compile",
                 "--features", "html",
                 "--root", workspace.path,
+                // Parity with the embedded compiler, which picks up font files
+                // anywhere in the project automatically.
+                "--font-path", workspace.path,
             ] + packageStorage.compileArguments + [
                 inputURL.path,
                 outputURL.path,
@@ -215,6 +221,9 @@ public struct TypstRenderer: TypstRendering {
             arguments: [
                 "compile",
                 "--root", workspace.path,
+                // Parity with the embedded compiler, which picks up font files
+                // anywhere in the project automatically.
+                "--font-path", workspace.path,
             ] + packageStorage.compileArguments + [
                 inputURL.path,
                 outputURL.path,
@@ -265,6 +274,9 @@ public struct TypstRenderer: TypstRendering {
             arguments: [
                 "compile",
                 "--root", workspace.path,
+                // Parity with the embedded compiler, which picks up font files
+                // anywhere in the project automatically.
+                "--font-path", workspace.path,
             ] + packageStorage.compileArguments + [
                 inputURL.path,
                 outputURL.path,

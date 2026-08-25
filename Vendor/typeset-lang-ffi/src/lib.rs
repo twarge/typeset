@@ -413,6 +413,7 @@ pub extern "C" fn typeset_lang_completions(
         let completions = completions_for(
             &text,
             utf8_offset as usize,
+            &session.root,
             &workspace_paths,
             &session.package_path,
             &session.package_cache_path,
@@ -1243,7 +1244,7 @@ fn diagnostics_to_conventional_message(diagnostics: &[Diagnostic]) -> String {
 struct RenderWorld {
     main_path: String,
     library: &'static LazyHash<Library>,
-    fonts: &'static FontStore,
+    fonts: WorldFonts,
     files: FileStore<RenderFiles>,
     now: Time,
 }
@@ -1278,7 +1279,7 @@ impl RenderWorld {
         Ok(Self {
             main_path: main_path.to_string(),
             library: shared_render_library(html_enabled),
-            fonts: shared_render_fonts(),
+            fonts: fonts_for_root(Path::new(root)),
             files: FileStore::new(files),
             now: Time::system(),
         })
@@ -1394,6 +1395,255 @@ fn shared_render_fonts() -> &'static FontStore {
     FONTS.get_or_init(discover_fonts)
 }
 
+/// The number of faces in the shared store's book ([`FontBook`] exposes no
+/// length, so count once and reuse).
+fn shared_render_fonts_len() -> usize {
+    static LEN: OnceLock<usize> = OnceLock::new();
+    *LEN.get_or_init(|| {
+        let book = shared_render_fonts().book();
+        (0usize..).find(|&index| book.info(index).is_none()).unwrap_or(0)
+    })
+}
+
+/// The fonts visible to one compile or completion request: the shared
+/// embedded/system store, plus any font files found in the project root.
+/// Project fonts are appended after the shared store's entries, matching the
+/// order `typst compile --font-path <root>` produces.
+enum WorldFonts {
+    /// The project holds no font files; the shared store, untouched.
+    Shared(&'static FontStore),
+    /// The shared store with the project's faces appended.
+    Merged(Arc<MergedFonts>),
+    /// No fonts at all, for worlds that must never touch the filesystem.
+    Empty,
+}
+
+struct MergedFonts {
+    base: &'static FontStore,
+    base_len: usize,
+    /// Loaded project faces, in book order after the shared store's entries.
+    faces: Vec<Font>,
+    book: LazyHash<FontBook>,
+}
+
+impl WorldFonts {
+    fn book(&self) -> &LazyHash<FontBook> {
+        match self {
+            WorldFonts::Shared(store) => store.book(),
+            WorldFonts::Merged(merged) => &merged.book,
+            WorldFonts::Empty => shared_empty_font_book(),
+        }
+    }
+
+    fn font(&self, index: usize) -> Option<Font> {
+        match self {
+            WorldFonts::Shared(store) => store.font(index),
+            WorldFonts::Merged(merged) => match index.checked_sub(merged.base_len) {
+                None => merged.base.font(index),
+                Some(project_index) => merged.faces.get(project_index).cloned(),
+            },
+            WorldFonts::Empty => None,
+        }
+    }
+}
+
+/// Font file extensions picked up from a project root (the set `fontdb`
+/// recognizes; Typst cannot load WOFF).
+const PROJECT_FONT_EXTENSIONS: [&str; 4] = ["ttf", "otf", "ttc", "otc"];
+
+/// One font file discovered in a project root.
+struct ProjectFontFile {
+    path: PathBuf,
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+/// All font files under `root`, sorted by path so the font book's order (and
+/// therefore its hash, which the incremental compilation cache keys on) is
+/// stable across compiles regardless of directory iteration order.
+fn project_font_files(root: &Path) -> Vec<ProjectFontFile> {
+    let mut files = Vec::new();
+    collect_project_font_files(root, &mut files);
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    files
+}
+
+fn collect_project_font_files(directory: &Path, files: &mut Vec<ProjectFontFile>) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            collect_project_font_files(&path, files);
+        } else if path.extension().is_some_and(|extension| {
+            PROJECT_FONT_EXTENSIONS
+                .iter()
+                .any(|known| extension.eq_ignore_ascii_case(known))
+        }) {
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            files.push(ProjectFontFile {
+                path,
+                len: metadata.len(),
+                modified: metadata.modified().ok(),
+            });
+        }
+    }
+}
+
+/// Content key for one font file: its length plus a hash of the head and tail.
+/// Probing 128KB bounds the per-compile cost for large fonts; any realistic
+/// font edit changes the length or the table directory at the head.
+fn font_content_key(file: &ProjectFontFile) -> Option<u64> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::io::{Read, Seek, SeekFrom};
+
+    const PROBE: u64 = 64 * 1024;
+    let mut handle = fs::File::open(&file.path).ok()?;
+    let mut hasher = DefaultHasher::new();
+    file.len.hash(&mut hasher);
+    let mut head = vec![0u8; PROBE.min(file.len) as usize];
+    handle.read_exact(&mut head).ok()?;
+    head.hash(&mut hasher);
+    if file.len > PROBE {
+        let mut tail = vec![0u8; PROBE as usize];
+        handle.seek(SeekFrom::Start(file.len - PROBE)).ok()?;
+        handle.read_exact(&mut tail).ok()?;
+        tail.hash(&mut hasher);
+    }
+    Some(hasher.finish())
+}
+
+/// Parsed faces per font-file content key. Every compile materializes the
+/// package into a fresh directory, so caching must key on content, not path;
+/// an unchanged font is read and parsed in full only once.
+fn cached_project_faces(key: u64, path: &Path) -> Arc<Vec<Font>> {
+    static CACHE: OnceLock<Mutex<HashMap<u64, Arc<Vec<Font>>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(faces) = cache.lock().unwrap().get(&key) {
+        return faces.clone();
+    }
+    let faces: Arc<Vec<Font>> = Arc::new(
+        fs::read(path)
+            .ok()
+            .map(|data| Font::iter(Bytes::new(data)).collect())
+            .unwrap_or_default(),
+    );
+    let mut cache = cache.lock().unwrap();
+    if cache.len() >= 64 {
+        cache.clear();
+    }
+    cache.insert(key, faces.clone());
+    faces
+}
+
+type RootFingerprint = Vec<(PathBuf, u64, Option<std::time::SystemTime>)>;
+
+/// Resolves the fonts for a compile or completion rooted at `root`: the shared
+/// store when the project holds no fonts, otherwise a merged store with the
+/// project's faces appended. Two cache layers keep repeated requests cheap:
+/// a per-root fingerprint (paths, sizes, mtimes) that skips all font reads for
+/// an unchanged root — the completion path hits this on every keystroke — and
+/// a content-keyed merged-store cache that keeps the same `Arc` (and therefore
+/// the same lazily-computed book hash, preserving the incremental compilation
+/// cache) across the fresh temp directories each compile materializes.
+fn fonts_for_root(root: &Path) -> WorldFonts {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let files = project_font_files(root);
+    if files.is_empty() {
+        return WorldFonts::Shared(shared_render_fonts());
+    }
+
+    static ROOT_CACHE: OnceLock<Mutex<Vec<(PathBuf, RootFingerprint, Arc<MergedFonts>)>>> =
+        OnceLock::new();
+    let root_cache = ROOT_CACHE.get_or_init(|| Mutex::new(Vec::new()));
+
+    let fingerprint: RootFingerprint = files
+        .iter()
+        .map(|file| (file.path.clone(), file.len, file.modified))
+        .collect();
+    {
+        let mut cache = root_cache.lock().unwrap();
+        if let Some(position) = cache.iter().position(|(cached_root, cached_fingerprint, _)| {
+            cached_root == root && *cached_fingerprint == fingerprint
+        }) {
+            let entry = cache.remove(position);
+            let merged = entry.2.clone();
+            cache.push(entry);
+            return WorldFonts::Merged(merged);
+        }
+    }
+
+    let mut keyed = Vec::new();
+    for file in &files {
+        if let Some(key) = font_content_key(file) {
+            keyed.push((key, file));
+        }
+    }
+    if keyed.is_empty() {
+        return WorldFonts::Shared(shared_render_fonts());
+    }
+    let mut combined_hasher = DefaultHasher::new();
+    for (key, _) in &keyed {
+        key.hash(&mut combined_hasher);
+    }
+    let combined = combined_hasher.finish();
+
+    static MERGED_CACHE: OnceLock<Mutex<HashMap<u64, Arc<MergedFonts>>>> = OnceLock::new();
+    let merged_cache = MERGED_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    // The lock is held across the build so concurrent requests for the same
+    // content (a compile racing a completion) share one `Arc` — and therefore
+    // one lazily-computed book hash, which the incremental cache keys on —
+    // instead of each reading and parsing every font themselves.
+    let merged = {
+        let mut cache = merged_cache.lock().unwrap();
+        if let Some(existing) = cache.get(&combined) {
+            existing.clone()
+        } else {
+            if cache.len() >= 8 {
+                cache.clear();
+            }
+            let base = shared_render_fonts();
+            let base_len = shared_render_fonts_len();
+            let mut faces = Vec::new();
+            for (key, file) in &keyed {
+                faces.extend(cached_project_faces(*key, &file.path).iter().cloned());
+            }
+            let mut book = FontBook::clone(base.book());
+            for font in &faces {
+                book.push(font.info().clone());
+            }
+            let merged = Arc::new(MergedFonts {
+                base,
+                base_len,
+                faces,
+                book: LazyHash::new(book),
+            });
+            cache.insert(combined, merged.clone());
+            merged
+        }
+    };
+
+    {
+        let mut cache = root_cache.lock().unwrap();
+        cache.retain(|(cached_root, _, _)| cached_root != root);
+        cache.push((root.to_path_buf(), fingerprint, merged.clone()));
+        if cache.len() > 16 {
+            cache.remove(0);
+        }
+    }
+
+    WorldFonts::Merged(merged)
+}
+
 /// The render library, built once per feature set and shared, so a fresh
 /// `RenderWorld` per compile never rebuilds the standard library. The non-HTML
 /// library is the same instance the completion path already shares.
@@ -1454,6 +1704,7 @@ fn line_column_for_utf8_offset(text: &str, offset: usize) -> (usize, usize) {
 fn completions_for(
     text: &str,
     utf8_offset: usize,
+    root: &str,
     workspace_paths: &[String],
     package_path: &str,
     package_cache_path: &str,
@@ -1499,7 +1750,7 @@ fn completions_for(
         == Some(&b'@');
     if reference_context {
         let completions: Vec<Completion> =
-            autocomplete_completions(session_files, main_path, text, offset, document)
+            autocomplete_completions(session_files, root, main_path, text, offset, document)
                 .into_iter()
                 .filter(|completion| completion.kind == "reference")
                 .collect();
@@ -1514,7 +1765,8 @@ fn completions_for(
     // all originate here. Installed-package export symbols are supplemented
     // separately, because the lightweight completion world does not load
     // packages from disk.
-    let mut completions = autocomplete_completions(session_files, main_path, text, offset, document);
+    let mut completions =
+        autocomplete_completions(session_files, root, main_path, text, offset, document);
 
     let package_completions = package_symbol_completions(
         text,
@@ -1533,12 +1785,15 @@ fn completions_for(
 
 /// A minimal [`World`] / [`IdeWorld`] used solely to drive `typst-ide`'s
 /// autocompletion. It serves the session's in-memory editor buffers as sources
-/// (so completions reflect unsaved edits and cross-file `#let` bindings), the
-/// full standard library, and an empty font book. It deliberately avoids the
-/// filesystem and any font scanning, so it is cheap to build on every keystroke.
+/// (so completions reflect unsaved edits and cross-file `#let` bindings) and
+/// the full standard library. It is built with [`WorldFonts::Empty`] — cheap on
+/// every keystroke — and only the completion request itself upgrades `fonts`
+/// to the real book, so `#set text(font: ...)` completes the same families a
+/// compile can actually resolve (shared store plus project fonts).
 struct CompletionWorld {
     main: FileId,
     sources: HashMap<FileId, Source>,
+    fonts: WorldFonts,
     now: Time,
 }
 
@@ -1548,7 +1803,7 @@ impl World for CompletionWorld {
     }
 
     fn book(&self) -> &LazyHash<FontBook> {
-        shared_empty_font_book()
+        self.fonts.book()
     }
 
     fn main(&self) -> FileId {
@@ -1568,8 +1823,8 @@ impl World for CompletionWorld {
         ))
     }
 
-    fn font(&self, _index: usize) -> Option<Font> {
-        None
+    fn font(&self, index: usize) -> Option<Font> {
+        self.fonts.font(index)
     }
 
     fn today(&self, offset: Option<Duration>) -> Option<Datetime> {
@@ -1595,8 +1850,9 @@ fn shared_completion_library() -> &'static LazyHash<Library> {
     LIBRARY.get_or_init(|| LazyHash::new(Library::builder().build()))
 }
 
-/// An empty font book, shared. Font-family completion is unavailable (an
-/// acceptable trade-off), but in exchange we never pay for a system font scan.
+/// An empty font book, shared. Backs [`WorldFonts::Empty`], the default for
+/// IDE queries (hover, definition, rename) that never consult fonts; the
+/// completion request swaps in the real book via [`fonts_for_root`].
 fn shared_empty_font_book() -> &'static LazyHash<FontBook> {
     static BOOK: OnceLock<LazyHash<FontBook>> = OnceLock::new();
     BOOK.get_or_init(|| LazyHash::new(FontBook::new()))
@@ -1627,6 +1883,7 @@ fn build_completion_world(
     Some(CompletionWorld {
         main,
         sources,
+        fonts: WorldFonts::Empty,
         now: Time::system(),
     })
 }
@@ -2393,17 +2650,23 @@ fn minimal_format_edit(old: &str, new: &str) -> Option<FormatEdit> {
 }
 
 /// Runs `typst-ide` autocompletion at `offset` and converts the results into the
-/// FFI completion shape the editor consumes.
+/// FFI completion shape the editor consumes. `root` (the workspace mirror)
+/// supplies the real font book so font-family completions match what a compile
+/// resolves; an unchanged root costs one directory walk per request.
 fn autocomplete_completions(
     session_files: &HashMap<String, String>,
+    root: &str,
     main_path: &str,
     text: &str,
     offset: usize,
     document: Option<&PagedDocument>,
 ) -> Vec<Completion> {
-    let Some(world) = build_completion_world(session_files, main_path, text) else {
+    let Some(mut world) = build_completion_world(session_files, main_path, text) else {
         return Vec::new();
     };
+    if !root.is_empty() {
+        world.fonts = fonts_for_root(Path::new(root));
+    }
     let Ok(source) = world.source(world.main()) else {
         return Vec::new();
     };
@@ -5184,7 +5447,7 @@ mod tests {
     }
 
     fn test_completions_for(text: &str, offset: usize, paths: &[String]) -> Vec<Completion> {
-        completions_for(text, offset, paths, "", "", &single_file(text), "main.typ", None)
+        completions_for(text, offset, "", paths, "", "", &single_file(text), "main.typ", None)
     }
 
     #[test]
@@ -5493,6 +5756,7 @@ mod tests {
         let completions = completions_for(
             text,
             text.len(),
+            "",
             &[],
             "",
             cache.to_str().unwrap(),
@@ -5511,6 +5775,7 @@ mod tests {
         let completions = completions_for(
             text,
             text.len(),
+            "",
             &[],
             "",
             cache.to_str().unwrap(),
@@ -5532,6 +5797,7 @@ mod tests {
         let completions = completions_for(
             text,
             text.len(),
+            "",
             &[],
             "",
             cache.to_str().unwrap(),
@@ -5558,6 +5824,7 @@ mod tests {
         let completions = completions_for(
             text,
             text.len(),
+            "",
             &[],
             "",
             cache.to_str().unwrap(),
@@ -5584,6 +5851,7 @@ mod tests {
         let completions = completions_for(
             text,
             text.len(),
+            "",
             &[],
             "",
             cache.to_str().unwrap(),
@@ -5605,6 +5873,7 @@ mod tests {
         let completions = completions_for(
             text,
             text.len(),
+            "",
             &[],
             "",
             cache.to_str().unwrap(),
@@ -6225,5 +6494,125 @@ description = "Draw diagrams."
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("typeset-{name}-{}-{nanos}", std::process::id()))
+    }
+
+    /// An embedded DejaVu face with its name records patched to a family that
+    /// cannot exist among embedded or system fonts, so tests can prove a font
+    /// was resolved from the project rather than anywhere else.
+    fn patched_project_font() -> Vec<u8> {
+        for data in typst_assets::fonts() {
+            let Some(font) = Font::iter(Bytes::new(data)).next() else {
+                continue;
+            };
+            if font.info().family == "DejaVu Sans Mono" {
+                let mut patched = data.to_vec();
+                patch_bytes(&mut patched, b"DejaVu", b"XejaVu");
+                patch_bytes(&mut patched, b"\0D\0e\0j\0a\0V\0u", b"\0X\0e\0j\0a\0V\0u");
+                let renamed = Font::new(Bytes::new(patched.clone()), 0)
+                    .expect("patched font must still parse");
+                assert_eq!(renamed.info().family, "XejaVu Sans Mono");
+                return patched;
+            }
+        }
+        panic!("embedded DejaVu Sans Mono not found");
+    }
+
+    fn patch_bytes(haystack: &mut [u8], needle: &[u8], replacement: &[u8]) {
+        assert_eq!(needle.len(), replacement.len());
+        let mut index = 0;
+        while index + needle.len() <= haystack.len() {
+            if &haystack[index..index + needle.len()] == needle {
+                haystack[index..index + needle.len()].copy_from_slice(replacement);
+                index += needle.len();
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    #[test]
+    fn project_fonts_extend_the_render_book() {
+        let root = test_workspace("project-fonts");
+        fs::create_dir_all(root.join("fonts")).unwrap();
+        fs::write(root.join("fonts/custom.ttf"), patched_project_font()).unwrap();
+
+        let fonts = fonts_for_root(&root);
+        let WorldFonts::Merged(merged) = &fonts else {
+            panic!("project fonts were not merged into the book");
+        };
+        let index = merged
+            .book
+            .select("xejavu sans mono", typst::text::FontVariant::default())
+            .expect("project font family missing from the merged book");
+        assert!(index >= merged.base_len);
+        assert_eq!(
+            fonts.font(index).expect("project font failed to load").info().family,
+            "XejaVu Sans Mono"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fontless_project_uses_the_shared_store() {
+        let root = test_workspace("fontless-project");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("main.typ"), "Hello").unwrap();
+
+        assert!(matches!(fonts_for_root(&root), WorldFonts::Shared(_)));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn project_font_store_is_reused_across_workspace_rebuilds() {
+        // Every compile materializes the package into a fresh directory; the
+        // merged store (and its lazily-computed book hash) must carry over on
+        // content alone or the incremental compilation cache would reset.
+        let font = patched_project_font();
+        let root_a = test_workspace("font-reuse-a");
+        let root_b = test_workspace("font-reuse-b");
+        for root in [&root_a, &root_b] {
+            fs::create_dir_all(root).unwrap();
+            fs::write(root.join("custom.ttf"), &font).unwrap();
+        }
+
+        let (WorldFonts::Merged(first), WorldFonts::Merged(second)) =
+            (fonts_for_root(&root_a), fonts_for_root(&root_b))
+        else {
+            panic!("project fonts were not merged into the book");
+        };
+        assert!(Arc::ptr_eq(&first, &second));
+
+        let _ = fs::remove_dir_all(root_a);
+        let _ = fs::remove_dir_all(root_b);
+    }
+
+    #[test]
+    fn compile_resolves_project_fonts() {
+        let root = test_workspace("project-font-compile");
+        fs::create_dir_all(root.join("fonts")).unwrap();
+        fs::write(root.join("fonts/custom.ttf"), patched_project_font()).unwrap();
+        fs::write(
+            root.join("main.typ"),
+            "#set text(font: \"XejaVu Sans Mono\")\nHello",
+        )
+        .unwrap();
+
+        // An unresolved family would surface as an "unknown font family"
+        // warning; a clean compile proves the project font was used.
+        let Ok((_world, document, warnings)) =
+            compile_paged_document(root.to_str().unwrap(), "main.typ", "", "")
+        else {
+            panic!("compile failed");
+        };
+        assert_eq!(document.pages().len(), 1);
+        assert!(
+            warnings.is_empty(),
+            "expected no warnings, got: {:?}",
+            warnings.iter().map(|warning| warning.message.as_str()).collect::<Vec<_>>()
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 }

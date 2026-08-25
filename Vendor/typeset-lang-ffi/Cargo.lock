@@ -2582,6 +2582,7 @@ dependencies = [
  "serde",
  "serde_json",
  "typst",
+ "typst-assets",
  "typst-html",
  "typst-ide",
  "typst-kit",

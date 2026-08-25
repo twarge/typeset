@@ -311,7 +311,7 @@ public struct DocumentPackage: Equatable, Sendable {
 
         == Packages
 
-        Typeset can save a package that contains multiple `.typ` files, images, and other compilation assets. Try dragging assets into the sidebar or the text. You can "Open Package Contents" in the Finder or remove the .typeset extension to reveal the source files.
+        Typeset can save a package that contains multiple `.typ` files, images, fonts, and other compilation assets. Try dragging assets into the sidebar or the text. A font file (`.ttf`, `.otf`, `.ttc`, or `.otc`) added anywhere in the package becomes available to `#set text(font: ...)` automatically. You can "Open Package Contents" in the Finder or remove the .typeset extension to reveal the source files.
         """
         return [PackageFile(path: "main.typ", data: Data(source.utf8))]
     }

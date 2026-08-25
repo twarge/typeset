@@ -35,3 +35,8 @@ typst-html = { path = "../typst/crates/typst-html" }
 typst-pdf = { path = "../typst/crates/typst-pdf" }
 typst-svg = { path = "../typst/crates/typst-svg" }
 typst-syntax = { path = "../typst/crates/typst-syntax" }
+
+[dev-dependencies]
+# Supplies real font bytes for the project-font discovery tests (the same
+# crate the embedded fonts come from, so no extra download).
+typst-assets = { version = "0.15.1", features = ["fonts"] }
