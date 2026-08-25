@@ -697,7 +697,7 @@ struct FileTreeRow: View {
     var onDeleteFolder: (String) -> Void
     var onError: (String, String) -> Void
 
-    @State private var previewedImageFile: PackageFile?
+    @State private var previewedAssetFile: PackageFile?
 
     var body: some View {
         switch node.kind {
@@ -987,7 +987,7 @@ struct FileTreeRow: View {
                     if shouldBeginRename(for: selection, isCurrentSelection: isCurrentSelection) {
                         onBeginRename(file)
                     } else if file.isPopoverPreviewable {
-                        previewedImageFile = file
+                        previewedAssetFile = file
                     } else {
                         onSelect(selection)
                     }
@@ -1025,12 +1025,17 @@ struct FileTreeRow: View {
                     dragPreview(for: file)
                 }
                 #endif
-                .popover(item: $previewedImageFile, arrowEdge: .trailing) { file in
-                    PackageImagePreview(file: file, backgroundColor: .white)
-                        .padding(16)
-                        .frame(width: 720, height: 560)
-                        .background(Color.white)
-                        .presentationBackground(Color.white)
+                .popover(item: $previewedAssetFile, arrowEdge: .trailing) { file in
+                    if file.isFontAsset {
+                        PackageFontPreview(file: file)
+                            .frame(width: 720, height: 560)
+                    } else {
+                        PackageImagePreview(file: file, backgroundColor: .white)
+                            .padding(16)
+                            .frame(width: 720, height: 560)
+                            .background(Color.white)
+                            .presentationBackground(Color.white)
+                    }
                 }
         }
     }
@@ -1075,6 +1080,8 @@ struct FileTreeRow: View {
             return "tablecells"
         case "bib":
             return "text.book.closed"
+        case "ttf", "otf", "ttc", "otc":
+            return "textformat"
         default:
             return "doc"
         }

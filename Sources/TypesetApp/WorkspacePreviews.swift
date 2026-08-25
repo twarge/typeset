@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Twarge LLC.
 // SPDX-License-Identifier: Apache-2.0
 
+import CoreText
 import PhotosUI
 import PDFKit
 import SwiftUI
@@ -60,14 +61,45 @@ struct ToolbarStatusIcon: View {
 struct PackageAssetPreview: View {
     var file: PackageFile
 
+    var body: some View {
+        Group {
+            if file.isImageAsset {
+                PackageImagePreview(file: file)
+            } else if file.isFontAsset {
+                PackageFontPreview(file: file)
+            } else {
+                QuickLookFilePreview(file: file)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Font preview. macOS embeds the system Quick Look specimen; iOS Quick Look
+/// has no generator for fonts, so it renders its own specimen with CoreText.
+struct PackageFontPreview: View {
+    var file: PackageFile
+
+    var body: some View {
+        #if os(macOS)
+        QuickLookFilePreview(file: file)
+        #else
+        FontSpecimenPreview(file: file)
+        #endif
+    }
+}
+
+/// Writes the file's bytes to a temporary file and shows the system Quick Look
+/// preview for it.
+struct QuickLookFilePreview: View {
+    var file: PackageFile
+
     @State private var previewURL: URL?
     @State private var previewError: String?
 
     var body: some View {
         Group {
-            if file.isImageAsset {
-                PackageImagePreview(file: file)
-            } else if let previewURL {
+            if let previewURL {
                 PlatformQuickLookPreview(url: previewURL)
                     .background(.background)
             } else if let previewError {
@@ -78,12 +110,7 @@ struct PackageAssetPreview: View {
             }
         }
         .task(id: previewIdentity) {
-            if file.isImageAsset {
-                previewURL = nil
-                previewError = nil
-            } else {
-                preparePreviewFile()
-            }
+            preparePreviewFile()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -107,6 +134,78 @@ struct PackageAssetPreview: View {
             previewURL = nil
             previewError = error.localizedDescription
         }
+    }
+}
+
+/// Renders a font's faces directly from the package bytes with CoreText, no
+/// registration or temporary file needed. A collection (`.ttc`/`.otc`) yields
+/// one section per face.
+struct FontSpecimenPreview: View {
+    var file: PackageFile
+
+    private struct Face: Identifiable {
+        var id: Int
+        var name: String
+        var descriptor: CTFontDescriptor
+    }
+
+    @State private var faces: [Face] = []
+    @State private var didLoad = false
+
+    private static let alphabet = """
+    ABCDEFGHIJKLMNOPQRSTUVWXYZ
+    abcdefghijklmnopqrstuvwxyz
+    0123456789 .,;:!?&@#%()[]{}
+    """
+    private static let pangram = "How vexingly quick daft zebras jump!"
+
+    var body: some View {
+        Group {
+            if !faces.isEmpty {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 28) {
+                        ForEach(faces) { face in
+                            specimen(for: face)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(24)
+                }
+            } else if didLoad {
+                ContentUnavailableView(file.name, systemImage: "textformat", description: Text("The font could not be read."))
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task(id: "\(file.path)-\(file.data.count)-\(file.data.hashValue)") {
+            let descriptors = CTFontManagerCreateFontDescriptorsFromData(file.data as CFData) as? [CTFontDescriptor] ?? []
+            faces = descriptors.enumerated().map { index, descriptor in
+                let font = CTFontCreateWithFontDescriptor(descriptor, 0, nil)
+                return Face(id: index, name: CTFontCopyDisplayName(font) as String, descriptor: descriptor)
+            }
+            didLoad = true
+        }
+    }
+
+    private func specimen(for face: Face) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(face.name)
+                .font(.headline)
+                .foregroundStyle(.secondary)
+
+            Text(Self.alphabet)
+                .font(font(for: face, size: 22))
+
+            ForEach([28, 18, 13], id: \.self) { size in
+                Text(Self.pangram)
+                    .font(font(for: face, size: CGFloat(size)))
+            }
+        }
+    }
+
+    private func font(for face: Face, size: CGFloat) -> Font {
+        Font(CTFontCreateWithFontDescriptor(face.descriptor, size, nil))
     }
 }
 
@@ -277,10 +376,17 @@ extension PackageFile {
         fileType?.conforms(to: .pdf) ?? false
     }
 
-    /// Files shown in the sidebar's image/PDF popover rather than opened in the
+    /// The formats the embedded compiler picks up as project fonts.
+    static let fontExtensions: Set<String> = ["ttf", "otf", "ttc", "otc"]
+
+    var isFontAsset: Bool {
+        Self.fontExtensions.contains((path as NSString).pathExtension.lowercased())
+    }
+
+    /// Files shown in the sidebar's preview popover rather than opened in the
     /// editor or the main asset preview.
     var isPopoverPreviewable: Bool {
-        isImageAsset || isPDF
+        isImageAsset || isPDF || isFontAsset
     }
 
     var isPythonScript: Bool {
