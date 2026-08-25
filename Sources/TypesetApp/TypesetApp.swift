@@ -450,17 +450,30 @@ struct TypesetDocument: FileDocument {
     init(configuration: ReadConfiguration) throws {
         openedContentType = configuration.contentType
         if configuration.contentType.conforms(to: .typstSource) {
-            let data = configuration.file.regularFileContents ?? Data()
+            let name = configuration.file.preferredFilename ?? "main.typ"
+            // A wrapper that cannot produce its bytes (an unmaterialized iCloud
+            // item, a failed lazy read) must fail the open. Substituting empty
+            // content would present a blank document whose next autosave
+            // erases the real file.
+            guard let data = configuration.file.regularFileContents else {
+                throw TypesetPackageError.unreadableFile(name)
+            }
             package = try DocumentPackage(
-                files: [PackageFile(path: configuration.file.preferredFilename ?? "main.typ", data: data)],
-                compileTargetPath: configuration.file.preferredFilename ?? "main.typ"
+                files: [PackageFile(path: name, data: data)],
+                compileTargetPath: name
             )
+            package.recordLoadedBaseline()
         } else {
             package = try DocumentPackage(fileWrapper: configuration.file)
         }
     }
 
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        // Refuse to persist a package that would erase content this session
+        // never edited — the in-memory copy evidently no longer reflects what
+        // was read from disk.
+        try package.validateForSaving()
+
         if configuration.contentType.conforms(to: .typstSource),
            let compileTargetPath = package.mainTypstPath,
            let file = package.files.first(where: { $0.path == compileTargetPath }) {
@@ -469,7 +482,10 @@ struct TypesetDocument: FileDocument {
             return wrapper
         }
 
-        let wrapper = package.fileWrapper()
+        // Reusing the on-disk wrappers for unchanged files keeps a save from
+        // rewriting every asset in the package — and from ever clobbering an
+        // untouched file with a stale in-memory copy.
+        let wrapper = package.fileWrapper(reusingUnchangedFilesFrom: configuration.existingFile)
         wrapper.preferredFilename = configuration.existingFile?.preferredFilename ?? "Untitled.typeset"
         return wrapper
     }

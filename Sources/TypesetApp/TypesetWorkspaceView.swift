@@ -1419,8 +1419,8 @@ struct TypesetWorkspaceView: View {
         pendingSyntaxSelection = nil
         selectionExpansionRequestID = UUID()
         do {
-            try withoutDocumentUndo {
-                try document.package.select(path: path, resettingEditorState: !restoringEditorState)
+            try updateDocumentStateIfChanged { package in
+                try package.select(path: path, resettingEditorState: !restoringEditorState)
             }
             selectedPath = path
             selectedFolderPath = nil
@@ -1599,8 +1599,8 @@ struct TypesetWorkspaceView: View {
         guard let fraction = pendingScrollFraction else { return }
         pendingScrollFraction = nil
         guard abs(document.package.state.scrollFraction - fraction) > 0.0005 else { return }
-        withoutDocumentUndo {
-            document.package.updateScrollFraction(fraction)
+        updateDocumentStateIfChanged { package in
+            package.updateScrollFraction(fraction)
         }
     }
 
@@ -1639,8 +1639,8 @@ struct TypesetWorkspaceView: View {
             && abs(state.previewPointX - viewport.x) < 0.5
             && abs(state.previewPointY - viewport.y) < 0.5
         guard !unchanged else { return }
-        withoutDocumentUndo {
-            document.package.updatePreviewViewport(
+        updateDocumentStateIfChanged { package in
+            package.updatePreviewViewport(
                 scale: viewport.scale,
                 page: viewport.page,
                 pointX: viewport.x,
@@ -1669,8 +1669,8 @@ struct TypesetWorkspaceView: View {
         guard !documentEditorStateMatches(pendingEditorState) else { return }
 
         do {
-            try withoutDocumentUndo {
-                try document.package.updateEditorState(
+            try updateDocumentStateIfChanged { package in
+                try package.updateEditorState(
                     selectedFile: pendingEditorState.selectedFile,
                     cursorLocation: pendingEditorState.cursorLocation,
                     cursorLength: pendingEditorState.cursorLength
@@ -1694,8 +1694,8 @@ struct TypesetWorkspaceView: View {
     }
 
     private func updateExpandedFolders(_ expandedFolders: Set<String>) {
-        withoutDocumentUndo {
-            document.package.updateExpandedFolders(Array(expandedFolders))
+        updateDocumentStateIfChanged { package in
+            package.updateExpandedFolders(Array(expandedFolders))
         }
     }
 
@@ -1715,23 +1715,20 @@ struct TypesetWorkspaceView: View {
     }
 
     private func persistViewMode(_ mode: WorkspaceViewMode) {
-        guard document.package.state.viewMode != mode.rawValue else { return }
-        withoutDocumentUndo {
-            document.package.updateViewMode(mode.rawValue)
+        updateDocumentStateIfChanged { package in
+            package.updateViewMode(mode.rawValue)
         }
     }
 
     private func persistSidebarTab(_ rawValue: String) {
-        guard document.package.state.sidebarTab != rawValue else { return }
-        withoutDocumentUndo {
-            document.package.updateSidebarTab(rawValue)
+        updateDocumentStateIfChanged { package in
+            package.updateSidebarTab(rawValue)
         }
     }
 
     private func updateSidebarVisibility(_ isVisible: Bool) {
-        guard document.package.state.isSidebarVisible != isVisible else { return }
-        withoutDocumentUndo {
-            document.package.updateSidebarVisibility(isVisible)
+        updateDocumentStateIfChanged { package in
+            package.updateSidebarVisibility(isVisible)
         }
     }
 
@@ -1787,6 +1784,24 @@ struct TypesetWorkspaceView: View {
             refreshPreview()
         } catch {
             recordLog("Source update failed", message: error.localizedDescription, level: .error, present: true)
+        }
+    }
+
+    /// Applies a selection/view-state mutation to the document only when the
+    /// resulting state actually differs. Writing the document binding marks the
+    /// document edited and schedules an autosave — so a value-level no-op (like
+    /// re-selecting the already-selected file when a document opens) must never
+    /// reach the binding. Opening a document and closing it untouched should
+    /// leave the file byte-for-byte alone.
+    private func updateDocumentStateIfChanged(_ updates: (inout DocumentPackage) throws -> Void) rethrows {
+        var updated = document.package
+        try updates(&updated)
+        guard updated.state != document.package.state
+            || updated.selectedPath != document.package.selectedPath
+            || updated.compileTargetPath != document.package.compileTargetPath
+        else { return }
+        withoutDocumentUndo {
+            document.package = updated
         }
     }
 
@@ -4022,6 +4037,20 @@ struct TypesetWorkspaceView: View {
             }
             nextSnapshot[file.path] = hash
             guard diskFileSnapshot[file.path] != hash else { continue }
+            // Never write emptiness over a file that had content when it was
+            // loaded and was not deliberately edited — that combination is the
+            // signature of an incomplete read, not of user intent.
+            if file.data.isEmpty,
+               !document.package.changedPaths.contains(file.path),
+               document.package.loadedByteCounts[file.path, default: 0] > 0 {
+                recordLog(
+                    "Write skipped",
+                    message: "\(file.path) is unexpectedly empty in memory; its on-disk content was left untouched.",
+                    level: .warning
+                )
+                nextSnapshot[file.path] = diskFileSnapshot[file.path] ?? hash
+                continue
+            }
             let url = root.appending(path: file.path)
             try? fileManager.createDirectory(
                 at: url.deletingLastPathComponent(),
@@ -4035,18 +4064,48 @@ struct TypesetWorkspaceView: View {
         }
 
         // 3. Remove files we previously managed that are gone from the package.
+        // Only a tracked change (delete, rename, move) may remove a file that
+        // was loaded with content; an untracked disappearance means the
+        // in-memory package is no longer trustworthy for that path.
         for removed in Set(diskFileSnapshot.keys).subtracting(nextSnapshot.keys) {
-            try? fileManager.removeItem(at: root.appending(path: removed))
+            if !document.package.changedPaths.contains(removed),
+               document.package.loadedByteCounts[removed, default: 0] > 0 {
+                recordLog(
+                    "Removal skipped",
+                    message: "\(removed) disappeared from the in-memory package without an edit; the file on disk was left untouched.",
+                    level: .warning
+                )
+                continue
+            }
+            removeManagedItemGently(at: root.appending(path: removed))
         }
 
         // 4. Remove folders dropped from the package, deepest first.
         for removed in diskFolderSnapshot.subtracting(currentFolders)
             .sorted(by: { $0.count > $1.count }) {
-            try? fileManager.removeItem(at: root.appending(path: removed))
+            removeManagedItemGently(at: root.appending(path: removed))
         }
 
         diskFileSnapshot = nextSnapshot
         diskFolderSnapshot = currentFolders
+    }
+
+    /// Removes an item the write-through previously managed, preferring the
+    /// Trash so an unexpected removal stays recoverable. On a volume with no
+    /// Trash the item is left in place — an orphaned file can be cleaned up,
+    /// a deleted one is gone.
+    private func removeManagedItemGently(at url: URL) {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        do {
+            try fileManager.trashItem(at: url, resultingItemURL: nil)
+        } catch {
+            recordLog(
+                "Removed file left in place",
+                message: "\(url.lastPathComponent) could not be moved to the Trash: \(error.localizedDescription)",
+                level: .warning
+            )
+        }
     }
 
     // MARK: - External folder monitoring (#1 reflect changes, #3 conflict prompt)

@@ -47,6 +47,11 @@ public struct PDFPreview: Equatable, Sendable {
 
 public struct TypstRenderer: TypstRendering {
     private let previewBuilder: PreviewHTMLBuilder
+    /// Reused across preview compiles so each recompile writes only the files
+    /// whose bytes changed (typically just the source being edited) instead of
+    /// mirroring the entire package — a large-asset package would otherwise pay
+    /// its full size in I/O on every keystroke's compile.
+    private let previewWorkspace = IncrementalPackageWorkspace()
 
     public init(previewBuilder: PreviewHTMLBuilder = PreviewHTMLBuilder()) {
         self.previewBuilder = previewBuilder
@@ -181,8 +186,7 @@ public struct TypstRenderer: TypstRendering {
         guard let mainPath = package.mainTypstPath else { throw TypstRenderError.noMainFile }
 
         #if canImport(TypesetLang)
-        let workspace = try TemporaryPackageWriter().write(package: package)
-        defer { try? FileManager.default.removeItem(at: workspace) }
+        let workspace = try previewWorkspace.sync(package: package)
 
         let packageStorage = try TypstPackageStorage.appSupportStorage()
         try packageStorage.createDirectories()
@@ -207,8 +211,7 @@ public struct TypstRenderer: TypstRendering {
         }
         return PDFPreview(data: data, sourceRects: sourceRects, diagnosticsMessage: response.diagnosticsMessage)
         #elseif os(macOS)
-        let workspace = try TemporaryPackageWriter().write(package: package)
-        defer { try? FileManager.default.removeItem(at: workspace) }
+        let workspace = try previewWorkspace.sync(package: package)
 
         let outputURL = workspace.appending(path: "preview.pdf")
         let inputURL = workspace.appending(path: mainPath)
@@ -554,5 +557,80 @@ public struct TemporaryPackageWriter: Sendable {
         }
 
         return directory
+    }
+}
+
+/// A persistent on-disk mirror of a package for repeated compiles of the same
+/// document. Each `sync` writes only the files whose bytes differ from the
+/// last sync and removes only files it previously wrote, so a recompile of a
+/// package with large unchanged assets costs almost no I/O. The retained
+/// `Data` values share copy-on-write storage with the package's own files, so
+/// the mirror adds no meaningful memory.
+///
+/// Callers must not overlap a `sync` with a compile that is still reading the
+/// returned directory; the preview pipeline runs one compile at a time.
+public final class IncrementalPackageWorkspace: @unchecked Sendable {
+    private let lock = NSLock()
+    private var rootURL: URL?
+    private var writtenFiles: [String: Data] = [:]
+    private var writtenFolders: Set<String> = []
+
+    public init() {}
+
+    public func sync(package: DocumentPackage) throws -> URL {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let fileManager = FileManager.default
+        let root: URL
+        if let rootURL, fileManager.fileExists(atPath: rootURL.path) {
+            root = rootURL
+        } else {
+            root = fileManager.temporaryDirectory
+                .appending(path: "Typeset-Preview-\(UUID().uuidString)", directoryHint: .isDirectory)
+            try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+            rootURL = root
+            writtenFiles = [:]
+            writtenFolders = []
+        }
+
+        let folders = Set(package.allFolderPaths)
+        for folder in folders.subtracting(writtenFolders).sorted(by: { $0.count < $1.count }) {
+            try fileManager.createDirectory(
+                at: root.appending(path: folder, directoryHint: .isDirectory),
+                withIntermediateDirectories: true
+            )
+        }
+
+        var nextWritten: [String: Data] = [:]
+        nextWritten.reserveCapacity(package.files.count)
+        for file in package.files {
+            if writtenFiles[file.path] != file.data {
+                let url = root.appending(path: file.path)
+                try fileManager.createDirectory(
+                    at: url.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try file.data.write(to: url)
+            }
+            nextWritten[file.path] = file.data
+        }
+
+        for removed in Set(writtenFiles.keys).subtracting(nextWritten.keys) {
+            try? fileManager.removeItem(at: root.appending(path: removed))
+        }
+        for removed in writtenFolders.subtracting(folders).sorted(by: { $0.count > $1.count }) {
+            try? fileManager.removeItem(at: root.appending(path: removed))
+        }
+
+        writtenFiles = nextWritten
+        writtenFolders = folders
+        return root
+    }
+
+    deinit {
+        if let rootURL {
+            try? FileManager.default.removeItem(at: rootURL)
+        }
     }
 }

@@ -752,3 +752,205 @@ import Testing
         try package.updateText("nope", for: "figure.png")
     }
 }
+
+// MARK: - Data-loss safety
+
+/// Simulates a wrapper whose bytes cannot be produced — an unmaterialized
+/// iCloud item or a failed lazy read.
+private final class UnreadableFileWrapper: FileWrapper {
+    override var regularFileContents: Data? { nil }
+}
+
+@Test func unreadableWrapperContentFailsTheOpen() throws {
+    let root = FileWrapper(directoryWithFileWrappers: [
+        "main.typ": FileWrapper(regularFileWithContents: Data("= Hello".utf8)),
+        "photo.png": UnreadableFileWrapper(regularFileWithContents: Data()),
+    ])
+
+    // Opening must throw rather than substitute empty content: a package that
+    // opens with silently hollow files gets saved back over the real one.
+    #expect(throws: TypesetPackageError.unreadableFile("photo.png")) {
+        _ = try DocumentPackage(fileWrapper: root)
+    }
+}
+
+@Test func nonDirectoryPackageWrapperFailsTheOpen() throws {
+    let flat = FileWrapper(regularFileWithContents: Data("placeholder".utf8))
+    flat.preferredFilename = "Report.typeset"
+
+    #expect(throws: TypesetPackageError.unreadableFile("Report.typeset")) {
+        _ = try DocumentPackage(fileWrapper: flat)
+    }
+}
+
+@Test func loadingFromAWrapperRecordsTheBaseline() throws {
+    let source = try DocumentPackage(files: [
+        PackageFile(path: "main.typ", data: Data("= Hello".utf8)),
+        PackageFile(path: "assets/photo.png", data: Data(repeating: 0xAB, count: 128)),
+    ])
+    let loaded = try DocumentPackage(fileWrapper: source.fileWrapper())
+
+    #expect(loaded.loadedByteCounts["main.typ"] == 7)
+    #expect(loaded.loadedByteCounts["assets/photo.png"] == 128)
+    #expect(loaded.changedPaths.isEmpty)
+}
+
+@Test func mutationsRecordChangedPaths() throws {
+    var package = try DocumentPackage(files: [
+        PackageFile(path: "main.typ", data: Data("= Hello".utf8)),
+        PackageFile(path: "notes.typ", data: Data("= Notes".utf8)),
+        PackageFile(path: "assets/photo.png", data: Data([0x89])),
+    ])
+    package.recordLoadedBaseline()
+
+    try package.updateText("= Edited", for: "main.typ")
+    #expect(package.changedPaths.contains("main.typ"))
+
+    _ = try package.addFile(named: "extra.txt", data: Data("x".utf8))
+    #expect(package.changedPaths.contains("extra.txt"))
+
+    _ = try package.renameFile(at: "notes.typ", to: "chapter.typ")
+    #expect(package.changedPaths.contains("notes.typ"))
+    #expect(package.changedPaths.contains("chapter.typ"))
+
+    _ = try package.moveFile(at: "assets/photo.png", toFolder: nil)
+    #expect(package.changedPaths.contains("assets/photo.png"))
+    #expect(package.changedPaths.contains("photo.png"))
+
+    try package.deleteFile(at: "photo.png")
+    #expect(package.changedPaths.contains("photo.png"))
+}
+
+@Test func folderOperationsRecordChangedPaths() throws {
+    var package = try DocumentPackage(files: [
+        PackageFile(path: "main.typ", data: Data("= Hello".utf8)),
+        PackageFile(path: "assets/photo.png", data: Data([0x89])),
+        PackageFile(path: "assets/data.csv", data: Data("a,b".utf8)),
+    ])
+    package.recordLoadedBaseline()
+
+    _ = try package.renameFolder(at: "assets", to: "resources")
+    #expect(package.changedPaths.contains("assets/photo.png"))
+    #expect(package.changedPaths.contains("resources/photo.png"))
+    #expect(package.changedPaths.contains("assets/data.csv"))
+    #expect(package.changedPaths.contains("resources/data.csv"))
+
+    try package.deleteFolder(at: "resources")
+    #expect(package.changedPaths.contains("resources/photo.png"))
+    #expect(package.changedPaths.contains("resources/data.csv"))
+    #expect(throws: Never.self) { try package.validateForSaving() }
+}
+
+@Test func savingRefusesToEraseUneditedContent() throws {
+    let source = try DocumentPackage(files: [
+        PackageFile(path: "main.typ", data: Data("= Hello".utf8)),
+        PackageFile(path: "assets/photo.png", data: Data(repeating: 0xAB, count: 128)),
+    ])
+    var loaded = try DocumentPackage(fileWrapper: source.fileWrapper())
+
+    // Simulate the in-memory copy going hollow without any edit (the
+    // corruption signature): direct mutation bypasses change tracking.
+    let index = try #require(loaded.files.firstIndex { $0.path == "assets/photo.png" })
+    loaded.files[index].data = Data()
+
+    #expect(throws: TypesetPackageError.saveWouldEraseContent(["assets/photo.png"])) {
+        try loaded.validateForSaving()
+    }
+
+    // The same applies to a file that silently vanished.
+    loaded.files.remove(at: index)
+    #expect(throws: TypesetPackageError.saveWouldEraseContent(["assets/photo.png"])) {
+        try loaded.validateForSaving()
+    }
+}
+
+@Test func savingAllowsDeliberateEditsAndDeletions() throws {
+    let source = try DocumentPackage(files: [
+        PackageFile(path: "main.typ", data: Data("= Hello".utf8)),
+        PackageFile(path: "notes.typ", data: Data("= Notes".utf8)),
+        PackageFile(path: "assets/data.csv", data: Data("a,b".utf8)),
+    ])
+    var loaded = try DocumentPackage(fileWrapper: source.fileWrapper())
+
+    // Emptying a file through an edit and deleting one outright are both
+    // deliberate, tracked changes — the guard must not block them.
+    try loaded.updateText("", for: "notes.typ")
+    try loaded.deleteFile(at: "assets/data.csv")
+    #expect(throws: Never.self) { try loaded.validateForSaving() }
+
+    // A package never loaded from disk has no baseline and no restrictions.
+    var fresh = try DocumentPackage(files: [PackageFile(path: "main.typ", data: Data())])
+    fresh.files[0].data = Data()
+    #expect(throws: Never.self) { try fresh.validateForSaving() }
+}
+
+@Test func unchangedFilesReuseTheirOnDiskWrappers() throws {
+    let source = try DocumentPackage(files: [
+        PackageFile(path: "main.typ", data: Data("= Hello".utf8)),
+        PackageFile(path: "assets/photo.png", data: Data(repeating: 0xAB, count: 128)),
+    ])
+    let onDisk = source.fileWrapper()
+    var loaded = try DocumentPackage(fileWrapper: onDisk)
+
+    try loaded.updateText("= Edited", for: "main.typ")
+    let saved = loaded.fileWrapper(reusingUnchangedFilesFrom: onDisk)
+
+    // The untouched asset reuses the exact wrapper instance it was read from,
+    // so the document system leaves its on-disk bytes alone.
+    let originalAsset = try #require(onDisk.fileWrappers?["assets"]?.fileWrappers?["photo.png"])
+    let savedAsset = try #require(saved.fileWrappers?["assets"]?.fileWrappers?["photo.png"])
+    #expect(savedAsset === originalAsset)
+
+    // The edited file is written fresh from memory.
+    let savedMain = try #require(saved.fileWrappers?["main.typ"])
+    #expect(savedMain !== onDisk.fileWrappers?["main.typ"])
+    #expect(savedMain.regularFileContents == Data("= Edited".utf8))
+}
+
+@Test func directoryLoadRejectsICloudPlaceholders() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: "TypesetTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let mainURL = root.appending(path: "main.typ")
+    try Data("= Hello".utf8).write(to: mainURL)
+    try Data().write(to: root.appending(path: ".photo.png.icloud"))
+
+    #expect(throws: TypesetPackageError.fileNotDownloaded("photo.png")) {
+        _ = try DocumentPackage(directoryURL: root, openedFileURL: mainURL)
+    }
+}
+
+@Test func directoryLoadRecordsTheBaseline() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: "TypesetTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: root.appending(path: "assets"), withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let mainURL = root.appending(path: "main.typ")
+    try Data("= Hello".utf8).write(to: mainURL)
+    try Data(repeating: 0xAB, count: 64).write(to: root.appending(path: "assets/photo.png"))
+
+    let package = try DocumentPackage(directoryURL: root, openedFileURL: mainURL)
+    #expect(package.loadedByteCounts["main.typ"] == 7)
+    #expect(package.loadedByteCounts["assets/photo.png"] == 64)
+    #expect(package.changedPaths.isEmpty)
+}
+
+@Test func changeTrackingMetadataDoesNotAffectEquality() throws {
+    let source = try DocumentPackage(files: [
+        PackageFile(path: "main.typ", data: Data("= Hello".utf8)),
+    ])
+    var loaded = try DocumentPackage(fileWrapper: source.fileWrapper())
+    var twin = loaded
+
+    // An edit that produces identical bytes differs only in tracking metadata;
+    // the packages still compare equal (SwiftUI change detection and tests
+    // care about the value, not the session history).
+    try loaded.updateText("= Hello", for: "main.typ")
+    #expect(loaded == twin)
+
+    try twin.updateText("= Changed", for: "main.typ")
+    #expect(loaded != twin)
+}

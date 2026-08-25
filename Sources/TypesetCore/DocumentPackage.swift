@@ -27,6 +27,16 @@ public enum TypesetPackageError: Error, Equatable {
     case invalidFileName(String)
     case fileAlreadyExists(String)
     case cannotMoveFolderIntoItself(String)
+    /// A file existed in the package but its bytes could not be produced
+    /// (an unmaterialized iCloud item, a failed lazy read). Opening must fail
+    /// rather than substitute empty content, because a later save would write
+    /// that emptiness over the real file.
+    case unreadableFile(String)
+    /// The file is an iCloud item that has not been downloaded to this device.
+    case fileNotDownloaded(String)
+    /// Saving was refused because it would write empty content over files that
+    /// were loaded with content and never edited in this session.
+    case saveWouldEraseContent([String])
 }
 
 public struct PackageFile: Identifiable, Hashable, Sendable {
@@ -142,6 +152,68 @@ public struct DocumentPackage: Equatable, Sendable {
     /// read this instead of `state`, which is live and may already reflect
     /// editor activity from the current session.
     public private(set) var persistedState: DocumentPackageState?
+
+    /// Byte count of every file as it was loaded from disk, keyed by package
+    /// path. Empty for packages that were not loaded from disk (new documents,
+    /// programmatic construction). `validateForSaving()` checks the current
+    /// files against this baseline so a save can never erase content the
+    /// session did not deliberately change.
+    public private(set) var loadedByteCounts: [String: Int] = [:]
+
+    /// Package paths whose bytes or location this session deliberately changed
+    /// (edits, adds, moves, renames, deletes). Only these files may shrink to
+    /// empty or disappear relative to `loadedByteCounts`, and only these need
+    /// their bytes rewritten by an incremental save. Maintained by the mutating
+    /// methods; mutating `files` directly bypasses it.
+    public private(set) var changedPaths: Set<String> = []
+
+    // Change-tracking metadata is bookkeeping about the session, not part of
+    // the package's value: two packages with the same contents are equal even
+    // if they were loaded or edited differently.
+    public static func == (lhs: DocumentPackage, rhs: DocumentPackage) -> Bool {
+        lhs.files == rhs.files
+            && lhs.folders == rhs.folders
+            && lhs.selectedPath == rhs.selectedPath
+            && lhs.compileTargetPath == rhs.compileTargetPath
+            && lhs.state == rhs.state
+            && lhs.persistedState == rhs.persistedState
+    }
+
+    /// Marks the package's current contents as the on-disk truth: records every
+    /// file's byte count as the save-validation baseline and clears the
+    /// changed-path tracking. The disk-loading initializers call this; call it
+    /// directly only when the in-memory package is known to exactly match what
+    /// was just read from disk.
+    public mutating func recordLoadedBaseline() {
+        loadedByteCounts = Dictionary(
+            files.map { ($0.path, $0.data.count) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        changedPaths = []
+    }
+
+    /// Refuses a save that would destroy data the session never touched. A file
+    /// loaded from disk with content may only be written back empty if an edit
+    /// in this session deliberately made it so. Anything else means the
+    /// in-memory package no longer faithfully represents what was read — for
+    /// example an incomplete iCloud materialization — and writing it out would
+    /// erase the on-disk original.
+    public func validateForSaving() throws {
+        guard !loadedByteCounts.isEmpty else { return }
+        let currentSizes = Dictionary(
+            files.map { ($0.path, $0.data.count) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let erased = loadedByteCounts
+            .filter { path, byteCount in
+                byteCount > 0 && !changedPaths.contains(path) && currentSizes[path, default: 0] == 0
+            }
+            .keys
+            .sorted()
+        guard erased.isEmpty else {
+            throw TypesetPackageError.saveWouldEraseContent(erased)
+        }
+    }
 
     public init(
         files: [PackageFile] = DocumentPackage.defaultFiles(),
@@ -416,6 +488,7 @@ public struct DocumentPackage: Equatable, Sendable {
             throw TypesetPackageError.unsupportedFile(path)
         }
         files[index].data = Data(text.utf8)
+        changedPaths.insert(path)
     }
 
     /// Replaces a file's raw bytes regardless of whether it is text-editable.
@@ -426,6 +499,7 @@ public struct DocumentPackage: Equatable, Sendable {
             throw TypesetPackageError.selectedFileMissing(path)
         }
         files[index].data = data
+        changedPaths.insert(path)
     }
 
     public mutating func createFolder(named name: String, in parentPath: String? = nil) throws -> String {
@@ -453,6 +527,7 @@ public struct DocumentPackage: Equatable, Sendable {
         let folder = Self.normalizedFolderPath(folderPath ?? "")
         let path = uniqueFilePath(named: cleanName, in: folder)
         files.append(PackageFile(path: path, data: data))
+        changedPaths.insert(path)
         files.sort { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
         folders = Self.normalizedFolders(folders + Self.parentFolders(for: files))
         return path
@@ -480,6 +555,8 @@ public struct DocumentPackage: Equatable, Sendable {
 
         updateCompileTargetAfterMoving(sourcePath: sourcePath, destinationPath: destinationPath)
         files[index].path = destinationPath
+        changedPaths.insert(sourcePath)
+        changedPaths.insert(destinationPath)
         sortAndNormalize()
         updateSelectionAfterMoving(sourcePath: sourcePath, destinationPath: destinationPath)
         if updatingReferences {
@@ -532,6 +609,10 @@ public struct DocumentPackage: Equatable, Sendable {
                 destinationPrefix: destinationPath
             )
         }
+        for oldPath in affectedOldPaths {
+            changedPaths.insert(oldPath)
+            changedPaths.insert(Self.pathByReplacingPrefix(oldPath, sourcePrefix: folderPath, destinationPrefix: destinationPath))
+        }
         updateCompileTargetAfterMoving(sourcePath: folderPath, destinationPath: destinationPath)
         updateSelectionAfterMoving(sourcePath: folderPath, destinationPath: destinationPath)
         sortAndNormalize()
@@ -568,6 +649,8 @@ public struct DocumentPackage: Equatable, Sendable {
 
         updateCompileTargetAfterMoving(sourcePath: path, destinationPath: newPath)
         files[index].path = newPath
+        changedPaths.insert(path)
+        changedPaths.insert(newPath)
         sortAndNormalize()
         updateSelectionAfterMoving(sourcePath: path, destinationPath: newPath)
         if updatingReferences {
@@ -614,6 +697,10 @@ public struct DocumentPackage: Equatable, Sendable {
                 destinationPrefix: newPath
             )
         }
+        for oldPath in affectedOldPaths {
+            changedPaths.insert(oldPath)
+            changedPaths.insert(Self.pathByReplacingPrefix(oldPath, sourcePrefix: folderPath, destinationPrefix: newPath))
+        }
         updateCompileTargetAfterMoving(sourcePath: folderPath, destinationPath: newPath)
         updateSelectionAfterMoving(sourcePath: folderPath, destinationPath: newPath)
         sortAndNormalize()
@@ -638,6 +725,7 @@ public struct DocumentPackage: Equatable, Sendable {
             throw TypesetPackageError.noTypstFile
         }
 
+        changedPaths.insert(path)
         sortAndNormalize()
         if selectedPath == path {
             selectedPath = compileTargetPath
@@ -663,6 +751,9 @@ public struct DocumentPackage: Equatable, Sendable {
             throw TypesetPackageError.noTypstFile
         }
 
+        for file in files where file.path.hasPrefix(folderPath + "/") {
+            changedPaths.insert(file.path)
+        }
         files = remainingFiles
         folders = allFolderPaths.filter { folder in
             folder != folderPath && !folder.hasPrefix(folderPath + "/")
@@ -757,6 +848,7 @@ public struct DocumentPackage: Equatable, Sendable {
 
             if updated != original {
                 files[index].data = Data(updated.utf8)
+                changedPaths.insert(files[index].path)
             }
         }
     }
@@ -854,6 +946,14 @@ extension TypesetPackageError: LocalizedError {
             return "A file already exists at \(path)."
         case .cannotMoveFolderIntoItself(let path):
             return "Cannot move \(path) into itself."
+        case .unreadableFile(let path):
+            return "“\(path)” could not be read. The document was left untouched — check that it has finished downloading from iCloud, then try opening it again."
+        case .fileNotDownloaded(let path):
+            return "“\(path)” has not finished downloading from iCloud. Its download has been requested — try opening the document again once it is available on this device."
+        case .saveWouldEraseContent(let paths):
+            let listed = paths.prefix(5).map { "“\($0)”" }.joined(separator: ", ")
+            let suffix = paths.count > 5 ? " and \(paths.count - 5) more" : ""
+            return "Saving was stopped because it would have erased \(listed)\(suffix), which had content when the document was opened but was never edited here. The document may not have been fully readable when it was opened — close it without saving and reopen it."
         }
     }
 }
@@ -862,26 +962,44 @@ public extension DocumentPackage {
     init(directoryURL: URL, openedFileURL: URL, openedFileIsAuthoritative: Bool = false) throws {
         let directoryURL = directoryURL.standardizedFileURL
         let openedFileURL = openedFileURL.standardizedFileURL
-        let fileManager = FileManager.default
-        let resourceKeys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey, .isHiddenKey]
-        let contents = try fileManager.contentsOfDirectory(
-            at: directoryURL,
-            includingPropertiesForKeys: Array(resourceKeys),
-            options: [.skipsPackageDescendants]
-        )
 
+        // Read the folder under file coordination so an in-flight iCloud sync
+        // or another writer finishes before we snapshot it, rather than
+        // capturing a half-written state.
         var files: [PackageFile] = []
         var folders: [String] = []
         var state: DocumentPackageState?
-
-        for url in contents {
-            try Self.collectDirectoryEntry(
-                url: url,
-                rootURL: directoryURL,
-                files: &files,
-                folders: &folders,
-                state: &state
-            )
+        var collectionError: Error?
+        var coordinationError: NSError?
+        NSFileCoordinator(filePresenter: nil).coordinate(
+            readingItemAt: directoryURL,
+            options: [],
+            error: &coordinationError
+        ) { coordinatedURL in
+            do {
+                let contents = try FileManager.default.contentsOfDirectory(
+                    at: coordinatedURL,
+                    includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isHiddenKey],
+                    options: [.skipsPackageDescendants]
+                )
+                for url in contents {
+                    try Self.collectDirectoryEntry(
+                        url: url,
+                        rootURL: coordinatedURL.standardizedFileURL,
+                        files: &files,
+                        folders: &folders,
+                        state: &state
+                    )
+                }
+            } catch {
+                collectionError = error
+            }
+        }
+        if let coordinationError {
+            throw coordinationError
+        }
+        if let collectionError {
+            throw collectionError
         }
 
         let openedPath = Self.relativePackagePath(for: openedFileURL, rootURL: directoryURL)
@@ -904,6 +1022,7 @@ public extension DocumentPackage {
                 state: keptState ?? DocumentPackageState(selectedFile: openedPath)
             )
             persistedState = keptState
+            recordLoadedBaseline()
         } else {
             try self.init(
                 files: files,
@@ -916,15 +1035,19 @@ public extension DocumentPackage {
                 state: state ?? DocumentPackageState(selectedFile: openedPath)
             )
             persistedState = state
+            recordLoadedBaseline()
         }
     }
 
     init(fileWrapper: FileWrapper) throws {
         guard fileWrapper.isDirectory, let wrappers = fileWrapper.fileWrappers else {
-            throw TypesetPackageError.noTypstFile
+            // A package presented as something other than a readable directory
+            // (for example an unmaterialized iCloud placeholder) must fail the
+            // open rather than masquerade as an empty document.
+            throw TypesetPackageError.unreadableFile(fileWrapper.filename ?? fileWrapper.preferredFilename ?? "package")
         }
 
-        let entries = Self.flatten(wrappers: wrappers, prefix: "")
+        let entries = try Self.flatten(wrappers: wrappers, prefix: "")
         try self.init(
             files: entries.files,
             folders: entries.folders,
@@ -932,9 +1055,21 @@ public extension DocumentPackage {
             state: entries.state ?? DocumentPackageState()
         )
         persistedState = entries.state
+        recordLoadedBaseline()
     }
 
     func fileWrapper() -> FileWrapper {
+        fileWrapper(reusingUnchangedFilesFrom: nil)
+    }
+
+    /// Builds the package's directory wrapper. When `previous` — the wrapper
+    /// the document was read from — is given, files this session never changed
+    /// reuse their existing child wrapper instances instead of fresh copies of
+    /// the in-memory bytes. The document system recognizes reused wrappers and
+    /// leaves those files' on-disk bytes alone, so a save rewrites only what
+    /// actually changed (instead of the whole package every time) and an
+    /// unchanged file can never be clobbered by a stale in-memory copy.
+    func fileWrapper(reusingUnchangedFilesFrom previous: FileWrapper?) -> FileWrapper {
         let root = FileWrapper(directoryWithFileWrappers: [:])
 
         for folder in allFolderPaths {
@@ -943,7 +1078,10 @@ public extension DocumentPackage {
 
         for file in files {
             let parts = file.path.split(separator: "/").map(String.init)
-            append(file: file, parts: parts, to: root)
+            let reusable = changedPaths.contains(file.path)
+                ? nil
+                : Self.existingRegularFileWrapper(at: parts, in: previous)
+            append(file: file, parts: parts, reusing: reusable, to: root)
         }
 
         let state = FileWrapper(regularFileWithContents: Data(encodeState().utf8))
@@ -957,8 +1095,25 @@ public extension DocumentPackage {
         return root
     }
 
-    private static func flatten(wrappers: [String: FileWrapper], prefix: String) -> (files: [PackageFile], folders: [String], state: DocumentPackageState?) {
-        wrappers.reduce(into: (files: [PackageFile](), folders: [String](), state: Optional<DocumentPackageState>.none)) { result, entry in
+    /// Finds the regular-file wrapper at `parts` inside `previous`, or `nil`
+    /// when the path doesn't resolve to a reusable regular file under the
+    /// expected name.
+    private static func existingRegularFileWrapper(at parts: [String], in previous: FileWrapper?) -> FileWrapper? {
+        guard let previous, previous.isDirectory, let leafName = parts.last else { return nil }
+        var directory = previous
+        for part in parts.dropLast() {
+            guard let child = directory.fileWrappers?[part], child.isDirectory else { return nil }
+            directory = child
+        }
+        guard let leaf = directory.fileWrappers?[leafName], leaf.isRegularFile,
+              (leaf.preferredFilename ?? leaf.filename) == leafName else {
+            return nil
+        }
+        return leaf
+    }
+
+    private static func flatten(wrappers: [String: FileWrapper], prefix: String) throws -> (files: [PackageFile], folders: [String], state: DocumentPackageState?) {
+        try wrappers.reduce(into: (files: [PackageFile](), folders: [String](), state: Optional<DocumentPackageState>.none)) { result, entry in
             let name = entry.key
             let wrapper = entry.value
             let path = prefix.isEmpty ? name : "\(prefix)/\(name)"
@@ -977,13 +1132,23 @@ public extension DocumentPackage {
 
             if wrapper.isDirectory, let children = wrapper.fileWrappers {
                 result.folders.append(path)
-                let flattened = flatten(wrappers: children, prefix: path)
+                let flattened = try flatten(wrappers: children, prefix: path)
                 result.files.append(contentsOf: flattened.files)
                 result.folders.append(contentsOf: flattened.folders)
                 result.state = result.state ?? flattened.state
-            } else {
-                result.files.append(PackageFile(path: path, data: wrapper.regularFileContents ?? Data()))
+            } else if wrapper.isRegularFile {
+                // A regular file whose bytes cannot be produced (an
+                // unmaterialized iCloud item, a failed lazy read) fails the
+                // whole open. Substituting empty data here is how an
+                // incompletely synced package ends up saved back over — and
+                // erasing — the real one.
+                guard let contents = wrapper.regularFileContents else {
+                    throw TypesetPackageError.unreadableFile(path)
+                }
+                result.files.append(PackageFile(path: path, data: contents))
             }
+            // Anything else (symlinks, unreadable specials) is skipped rather
+            // than imported as an empty file.
         }
     }
 
@@ -1199,6 +1364,17 @@ public extension DocumentPackage {
         let relativePath = relativePackagePath(for: url, rootURL: rootURL)
         let name = url.lastPathComponent
 
+        // An iCloud placeholder stub (".name.icloud") stands in for a file
+        // that has not been materialized on this device. Importing the stub
+        // would corrupt the package — and the next save would propagate the
+        // corruption — so start the download and refuse the load instead.
+        if name.hasPrefix("."), name.hasSuffix(".icloud"), name.count > ".icloud".count + 1 {
+            let realName = String(name.dropFirst().dropLast(".icloud".count))
+            let parent = (relativePath as NSString).deletingLastPathComponent
+            try? FileManager.default.startDownloadingUbiquitousItem(at: url)
+            throw TypesetPackageError.fileNotDownloaded(parent.isEmpty ? realName : "\(parent)/\(realName)")
+        }
+
         if url.deletingLastPathComponent().standardizedFileURL == rootURL {
             if name == Self.legacyMetadataFileName {
                 // Obsolete standalone compile-target file; ignored.
@@ -1230,7 +1406,16 @@ public extension DocumentPackage {
                 )
             }
         } else if resourceValues.isRegularFile == true {
-            files.append(PackageFile(path: relativePath, data: try Data(contentsOf: url)))
+            // Refuse files iCloud has not finished downloading rather than
+            // blocking on (or partially reading) an unmaterialized item.
+            let cloudValues = try? url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey])
+            if let status = cloudValues?.ubiquitousItemDownloadingStatus, status == .notDownloaded {
+                try? FileManager.default.startDownloadingUbiquitousItem(at: url)
+                throw TypesetPackageError.fileNotDownloaded(relativePath)
+            }
+            // Mapping keeps large assets backed by the file on disk instead of
+            // resident in memory; safe because writers here replace atomically.
+            files.append(PackageFile(path: relativePath, data: try Data(contentsOf: url, options: [.mappedIfSafe])))
         }
     }
 
@@ -1259,13 +1444,17 @@ public extension DocumentPackage {
         append(folderParts: Array(parts.dropFirst()), to: childDirectory)
     }
 
-    private func append(file: PackageFile, parts: [String], to directory: FileWrapper) {
+    private func append(file: PackageFile, parts: [String], reusing reusableWrapper: FileWrapper?, to directory: FileWrapper) {
         guard let head = parts.first else { return }
 
         if parts.count == 1 {
-            let child = FileWrapper(regularFileWithContents: file.data)
-            child.preferredFilename = head
-            directory.addFileWrapper(child)
+            if let reusableWrapper {
+                directory.addFileWrapper(reusableWrapper)
+            } else {
+                let child = FileWrapper(regularFileWithContents: file.data)
+                child.preferredFilename = head
+                directory.addFileWrapper(child)
+            }
             return
         }
 
@@ -1279,6 +1468,6 @@ public extension DocumentPackage {
             directory.addFileWrapper(childDirectory)
         }
 
-        append(file: file, parts: Array(parts.dropFirst()), to: childDirectory)
+        append(file: file, parts: Array(parts.dropFirst()), reusing: reusableWrapper, to: childDirectory)
     }
 }
