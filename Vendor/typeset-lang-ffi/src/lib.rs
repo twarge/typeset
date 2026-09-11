@@ -7293,5 +7293,78 @@ description = "Draw diagrams."
 
         let _ = fs::remove_dir_all(root);
     }
-}
 
+    /// Every run in `frame` as its font family, text and glyph count.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    fn collect_shaped_runs(frame: &Frame, runs: &mut Vec<(String, String, usize)>) {
+        for (_, item) in frame.items() {
+            match item {
+                FrameItem::Group(group) => collect_shaped_runs(&group.frame, runs),
+                FrameItem::Text(text) => runs.push((
+                    text.font.info().family.clone(),
+                    text.text.to_string(),
+                    text.glyphs.len(),
+                )),
+                _ => {}
+            }
+        }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[test]
+    fn devanagari_conjuncts_and_matras_are_formed() {
+        // Devanagari needs the font's own shaping rules to tie consonants into
+        // conjuncts and hang the matras off them; a font that merely covers the
+        // codepoints draws the letters side by side, viramas and all. Typst's
+        // own New Computer Modern Math covers the block without shaping it, and
+        // it used to win fallback for documents set in New Computer Modern,
+        // because fallback rewards a shared family-name prefix.
+        const WORDS: [&str; 5] =
+            ["नमस्ते", "हिन्दी", "क्षत्रिय", "देवनागरी", "मुंबई"];
+
+        for text_font in ["Libertinus Serif", "New Computer Modern"] {
+            let root =
+                test_workspace(&format!("devanagari-{}", text_font.replace(' ', "-")));
+            fs::create_dir_all(&root).unwrap();
+            fs::write(
+                root.join("main.typ"),
+                format!(
+                    "#set text(font: \"{text_font}\")\n#text(lang: \"hi\")[{}]",
+                    WORDS.join(" ")
+                ),
+            )
+            .unwrap();
+
+            let Ok((_world, document, _warnings)) =
+                compile_paged_document(root.to_str().unwrap(), "main.typ", "", "")
+            else {
+                panic!("compile failed");
+            };
+            let mut runs = Vec::new();
+            for page in document.pages() {
+                collect_shaped_runs(&page.frame, &mut runs);
+            }
+
+            for word in WORDS {
+                let (family, text, glyphs) = runs
+                    .iter()
+                    .find(|(_, text, _)| text.trim() == word)
+                    .unwrap_or_else(|| {
+                        panic!("in {text_font}, {word} was not shaped as one run: {runs:?}")
+                    });
+                // A virama ties the consonants around it into one glyph, so
+                // these words come out shorter than they are written. A font
+                // without shaping rules returns one glyph per codepoint.
+                if word.contains('\u{094d}') {
+                    assert!(
+                        *glyphs < text.chars().count(),
+                        "in {text_font}, {word} was drawn as {glyphs} \
+                         separate letters by {family}"
+                    );
+                }
+            }
+
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+}
