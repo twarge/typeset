@@ -14,7 +14,11 @@ base64 = "0.22"
 # same (process-global) incremental cache that `typst::compile` populates.
 comemo = "=0.5.1"
 libc = "0.2"
+# Reading font files: mapping them rather than loading them (see `FileFont`),
+# and listing the faces of a collection.
+memmap2 = "0.9"
 serde = { version = "1", features = ["derive"] }
+ttf-parser = { version = "0.25", default-features = false }
 serde_json = "1"
 typstyle-core = { version = "=0.14.0", default-features = false }
 # Typstyle 0.14 formats Typst 0.14 syntax trees. Keep this alias separate from
@@ -35,6 +39,12 @@ typst-html = { path = "../typst/crates/typst-html" }
 typst-pdf = { path = "../typst/crates/typst-pdf" }
 typst-svg = { path = "../typst/crates/typst-svg" }
 typst-syntax = { path = "../typst/crates/typst-syntax" }
+
+# Finding the system's fonts through Core Text (see `core_text_fonts`). Both of
+# these, like the two above, are already in the tree via typst and typst-kit.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+core-foundation = "0.10"
+fontdb = { version = "0.23", default-features = false, features = ["memmap"] }
 
 [dev-dependencies]
 # Supplies real font bytes for the project-font discovery tests (the same

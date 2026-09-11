@@ -20,6 +20,7 @@
 		10000000000000000000000A /* DocumentPackageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000108 /* DocumentPackageTests.swift */; };
 		100000000000000000000E1 /* TextSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001E0 /* TextSearchTests.swift */; };
 		100000000000000000000E2 /* TypstLanguageServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001E1 /* TypstLanguageServiceTests.swift */; };
+		100000000000000000000E3 /* TypstBundledFontsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001E2 /* TypstBundledFontsTests.swift */; };
 		10000000000000000000000B /* TypesetCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; };
 		10000000000000000000000C /* TypstLanguageService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000010C /* TypstLanguageService.swift */; };
 		10000000000000000000000D /* LanguageWorkspaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000010D /* LanguageWorkspaceStore.swift */; };
@@ -47,6 +48,9 @@
 		100000000000000000000033 /* Resources/DocumentIcons/TypstSourceIcon-64.png in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000132 /* Resources/DocumentIcons/TypstSourceIcon-64.png */; };
 		100000000000000000000034 /* Resources/DocumentIcons/TypstSourceIcon-320.png in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000133 /* Resources/DocumentIcons/TypstSourceIcon-320.png */; };
 		100000000000000000000035 /* Resources/DocumentIcons/TypstSourceIcon-1024.png in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000134 /* Resources/DocumentIcons/TypstSourceIcon-1024.png */; };
+		100000000000000000000036 /* Resources/Fonts/NotoCJK in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000135 /* Resources/Fonts/NotoCJK */; };
+		100000000000000000000037 /* Resources/Acknowledgements/NotoSansCJK-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000136 /* Resources/Acknowledgements/NotoSansCJK-LICENSE.txt */; };
+		100000000000000000000010 /* TypstBundledFonts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000111 /* TypstBundledFonts.swift */; };
 		1000000000000000000000D1 /* DirectoryWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001D1 /* DirectoryWatcher.swift */; };
 		1000000000000000000000DA /* FolderAccessStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001DA /* FolderAccessStore.swift */; };
 		100000000000000000000D01 /* WorkspaceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C01 /* WorkspaceModels.swift */; };
@@ -142,12 +146,14 @@
 		100000000000000000000107 /* TypstVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstVersion.swift; sourceTree = "<group>"; };
 		100000000000000000000108 /* DocumentPackageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentPackageTests.swift; sourceTree = "<group>"; };
 		1000000000000000000001E0 /* TextSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSearchTests.swift; sourceTree = "<group>"; };
+		1000000000000000000001E2 /* TypstBundledFontsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstBundledFontsTests.swift; sourceTree = "<group>"; };
 		1000000000000000000001E1 /* TypstLanguageServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstLanguageServiceTests.swift; sourceTree = "<group>"; };
 		100000000000000000000109 /* Typeset-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Typeset-Info.plist"; sourceTree = "<group>"; };
 		10000000000000000000010C /* TypstLanguageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstLanguageService.swift; sourceTree = "<group>"; };
 		10000000000000000000010D /* LanguageWorkspaceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageWorkspaceStore.swift; sourceTree = "<group>"; };
 		10000000000000000000010E /* Vendor/TypesetLang.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Vendor/TypesetLang.xcframework; sourceTree = SOURCE_ROOT; };
 		10000000000000000000010F /* PDFPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFPreviewView.swift; sourceTree = "<group>"; };
+		100000000000000000000111 /* TypstBundledFonts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstBundledFonts.swift; sourceTree = "<group>"; };
 		100000000000000000000110 /* TextSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSearch.swift; sourceTree = "<group>"; };
 		100000000000000000000120 /* Resources/Fonts/FiraCode/FiraCode-Light.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Resources/Fonts/FiraCode/FiraCode-Light.ttf"; sourceTree = SOURCE_ROOT; };
 		100000000000000000000121 /* Resources/Fonts/FiraCode/FiraCode-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Resources/Fonts/FiraCode/FiraCode-Regular.ttf"; sourceTree = SOURCE_ROOT; };
@@ -170,6 +176,8 @@
 		100000000000000000000132 /* Resources/DocumentIcons/TypstSourceIcon-64.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/DocumentIcons/TypstSourceIcon-64.png"; sourceTree = SOURCE_ROOT; };
 		100000000000000000000133 /* Resources/DocumentIcons/TypstSourceIcon-320.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/DocumentIcons/TypstSourceIcon-320.png"; sourceTree = SOURCE_ROOT; };
 		100000000000000000000134 /* Resources/DocumentIcons/TypstSourceIcon-1024.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/DocumentIcons/TypstSourceIcon-1024.png"; sourceTree = SOURCE_ROOT; };
+		100000000000000000000135 /* Resources/Fonts/NotoCJK */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/Fonts/NotoCJK; sourceTree = SOURCE_ROOT; };
+		100000000000000000000136 /* Resources/Acknowledgements/NotoSansCJK-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Resources/Acknowledgements/NotoSansCJK-LICENSE.txt"; sourceTree = SOURCE_ROOT; };
 		1000000000000000000001D1 /* DirectoryWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectoryWatcher.swift; sourceTree = "<group>"; };
 		1000000000000000000001DA /* FolderAccessStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderAccessStore.swift; sourceTree = "<group>"; };
 		100000000000000000000201 /* TypesetCore.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = TypesetCore.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -262,6 +270,7 @@
 				10000000000000000000010C /* TypstLanguageService.swift */,
 				10000000000000000000010D /* LanguageWorkspaceStore.swift */,
 				100000000000000000000110 /* TextSearch.swift */,
+				100000000000000000000111 /* TypstBundledFonts.swift */,
 			);
 			path = TypesetCore;
 			sourceTree = "<group>";
@@ -308,6 +317,7 @@
 				100000000000000000000108 /* DocumentPackageTests.swift */,
 				1000000000000000000001E0 /* TextSearchTests.swift */,
 				1000000000000000000001E1 /* TypstLanguageServiceTests.swift */,
+				1000000000000000000001E2 /* TypstBundledFontsTests.swift */,
 			);
 			path = TypesetCoreTests;
 			sourceTree = "<group>";
@@ -350,12 +360,14 @@
 				100000000000000000000129 /* Resources/Acknowledgements/Tinymist-LICENSE.txt */,
 				10000000000000000000012B /* Resources/Acknowledgements/Tinymist-cmark-writer-LICENSE.txt */,
 				10000000000000000000012A /* Resources/Acknowledgements/FiraCode-LICENSE.txt */,
+				100000000000000000000136 /* Resources/Acknowledgements/NotoSansCJK-LICENSE.txt */,
 				100000000000000000000120 /* Resources/Fonts/FiraCode/FiraCode-Light.ttf */,
 				100000000000000000000121 /* Resources/Fonts/FiraCode/FiraCode-Regular.ttf */,
 				100000000000000000000122 /* Resources/Fonts/FiraCode/FiraCode-Retina.ttf */,
 				100000000000000000000123 /* Resources/Fonts/FiraCode/FiraCode-Medium.ttf */,
 				100000000000000000000124 /* Resources/Fonts/FiraCode/FiraCode-SemiBold.ttf */,
 				100000000000000000000125 /* Resources/Fonts/FiraCode/FiraCode-Bold.ttf */,
+				100000000000000000000135 /* Resources/Fonts/NotoCJK */,
 			);
 			name = Resources;
 			sourceTree = "<group>";
@@ -378,6 +390,7 @@
 				100000000000000000000704 /* Build TypesetLang */,
 				100000000000000000000701 /* Sources */,
 				100000000000000000000501 /* Frameworks */,
+				100000000000000000000505 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -492,6 +505,14 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		100000000000000000000505 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100000000000000000000036 /* Resources/Fonts/NotoCJK in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		100000000000000000000504 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -511,6 +532,7 @@
 				100000000000000000000029 /* Resources/Acknowledgements/Tinymist-LICENSE.txt in Resources */,
 				10000000000000000000002B /* Resources/Acknowledgements/Tinymist-cmark-writer-LICENSE.txt in Resources */,
 				10000000000000000000002A /* Resources/Acknowledgements/FiraCode-LICENSE.txt in Resources */,
+				100000000000000000000037 /* Resources/Acknowledgements/NotoSansCJK-LICENSE.txt in Resources */,
 				100000000000000000000020 /* Resources/Fonts/FiraCode/FiraCode-Light.ttf in Resources */,
 				100000000000000000000021 /* Resources/Fonts/FiraCode/FiraCode-Regular.ttf in Resources */,
 				100000000000000000000022 /* Resources/Fonts/FiraCode/FiraCode-Retina.ttf in Resources */,
@@ -585,6 +607,7 @@
 				10000000000000000000000C /* TypstLanguageService.swift in Sources */,
 				10000000000000000000000D /* LanguageWorkspaceStore.swift in Sources */,
 				10000000000000000000000F /* TextSearch.swift in Sources */,
+				100000000000000000000010 /* TypstBundledFonts.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -623,6 +646,7 @@
 				10000000000000000000000A /* DocumentPackageTests.swift in Sources */,
 				100000000000000000000E1 /* TextSearchTests.swift in Sources */,
 				100000000000000000000E2 /* TypstLanguageServiceTests.swift in Sources */,
+				100000000000000000000E3 /* TypstBundledFontsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

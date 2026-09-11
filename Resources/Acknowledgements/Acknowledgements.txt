@@ -28,4 +28,11 @@ https://github.com/tonsky/FiraCode
 Bundled release: 6.2
 License: SIL Open Font License 1.1
 
+Noto Sans CJK
+Pan-CJK font, bundled so Chinese text renders on platforms whose own fonts the
+compiler cannot use.
+https://github.com/notofonts/noto-cjk
+Bundled release: Sans 2.004
+License: SIL Open Font License 1.1
+
 The full license texts and notices follow.

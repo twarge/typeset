@@ -105,10 +105,7 @@ public struct TypstRenderer: TypstRendering {
             arguments: [
                 "compile",
                 "--root", workspace.path,
-                // Parity with the embedded compiler, which picks up font files
-                // anywhere in the project automatically.
-                "--font-path", workspace.path,
-            ] + packageStorage.compileArguments + [
+            ] + Self.fontArguments(projectRoot: workspace) + packageStorage.compileArguments + [
                 inputURL.path,
                 outputTemplate.path,
             ],
@@ -167,10 +164,7 @@ public struct TypstRenderer: TypstRendering {
                 "compile",
                 "--features", "html",
                 "--root", workspace.path,
-                // Parity with the embedded compiler, which picks up font files
-                // anywhere in the project automatically.
-                "--font-path", workspace.path,
-            ] + packageStorage.compileArguments + [
+            ] + Self.fontArguments(projectRoot: workspace) + packageStorage.compileArguments + [
                 inputURL.path,
                 outputURL.path,
             ],
@@ -224,10 +218,7 @@ public struct TypstRenderer: TypstRendering {
             arguments: [
                 "compile",
                 "--root", workspace.path,
-                // Parity with the embedded compiler, which picks up font files
-                // anywhere in the project automatically.
-                "--font-path", workspace.path,
-            ] + packageStorage.compileArguments + [
+            ] + Self.fontArguments(projectRoot: workspace) + packageStorage.compileArguments + [
                 inputURL.path,
                 outputURL.path,
             ],
@@ -277,10 +268,7 @@ public struct TypstRenderer: TypstRendering {
             arguments: [
                 "compile",
                 "--root", workspace.path,
-                // Parity with the embedded compiler, which picks up font files
-                // anywhere in the project automatically.
-                "--font-path", workspace.path,
-            ] + packageStorage.compileArguments + [
+            ] + Self.fontArguments(projectRoot: workspace) + packageStorage.compileArguments + [
                 inputURL.path,
                 outputURL.path,
             ],
@@ -296,6 +284,8 @@ public struct TypstRenderer: TypstRendering {
         _ body: @escaping @Sendable () -> UnsafeMutablePointer<CChar>?
     ) async throws -> EmbeddedTypstRenderResponse {
         try await EmbeddedRustWorkQueue.rendering.run {
+            // Before the first compile, which is when the font book is built.
+            _ = Self.bundledFontsInstalled
             guard let pointer = body() else {
                 throw TypstRenderError.commandFailed("Embedded Typst returned no response.")
             }
@@ -308,6 +298,9 @@ public struct TypstRenderer: TypstRendering {
             return response
         }
     }
+
+    /// Installs the bundled fonts exactly once per process.
+    private static let bundledFontsInstalled: Void = TypstBundledFonts.install()
 
     private func previewSourceRect(from rect: EmbeddedTypstSourceRect, package: DocumentPackage) -> PreviewSourceRect? {
         guard package.files.contains(where: { $0.path == rect.file }) else { return nil }
@@ -340,6 +333,17 @@ public struct TypstRenderer: TypstRendering {
     #endif
 
     #if os(macOS)
+    /// Where the command-line compiler should look for fonts: the project, for
+    /// parity with the embedded compiler, which picks up font files anywhere in
+    /// it automatically, and the fonts the app bundles.
+    private static func fontArguments(projectRoot: URL) -> [String] {
+        var arguments = ["--font-path", projectRoot.path]
+        if let bundled = TypstBundledFonts.directoryURL {
+            arguments += ["--font-path", bundled.path]
+        }
+        return arguments
+    }
+
     private func runTypst(command: TypstCommand, arguments: [String], fallbackErrorMessage: String) throws {
         let process = Process()
         process.executableURL = command.executableURL

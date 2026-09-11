@@ -28,7 +28,7 @@ use typst_ide::{
 use typst_kit::datetime::Time;
 use typst_kit::downloader::SystemDownloader;
 use typst_kit::files::{FileLoader, FileStore, FsRoot};
-use typst_kit::fonts::{self, FontStore};
+use typst_kit::fonts::{self, FontSource, FontStore};
 use typst_kit::packages::{FsPackages, SystemPackages, UniversePackages};
 use typst_html::{HtmlDocument, HtmlOptions};
 use typst_layout::PagedDocument;
@@ -684,6 +684,27 @@ pub extern "C" fn typeset_typst_compile_html(
     into_c_string(match compile_html_response(root, main_path, package_path, package_cache_path) {
         Ok(response) => to_json(&response),
         Err(message) => to_json(&RenderResponse::error(message)),
+    })
+}
+
+/// Points the compiler at the directory holding the fonts the app bundles for
+/// scripts the system leaves undrawable (see [`bundled_fonts`]).
+///
+/// Takes effect until the first compile, which is when the font book is built;
+/// after that the store is shared and immutable, and a later call is ignored.
+#[unsafe(no_mangle)]
+pub extern "C" fn typeset_typst_set_bundled_font_directory(
+    directory: *const c_char,
+) -> *mut c_char {
+    into_c_string(match read_c_string(directory) {
+        Ok(directory) => {
+            *bundled_font_directory().lock().unwrap() = Some(PathBuf::from(directory));
+            status_ok()
+        }
+        Err(message) => to_json(&StatusResponse {
+            ok: false,
+            message: Some(message),
+        }),
     })
 }
 
@@ -1374,11 +1395,333 @@ impl FileLoader for RenderFiles {
     }
 }
 
-fn discover_fonts() -> FontStore {
+/// Where the app keeps its bundled fonts, once Swift has said. Behind a lock
+/// rather than a `OnceLock` only because the fonts are found on the Swift side,
+/// so a build that can't locate them simply never sets this.
+fn bundled_font_directory() -> &'static Mutex<Option<PathBuf>> {
+    static DIRECTORY: Mutex<Option<PathBuf>> = Mutex::new(None);
+    &DIRECTORY
+}
+
+fn discover_fonts(bundled: Option<&Path>) -> FontStore {
+    let system: Vec<_> = fonts::system().collect();
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    let listed = core_text_fonts::unscanned_faces(&system);
+
+    // macOS's LastResort maps every code point to a placeholder box, and
+    // Typst's fallback breaks ties between equally similar fonts by the
+    // shortest family name — so "LastResort" outranked real fonts such as
+    // "Apple SD Gothic Neo", and Korean rendered as boxes. Without it, a
+    // character no font covers is still tofu, just drawn by the text font.
     let mut font_store = FontStore::new();
     font_store.extend(fonts::embedded());
-    font_store.extend(fonts::system());
+    font_store.extend(
+        system
+            .into_iter()
+            .filter(|(_, info)| !info.is_last_resort()),
+    );
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    font_store.extend(
+        listed
+            .into_iter()
+            .filter(|(_, info)| !info.is_last_resort()),
+    );
+    // Last, so that a system font wins any tie against a bundled one.
+    font_store.extend(bundled.map(bundled_fonts::faces).unwrap_or_default());
     font_store
+}
+
+/// The fonts the app ships itself, for text neither the embedded nor the system
+/// fonts can draw. Only Chinese needs this, and only because Apple ships no
+/// Chinese font Typst can use: PingFang's outlines are `hvgl`, which nothing but
+/// Core Text reads, and the Japanese fonts Chinese text otherwise falls back to
+/// (Hiragino Sans on iOS) don't have the simplified-only characters at all — so
+/// "汉语" was tofu on iOS however many system fonts we found.
+///
+/// These do make a document that relies on them render differently outside
+/// Typeset, unlike everything else in the book. That's the trade for having it
+/// render at all here, and Noto Sans CJK is freely available to whoever opens
+/// the document elsewhere.
+mod bundled_fonts {
+    use super::*;
+    use typst::text::{FontFlags, FontInfo};
+
+    /// The families taken from the bundled files, in the order they should rank.
+    ///
+    /// Chinese only. Japanese and Korean text already reaches a real system font
+    /// on both platforms, so Noto's JP and KR faces would only add weight — and
+    /// its Chinese faces cover hangul and kana too, which is why they are marked
+    /// [supplementary](FontFlags::SUPPLEMENTARY) below. Simplified comes before
+    /// traditional because ties go to whichever face was added first, and Typst's
+    /// fallback doesn't look at the text's language. The monospaced cuts never
+    /// win fallback (Typst reads no monospace flag off them), but a raw block can
+    /// ask for them.
+    const FAMILIES: [&str; 4] = [
+        "Noto Sans CJK SC",
+        "Noto Sans CJK TC",
+        "Noto Sans Mono CJK SC",
+        "Noto Sans Mono CJK TC",
+    ];
+
+    /// The faces of [`FAMILIES`] found in `directory`, ranked as that lists
+    /// them. Weights come out in whatever order the files are read, which is
+    /// fine: Typst picks among a family's faces by weight distance, not order.
+    pub(super) fn faces(directory: &Path) -> Vec<(FileFont, FontInfo)> {
+        let mut faces: Vec<Vec<(FileFont, FontInfo)>> =
+            FAMILIES.iter().map(|_| Vec::new()).collect();
+        for path in font_files(directory) {
+            // Mapped, not read: the scan below touches only the tables it
+            // parses, so the bulk of a 20 MB collection is never paged in.
+            let Some(data) = map(&path) else {
+                continue;
+            };
+            let count = ttf_parser::fonts_in_collection(&data).unwrap_or(1);
+            for index in 0..count {
+                let Some(mut info) = FontInfo::new(&data, index) else {
+                    continue;
+                };
+                if let Some(rank) = FAMILIES.iter().position(|family| *family == info.family) {
+                    // Fill gaps in the system's coverage without taking over
+                    // text a system font already draws: these faces cover all of
+                    // CJK, and their family names are short enough to win
+                    // Typst's tie-break against Apple SD Gothic Neo's.
+                    info.flags.insert(FontFlags::SUPPLEMENTARY);
+                    faces[rank].push((FileFont { path: path.clone(), index, mapped: true }, info));
+                }
+            }
+        }
+        faces.into_iter().flatten().collect()
+    }
+
+    /// The font files directly inside `directory`, in name order. Not recursive:
+    /// this is a directory the app fills, not a document's.
+    fn font_files(directory: &Path) -> Vec<PathBuf> {
+        let Ok(entries) = fs::read_dir(directory) else {
+            return Vec::new();
+        };
+        let mut files: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension().is_some_and(|extension| {
+                    PROJECT_FONT_EXTENSIONS
+                        .iter()
+                        .any(|known| extension.eq_ignore_ascii_case(known))
+                })
+            })
+            .collect();
+        files.sort();
+        files
+    }
+}
+
+/// One face of a font file on disk, loaded only if a document uses it.
+///
+/// `mapped` files are mapped instead of read. Mapping is what makes carrying
+/// large fonts affordable — the CJK and emoji collections run to 20–140 MB, and
+/// once a document uses one it stays loaded for the life of the process, as
+/// clean reclaimable pages rather than heap that counts against iOS's memory
+/// limit. It is only sound while the file cannot change or shrink underneath the
+/// mapping, so callers set it for files on a read-only volume and for the app's
+/// own bundle, which is sealed by its code signature.
+struct FileFont {
+    path: PathBuf,
+    index: u32,
+    mapped: bool,
+}
+
+impl FontSource for FileFont {
+    fn load(&self) -> Option<Font> {
+        let data = if self.mapped {
+            map(&self.path)?
+        } else {
+            Bytes::new(fs::read(&self.path).ok()?)
+        };
+        Font::new(data, self.index)
+    }
+}
+
+/// Maps `path` into memory. See [`FileFont`] for when that is sound.
+fn map(path: &Path) -> Option<Bytes> {
+    let file = fs::File::open(path).ok()?;
+    // SAFETY: the caller has established that this file cannot be modified or
+    // truncated while the mapping lives.
+    Some(Bytes::new(unsafe { memmap2::Mmap::map(&file) }.ok()?))
+}
+
+/// The system fonts Core Text lists that `fontdb`'s directory scan never
+/// reaches. `fontdb` treats iOS as Linux and finds nothing there at all, and
+/// the embedded fonts cover no CJK, Arabic, Indic, or emoji, so all of those
+/// rendered as tofu. On macOS `fontdb` already scans the standard font
+/// folders, so this adds only what they miss.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod core_text_fonts {
+    use super::*;
+    use core_foundation::array::{CFArray, CFArrayRef};
+    use core_foundation::base::{CFType, CFTypeRef, TCFType};
+    use core_foundation::dictionary::CFDictionaryRef;
+    use core_foundation::string::CFStringRef;
+    use core_foundation::url::CFURL;
+    use std::collections::BTreeSet;
+    use typst::text::FontInfo;
+    use typst_kit::fonts::FontPath;
+
+    #[link(name = "CoreText", kind = "framework")]
+    unsafe extern "C" {
+        static kCTFontURLAttribute: CFStringRef;
+        fn CTFontCollectionCreateFromAvailableFonts(options: CFDictionaryRef) -> CFTypeRef;
+        fn CTFontCollectionCreateMatchingFontDescriptors(collection: CFTypeRef) -> CFArrayRef;
+        fn CTFontDescriptorCopyAttribute(
+            descriptor: CFTypeRef,
+            attribute: CFStringRef,
+        ) -> CFTypeRef;
+    }
+
+    /// Faces from the files Core Text lists that `scanned` (the `fontdb` scan)
+    /// doesn't already cover, in path order so the book stays stable.
+    pub(super) fn unscanned_faces(
+        scanned: &[(FontPath, FontInfo)],
+    ) -> Vec<(FileFont, FontInfo)> {
+        let scanned: HashSet<&Path> = scanned
+            .iter()
+            .map(|(font, _)| font.path.as_path())
+            .collect();
+        let scanned: HashSet<PathBuf> = scanned
+            .into_iter()
+            .filter_map(|path| path.canonicalize().ok())
+            .collect();
+
+        let mut database = fontdb::Database::new();
+        for path in listed_font_files() {
+            if path
+                .canonicalize()
+                .is_ok_and(|canonical| !scanned.contains(&canonical))
+            {
+                // A file this process can't read is simply skipped.
+                let _ = database.load_font_file(&path);
+            }
+        }
+
+        database
+            .faces()
+            .filter_map(|face| {
+                let fontdb::Source::File(path) = &face.source else {
+                    return None;
+                };
+                // Apple's private faces (`.Geeza Pro Interface`, `.Apple
+                // Color Emoji UI`, ...) share files with the public ones, and
+                // Core Text hides them from font lists; leave them out too —
+                // before `FontInfo::new`, which walks every face's full
+                // character map.
+                if face.post_script_name.starts_with('.')
+                    || face
+                        .families
+                        .iter()
+                        .any(|(family, _)| family.starts_with('.'))
+                {
+                    return None;
+                }
+                let info = database.with_face_data(face.id, |data, index| {
+                    if drawable(data, index) {
+                        FontInfo::new(data, index)
+                    } else {
+                        None
+                    }
+                })??;
+                let font = FileFont {
+                    path: path.clone(),
+                    index: face.index,
+                    mapped: on_read_only_volume(path),
+                };
+                Some((font, info))
+            })
+            .collect()
+    }
+
+    /// The files behind every font Core Text lists, except those inside an app
+    /// bundle: an app's own fonts (the editor's Fira Code, which iOS registers
+    /// from `UIAppFonts`) are listed to that app alone, and must not become
+    /// document fonts that render in Typeset and nowhere else. Core Text's
+    /// registration scope can't single them out — on iOS every font, system
+    /// or bundled, reports the same one.
+    pub(super) fn listed_font_files() -> BTreeSet<PathBuf> {
+        let mut files = BTreeSet::new();
+        // SAFETY: plain Core Text calls; every returned object follows the
+        // create rule and is released by its wrapper.
+        unsafe {
+            let collection = CTFontCollectionCreateFromAvailableFonts(std::ptr::null());
+            if collection.is_null() {
+                return files;
+            }
+            let collection = CFType::wrap_under_create_rule(collection);
+            let descriptors =
+                CTFontCollectionCreateMatchingFontDescriptors(collection.as_CFTypeRef());
+            if descriptors.is_null() {
+                return files;
+            }
+            let descriptors = CFArray::<CFType>::wrap_under_create_rule(descriptors);
+            for descriptor in descriptors.iter() {
+                if let Some(path) = copy_attribute(&descriptor, kCTFontURLAttribute)
+                    .and_then(|url| url.downcast_into::<CFURL>())
+                    .and_then(|url| url.to_path())
+                    && !inside_app_bundle(&path)
+                {
+                    files.insert(path);
+                }
+            }
+        }
+        files
+    }
+
+    /// Whether Typst can draw the face's glyphs, which takes TrueType or CFF
+    /// outlines, or color bitmaps or SVG glyphs. PingFang, as shipped with
+    /// iOS 26 and macOS 27, carries only `hvgl` outlines, a format nothing but
+    /// Core Text reads: its character map covers every CJK character, so
+    /// fallback would pick it and then draw nothing at all.
+    fn drawable(data: &[u8], index: u32) -> bool {
+        let Ok(face) = ttf_parser::RawFace::parse(data, index) else {
+            return false;
+        };
+        [b"glyf", b"CFF ", b"CFF2", b"sbix", b"CBDT", b"SVG "]
+            .iter()
+            .any(|tag| face.table(ttf_parser::Tag::from_bytes(tag)).is_some())
+    }
+
+    fn inside_app_bundle(path: &Path) -> bool {
+        path.ancestors().skip(1).any(|ancestor| {
+            ancestor
+                .extension()
+                .is_some_and(|extension| extension == "app" || extension == "appex")
+        })
+    }
+
+    fn copy_attribute(descriptor: &CFType, attribute: CFStringRef) -> Option<CFType> {
+        // SAFETY: `descriptor` is a live font descriptor, and the copied value
+        // (if any) is owned by the returned wrapper.
+        unsafe {
+            let value = CTFontDescriptorCopyAttribute(descriptor.as_CFTypeRef(), attribute);
+            (!value.is_null()).then(|| CFType::wrap_under_create_rule(value))
+        }
+    }
+
+    /// Whether `path` sits on a volume mounted read-only — the sealed system
+    /// volume, on both platforms — so a mapping of it can never see the file
+    /// change or shrink (see [`FileFont`]).
+    fn on_read_only_volume(path: &Path) -> bool {
+        use std::os::unix::ffi::OsStrExt;
+
+        let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
+            return false;
+        };
+        let mut stats = std::mem::MaybeUninit::<libc::statfs>::uninit();
+        // SAFETY: `path` is NUL-terminated, and `stats` is read only after
+        // `statfs` succeeded and filled it in.
+        unsafe {
+            libc::statfs(path.as_ptr(), stats.as_mut_ptr()) == 0
+                && (stats.assume_init().f_flags & libc::MNT_RDONLY as u32) != 0
+        }
+    }
+
 }
 
 /// Bound the incremental compilation cache so it doesn't grow without limit
@@ -1392,7 +1735,10 @@ const COMEMO_EVICT_MAX_AGE: usize = 30;
 /// `RenderWorld` reuses it, like `typst watch` rather than `typst compile`.
 fn shared_render_fonts() -> &'static FontStore {
     static FONTS: OnceLock<FontStore> = OnceLock::new();
-    FONTS.get_or_init(discover_fonts)
+    FONTS.get_or_init(|| {
+        let bundled = bundled_font_directory().lock().unwrap().clone();
+        discover_fonts(bundled.as_deref())
+    })
 }
 
 /// The number of faces in the shared store's book ([`FontBook`] exposes no
@@ -6615,4 +6961,337 @@ description = "Draw diagrams."
 
         let _ = fs::remove_dir_all(root);
     }
+
+    /// Discards outline commands; only whether a glyph has an outline matters.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    struct NoOutline;
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    impl ttf_parser::OutlineBuilder for NoOutline {
+        fn move_to(&mut self, _: f32, _: f32) {}
+        fn line_to(&mut self, _: f32, _: f32) {}
+        fn quad_to(&mut self, _: f32, _: f32, _: f32, _: f32) {}
+        fn curve_to(&mut self, _: f32, _: f32, _: f32, _: f32, _: f32, _: f32) {}
+        fn close(&mut self) {}
+    }
+
+    /// The text of every visible cluster in `frame` that draws as a box or as
+    /// nothing: `.notdef` (glyph 0, when no font covers a character), any
+    /// glyph from macOS's LastResort (all placeholders), or no glyph with an
+    /// outline, bitmap, or SVG Typst can draw. Judged per cluster because
+    /// shaping some scripts (Khmer vowel signs, say) leaves an empty glyph
+    /// beside the ones that draw.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    fn collect_undrawn(frame: &Frame, undrawn: &mut Vec<String>) {
+        for (_, item) in frame.items() {
+            match item {
+                FrameItem::Group(group) => collect_undrawn(&group.frame, undrawn),
+                FrameItem::Text(text) => {
+                    let ttf = text.font.ttf();
+                    let mut clusters: Vec<(std::ops::Range<usize>, bool)> = Vec::new();
+                    for glyph in &text.glyphs {
+                        let id = ttf_parser::GlyphId(glyph.id);
+                        let drawn = glyph.id != 0
+                            && !text.font.info().is_last_resort()
+                            && (ttf.outline_glyph(id, &mut NoOutline).is_some()
+                                || ttf.glyph_raster_image(id, u16::MAX).is_some()
+                                || ttf.glyph_svg_image(id).is_some());
+                        match clusters.last_mut() {
+                            Some((range, any_drawn)) if *range == glyph.range() => {
+                                *any_drawn |= drawn;
+                            }
+                            _ => clusters.push((glyph.range(), drawn)),
+                        }
+                    }
+                    for (range, drawn) in clusters {
+                        let content = &text.text[range];
+                        if !drawn && !content.trim().is_empty() {
+                            undrawn.push(content.to_string());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[test]
+    fn system_fonts_render_text_beyond_the_embedded_fonts() {
+        // Regression: on iOS every CJK character rendered as tofu, because
+        // the embedded fonts cover none and no system font reached the book.
+        // Also covers what fixing that uncovered: PingFang (asked for by name
+        // here) must not draw as blanks, and on macOS Korean must not fall to
+        // LastResort's boxes.
+        let root = test_workspace("system-font-text");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("main.typ"),
+            "繁體中文：臺灣的例子。日本語のかな。한국어 문장。ภาษาไทย 😀\n\n\
+             #text(font: \"蘋方-繁\")[繁體中文]\n\n\
+             #text(lang: \"fa\")[فارسی: سلام دنیا، پژوهش ۱۲۳]",
+        )
+        .unwrap();
+
+        let Ok((_world, document, _warnings)) =
+            compile_paged_document(root.to_str().unwrap(), "main.typ", "", "")
+        else {
+            panic!("compile failed");
+        };
+        let mut undrawn = Vec::new();
+        for page in document.pages() {
+            collect_undrawn(&page.frame, &mut undrawn);
+        }
+        assert!(
+            undrawn.is_empty(),
+            "characters that don't draw: {undrawn:?}"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[test]
+    fn core_text_fonts_leave_out_hidden_faces() {
+        // GeezaPro.ttc holds the public Geeza Pro faces alongside Apple's
+        // private `.Geeza Pro Interface` cut, which Typst would list (minus
+        // the dot) as a family of its own.
+        let faces = core_text_fonts::unscanned_faces(&[]);
+        let mut book = FontBook::new();
+        for (_, info) in faces {
+            book.push(info);
+        }
+        assert!(book.contains_family("geeza pro"));
+        assert!(!book.contains_family("geeza pro interface"));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[test]
+    fn core_text_fonts_leave_out_fonts_the_app_bundles() {
+        use core_foundation::base::TCFType;
+        use core_foundation::url::{CFURL, CFURLRef};
+
+        #[link(name = "CoreText", kind = "framework")]
+        unsafe extern "C" {
+            fn CTFontManagerRegisterFontsForURL(
+                url: CFURLRef,
+                scope: u32,
+                error: *mut *const std::ffi::c_void,
+            ) -> bool;
+            fn CTFontManagerUnregisterFontsForURL(
+                url: CFURLRef,
+                scope: u32,
+                error: *mut *const std::ffi::c_void,
+            ) -> bool;
+        }
+        // `kCTFontManagerScopeProcess`, how the editor's Fira Code is
+        // registered (by `UIAppFonts` on iOS, explicitly on macOS).
+        const PROCESS_SCOPE: u32 = 1;
+
+        let root = test_workspace("app-bundled-font");
+        let resources = root.join("Editor.app/Contents/Resources");
+        fs::create_dir_all(&resources).unwrap();
+        fs::write(resources.join("editor.ttf"), patched_project_font()).unwrap();
+        let path = resources.join("editor.ttf").canonicalize().unwrap();
+        let url = CFURL::from_path(&path, false).unwrap();
+
+        // SAFETY: `url` is a live file URL, and no error is requested back.
+        let registered = unsafe {
+            CTFontManagerRegisterFontsForURL(
+                url.as_concrete_TypeRef(),
+                PROCESS_SCOPE,
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(registered);
+        let listed = core_text_fonts::listed_font_files();
+        // SAFETY: as above.
+        unsafe {
+            CTFontManagerUnregisterFontsForURL(
+                url.as_concrete_TypeRef(),
+                PROCESS_SCOPE,
+                std::ptr::null_mut(),
+            );
+        }
+
+        assert!(!listed.is_empty());
+        assert!(
+            listed
+                .iter()
+                .all(|file| file.canonicalize().ok().as_ref() != Some(&path)),
+            "a font from inside an app bundle was listed"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Throws every contour away: we only ask whether a glyph has one.
+    #[derive(Default)]
+    struct DiscardOutline;
+
+    impl ttf_parser::OutlineBuilder for DiscardOutline {
+        fn move_to(&mut self, _: f32, _: f32) {}
+        fn line_to(&mut self, _: f32, _: f32) {}
+        fn quad_to(&mut self, _: f32, _: f32, _: f32, _: f32) {}
+        fn curve_to(&mut self, _: f32, _: f32, _: f32, _: f32, _: f32, _: f32) {}
+        fn close(&mut self) {}
+    }
+
+    /// The app's bundled fonts, as they sit in the repository. The built app
+    /// hands the compiler the copy inside `TypesetCore.framework`.
+    fn bundled_fonts_directory() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Resources/Fonts/NotoCJK")
+    }
+
+    #[test]
+    fn bundled_fonts_are_the_chinese_families_only() {
+        let faces = bundled_fonts::faces(&bundled_fonts_directory());
+        assert!(!faces.is_empty(), "no bundled fonts were found");
+
+        // Simplified first: Typst's fallback can't see the text's language, so
+        // whichever comes first decides what shared characters look like.
+        let families: Vec<&str> =
+            faces.iter().map(|(_, info)| info.family.as_str()).collect();
+        assert_eq!(
+            families.iter().position(|family| *family == "Noto Sans CJK SC"),
+            Some(0)
+        );
+        for family in ["Noto Sans CJK TC", "Noto Sans Mono CJK SC", "Noto Sans Mono CJK TC"] {
+            assert!(families.contains(&family), "{family} is missing");
+        }
+        // Leaving Japanese and Korean text to the system fonts.
+        for family in ["Noto Sans CJK JP", "Noto Sans CJK KR", "Noto Sans CJK HK"] {
+            assert!(!families.contains(&family), "{family} should not be bundled");
+        }
+
+        // Both weights, and every face loads and has outlines we can draw —
+        // the trap PingFang falls into (see `core_text_fonts`).
+        for (font, info) in &faces {
+            assert!(
+                info.flags.contains(typst::text::FontFlags::SUPPLEMENTARY),
+                "{} would outrank the system's fonts",
+                info.family
+            );
+            let font = font.load().expect("a bundled face failed to load");
+            let face = ttf_parser::Face::parse(font.data(), font.index())
+                .expect("a bundled face failed to parse");
+            for c in "汉语说让".chars() {
+                let id = face.glyph_index(c).expect("missing glyph");
+                assert!(
+                    face.outline_glyph(id, &mut DiscardOutline).is_some(),
+                    "{c} has no outline in {}",
+                    info.family
+                );
+            }
+        }
+        let weights: HashSet<u16> = faces
+            .iter()
+            .filter(|(_, info)| info.family == "Noto Sans CJK SC")
+            .map(|(_, info)| info.variant.weight.to_number())
+            .collect();
+        assert_eq!(weights, HashSet::from([400, 700]));
+    }
+
+    #[test]
+    fn bundled_fonts_draw_the_chinese_no_system_font_has() {
+        // Regression: no font on iOS covers the simplified-only characters —
+        // Chinese text there fell back to Japanese fonts, which don't have
+        // them — so "汉语说让" was tofu no matter how many system fonts we found.
+        let store = discover_fonts(Some(&bundled_fonts_directory()));
+        let book = store.book();
+        let variant = typst::text::FontVariant::default();
+        // Fallback scores candidates by how close they are to the text font,
+        // which for an unstyled document is the first embedded one.
+        let like = book
+            .select("libertinus serif", variant)
+            .and_then(|index| book.info(index))
+            .expect("the embedded text font is missing")
+            .clone();
+
+        let index = book
+            .select_fallback(Some(&like), variant, "汉语说让")
+            .expect("nothing covers simplified Chinese");
+        let font = store.font(index).expect("the chosen font failed to load");
+        for c in "汉语说让".chars() {
+            assert!(
+                font.info().coverage.contains(c as u32),
+                "the chosen font ({}) doesn't cover {c}",
+                font.info().family
+            );
+        }
+
+        // macOS has real Chinese fonts of its own (Songti SC and the rest) and
+        // keeps preferring them; iOS has none, so it lands on the bundled one.
+        #[cfg(target_os = "ios")]
+        assert_eq!(font.info().family, "Noto Sans CJK SC");
+
+        // Japanese and Korean stay with the system's fonts on both platforms,
+        // even though these faces cover kana and hangul as well and would win
+        // the family-name tie-break: that's what `SUPPLEMENTARY` is for.
+        for text in ["ひらがな", "한국어"] {
+            let index = book
+                .select_fallback(Some(&like), variant, text)
+                .expect("nothing covers this text");
+            let family = &book.info(index).unwrap().family;
+            assert!(
+                !family.starts_with("Noto Sans"),
+                "{text} fell back to the bundled {family}"
+            );
+        }
+    }
+
+
+    /// The text of every run in `frame`, one entry per font switch.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    fn collect_runs(frame: &Frame, runs: &mut Vec<String>) {
+        for (_, item) in frame.items() {
+            match item {
+                FrameItem::Group(group) => collect_runs(&group.frame, runs),
+                FrameItem::Text(text) => runs.push(text.text.to_string()),
+                _ => {}
+            }
+        }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[test]
+    fn farsi_words_are_shaped_in_one_font_each() {
+        // Regression: Arabic letters join only within a single font's run, so a
+        // word split across fonts is drawn as detached isolated forms. Fallback
+        // used to pick the font whose family name was shortest among those
+        // covering a word's first letter — "Muna" on macOS, which lacks the
+        // Persian letters — and "دنیا" came out as "دن" + "ی" + "ا".
+        const WORDS: [&str; 7] =
+            ["سلام", "دنیا،", "پژوهش", "می\u{200c}رود", "کتاب", "گچ", "۱۲۳"];
+
+        let root = test_workspace("farsi-joining");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("main.typ"),
+            format!("#text(lang: \"fa\")[{}]", WORDS.join(" ")),
+        )
+        .unwrap();
+
+        let Ok((_world, document, _warnings)) =
+            compile_paged_document(root.to_str().unwrap(), "main.typ", "", "")
+        else {
+            panic!("compile failed");
+        };
+        let mut runs = Vec::new();
+        for page in document.pages() {
+            collect_runs(&page.frame, &mut runs);
+        }
+
+        // Every run holds whole words: a fragment of one (say "دن") would mean
+        // the rest of that word was shaped separately, in some other font.
+        let split: Vec<&str> = runs
+            .iter()
+            .flat_map(|run| run.split_whitespace())
+            .filter(|piece| !WORDS.contains(piece))
+            .collect();
+        assert!(split.is_empty(), "words split across fonts: {split:?}");
+
+        let _ = fs::remove_dir_all(root);
+    }
 }
+

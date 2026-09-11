@@ -2578,9 +2578,13 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "comemo",
+ "core-foundation",
+ "fontdb",
  "libc",
+ "memmap2",
  "serde",
  "serde_json",
+ "ttf-parser",
  "typst",
  "typst-assets",
  "typst-html",

@@ -146,9 +146,13 @@ build_target() {
   # third-party Rust that is never symbolicated anyway.
   strip -S "$framework_dir/TypesetLang"
   cp "$CRATE_DIR/include/typeset_lang.h" "$framework_dir/Headers/TypesetLang.h"
+  # A staticlib carries no record of the system frameworks it calls into, so
+  # the module map declares them and `import TypesetLang` autolinks them.
+  # (Foundation already pulls in CoreFoundation and Security.)
   cat > "$framework_dir/Modules/module.modulemap" <<'MODULEMAP'
 framework module TypesetLang {
   umbrella header "TypesetLang.h"
+  link framework "CoreText"
   export *
   module * { export * }
 }

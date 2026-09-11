@@ -406,7 +406,8 @@ private enum TypesetAboutPanel {
             section("Typst Third-Party Notices", file: "Typst-NOTICE"),
             section("Tinymist License", file: "Tinymist-LICENSE"),
             section("Tinymist cmark-writer License", file: "Tinymist-cmark-writer-LICENSE"),
-            section("Fira Code License", file: "FiraCode-LICENSE")
+            section("Fira Code License", file: "FiraCode-LICENSE"),
+            section("Noto Sans CJK License", file: "NotoSansCJK-LICENSE")
         ]
         .filter { !$0.isEmpty }
         .joined(separator: "\n\n")

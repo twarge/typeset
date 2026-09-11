@@ -1,5 +1,6 @@
 framework module TypesetLang {
   umbrella header "TypesetLang.h"
+  link framework "CoreText"
   export *
   module * { export * }
 }
