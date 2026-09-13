@@ -430,7 +430,7 @@ extension PDFPreviewView {
 }
 
 #if os(macOS)
-@MainActor final class BufferedPDFPreviewContainer: NSView {
+@MainActor final class BufferedPDFPreviewContainer: NSView, NSGestureRecognizerDelegate {
     private let pdfViews: [PDFView]
     private var activeIndex = 0
     private var presentationRevision = 0
@@ -455,6 +455,7 @@ extension PDFPreviewView {
         layer?.backgroundColor = .clear
 
         let recognizer = NSClickGestureRecognizer(target: coordinator, action: #selector(PDFPreviewView.Coordinator.handleClick(_:)))
+        recognizer.delegate = self
         addGestureRecognizer(recognizer)
 
         for (index, pdfView) in pdfViews.enumerated() {
@@ -497,6 +498,23 @@ extension PDFPreviewView {
 
     @objc private func activeViewDidScroll(_ notification: Notification) {
         reportViewport()
+    }
+
+    // MARK: - NSGestureRecognizerDelegate
+
+    /// PDFKit attaches its own recognizers to the page views underneath us,
+    /// among them the Force Touch look-up recognizer
+    /// (`NSImmediateActionGestureRecognizer`). Left to its defaults, AppKit
+    /// makes our click wait for that recognizer to fail first, and on current
+    /// PDFKit a plain click never fails it — so click-to-seek silently never
+    /// fired. A click in the preview is a navigation gesture with no competing
+    /// meaning, so it neither waits for nor excludes PDFKit's recognizers.
+    func gestureRecognizer(_ gestureRecognizer: NSGestureRecognizer, shouldRequireFailureOf otherGestureRecognizer: NSGestureRecognizer) -> Bool {
+        false
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: NSGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: NSGestureRecognizer) -> Bool {
+        true
     }
 
     private func reportViewport() {

@@ -2966,19 +2966,25 @@ struct TypesetWorkspaceView: View {
         hoverInfo = nil
     }
 
+    /// Jumps the editor to a diagnostic, opening its file first when needed.
+    /// Travels the same reveal path as the preview seek: re-selecting a file
+    /// resets it to the top after layout, so a caret written through the live
+    /// binding here only survived by being deferred a run-loop turn.
     private func seekToDiagnostic(_ diagnostic: TypstSourceDiagnostic) {
         if selectedView == .preview {
             selectedView = .source
         }
-        select(diagnostic.file)
-
-        let diagnosticRange = clampedRange(diagnostic.range, in: document.package.text(for: diagnostic.file))
-        DispatchQueue.main.async {
+        let target = clampedRange(diagnostic.range, in: document.package.text(for: diagnostic.file))
+        if selectedPath != diagnostic.file {
+            select(diagnostic.file, revealing: target)
+            // `select` has already reported a missing file; leave the log up.
             guard selectedPath == diagnostic.file else { return }
-            selectedRange = diagnosticRange
-            withAnimation(.snappy(duration: 0.24)) {
-                isLogPresented = false
-            }
+        } else {
+            requestEditorReveal(target)
+        }
+        focusSourceEditor()
+        withAnimation(.snappy(duration: 0.24)) {
+            isLogPresented = false
         }
     }
 
@@ -3266,12 +3272,24 @@ struct TypesetWorkspaceView: View {
         return result
     }
 
+    /// Moves the caret to the source behind a spot the user clicked in the
+    /// preview. Only opens the file when it isn't the one already in the
+    /// editor: `select` resets a file to its top through the post-layout
+    /// restore path, which would land after — and undo — a caret placed
+    /// through the live `selectedRange` binding. The target travels through
+    /// the same reveal path the Find sidebar uses, so it also survives the
+    /// editor mounting fresh when the layout leaves preview-only mode.
     private func seek(to range: SourceRange) {
-        select(range.path)
-        selectedRange = NSRange(location: range.start, length: max(0, range.end - range.start))
+        let target = NSRange(location: range.start, length: max(0, range.end - range.start))
         if selectedView == .preview {
             selectedView = .source
         }
+        if selectedPath != range.path {
+            select(range.path, revealing: target)
+        } else {
+            requestEditorReveal(clampedRange(target, in: sourceText))
+        }
+        focusSourceEditor()
     }
 
     private func exportPDF() {
