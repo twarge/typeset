@@ -140,6 +140,22 @@ struct TypesetWorkspaceView: View {
     // whose token no longer matches has its result discarded.
     @State private var previewCompileToken = 0
     @State private var logEntries: [DiagnosticLogEntry] = []
+    /// Cloud sync status for the folder's files — downloads in flight, their
+    /// outcome, files left out — shown above the compile log and kept across
+    /// compiles, unlike `logEntries`, which each run replaces.
+    @State private var syncEntries: [DiagnosticLogEntry] = []
+    /// The `syncEntries` row for each reported path, so a re-read of the
+    /// folder updates a file's row instead of adding another.
+    @State private var syncEntryIDs: [String: UUID] = [:]
+    /// Downloads in flight, so a re-read does not request one twice.
+    @State private var activeCloudDownloads: Set<String> = []
+    /// When each file was last requested. A file the provider could not
+    /// deliver is retried on every folder re-read, but re-reads come as
+    /// often as the write-through saves (sub-second while typing), so a
+    /// short floor keeps a dead entry from being hammered — and its row
+    /// from flickering — while still catching a provider that recovers.
+    @State private var cloudDownloadAttempts: [String: Date] = [:]
+    private static let cloudDownloadRetryInterval: TimeInterval = 10
     @State private var sourceDiagnostics: [String: [TypstSourceDiagnostic]] = [:]
     @State private var sourceProseRanges: [String: ProseRangeSnapshot] = [:]
     @State private var documentSymbols: TypstDocumentSymbols = .empty
@@ -502,7 +518,7 @@ struct TypesetWorkspaceView: View {
             contentPane
 
             DiagnosticLogSlideOver(
-                entries: logEntries,
+                entries: syncEntries + logEntries,
                 isPresented: isLogPresented,
                 onSelectDiagnostic: seekToDiagnostic
             )
@@ -1385,6 +1401,10 @@ struct TypesetWorkspaceView: View {
 
     private func loadTypstDirectory(openedFileURL fileURL: URL) {
         guard loadedTypstDirectoryFileURL != fileURL else { return }
+        syncEntries = []
+        syncEntryIDs = [:]
+        activeCloudDownloads = []
+        cloudDownloadAttempts = [:]
 
         do {
             let didAccess = fileURL.startAccessingSecurityScopedResource()
@@ -1408,9 +1428,103 @@ struct TypesetWorkspaceView: View {
             selectedPath = ""
             selectedFolderPath = nil
             select(document.package.selectedPath, restoringEditorState: true)
+            reportSkippedFiles(document.package.skippedFiles)
+            startCloudDownloads(for: document.package)
         } catch {
             recordLog("Directory load failed", message: error.localizedDescription, level: .error, present: true)
         }
+    }
+
+    /// Surfaces the folder files the loader left out (a stale cloud entry
+    /// whose content is gone, an unreadable file) as sticky warnings in the
+    /// log. The document still opens; these files are simply not part of it,
+    /// and the write-through never touches them.
+    private func reportSkippedFiles(_ skipped: [SkippedFile]) {
+        for file in skipped {
+            setSyncEntry(
+                for: file.path,
+                title: "Left out: \(file.path)",
+                message: "This file could not be read (\(file.reason)), so it is not part of the document. It was left untouched on disk.",
+                level: .warning
+            )
+        }
+    }
+
+    /// Requests the files the loader found still living in the cloud and shows
+    /// each one's progress in the log. On arrival the folder is re-read so the
+    /// file joins the document and the preview recompiles. A file that fails
+    /// stays reported and is requested again on each later re-read (subject
+    /// to `cloudDownloadRetryInterval`), so a provider that recovers — or a
+    /// file evicted after open — is picked up without reopening.
+    private func startCloudDownloads(for package: DocumentPackage) {
+        guard let root = package.onDiskRootURL else { return }
+        let provider = Self.cloudProviderName(for: root)
+        let now = Date()
+        for path in package.pendingDownloads where !activeCloudDownloads.contains(path) {
+            if let lastAttempt = cloudDownloadAttempts[path],
+               now.timeIntervalSince(lastAttempt) < Self.cloudDownloadRetryInterval {
+                continue
+            }
+            activeCloudDownloads.insert(path)
+            cloudDownloadAttempts[path] = now
+            let isRetry = syncEntryIDs[path] != nil
+            setSyncEntry(
+                for: path,
+                title: "\(isRetry ? "Retrying" : "Downloading") \(path)",
+                message: "Waiting for \(provider) to deliver this file. The document compiles without it until it arrives.",
+                level: .downloading
+            )
+            let url = root.appending(path: path)
+            Task { @MainActor in
+                defer { activeCloudDownloads.remove(path) }
+                do {
+                    let bytes = try await CloudFileMaterializer.materialize(fileAt: url)
+                    let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+                    setSyncEntry(for: path, title: "Downloaded \(path)", message: "\(size) from \(provider). Added to the document.", level: .info)
+                    scheduleExternalReconcile()
+                } catch {
+                    setSyncEntry(
+                        for: path,
+                        title: "Could not download \(path)",
+                        message: "\(provider) could not provide this file: \(error.localizedDescription) It is not part of the document and was left untouched on disk. Typeset will ask again when the folder changes.",
+                        level: .warning
+                    )
+                }
+            }
+        }
+    }
+
+    /// Adds or updates the sync row for `path`, so a file has one row that
+    /// tells its current story rather than a trail of them.
+    private func setSyncEntry(for path: String, title: String, message: String, level: DiagnosticLogEntry.Level) {
+        if let id = syncEntryIDs[path], let index = syncEntries.firstIndex(where: { $0.id == id }) {
+            syncEntries[index].title = title
+            syncEntries[index].message = message
+            syncEntries[index].level = level
+            syncEntries[index].date = Date()
+        } else {
+            let entry = DiagnosticLogEntry(title: title, message: message, level: level)
+            syncEntryIDs[path] = entry.id
+            syncEntries.append(entry)
+        }
+    }
+
+    /// A user-facing name for the service syncing `url`, from where macOS
+    /// mounts it: `~/Library/CloudStorage/<Provider>-<account>` for File
+    /// Provider apps, `~/Library/Mobile Documents` for iCloud Drive.
+    private static func cloudProviderName(for url: URL) -> String {
+        let path = url.standardizedFileURL.path
+        if path.contains("/Library/Mobile Documents/") {
+            return "iCloud Drive"
+        }
+        if let range = path.range(of: "/Library/CloudStorage/") {
+            let domain = path[range.upperBound...].prefix { $0 != "/" }
+            let provider = domain.prefix { $0 != "-" }
+            if !provider.isEmpty {
+                return String(provider)
+            }
+        }
+        return "the cloud service"
     }
 
     private func select(_ path: String, restoringEditorState: Bool = false, revealing: NSRange? = nil) {
@@ -1835,7 +1949,7 @@ struct TypesetWorkspaceView: View {
         previewCompileToken += 1
         let token = previewCompileToken
         let runID = beginDiagnosticRun()
-        let package = document.package
+        let package = packageForCompile(document.package)
         let renderer = self.renderer
         previewCompileTask = Task {
             do {
@@ -3458,6 +3572,21 @@ struct TypesetWorkspaceView: View {
         if selectedFile?.isTextEditable == true {
             try? package.updateSelectedText(sourceText)
         }
+        return packageForCompile(package)
+    }
+
+    /// The package as the compiler should read it. A saved `.typeset` bundle
+    /// is compiled in place like a folder: its unchanged files are exactly
+    /// what the document system loaded (and reuses, untouched, on save), and
+    /// the compile overlay carries every file this session changed. A folder
+    /// load sets the root itself; an unsaved document has none and is
+    /// mirrored instead.
+    private func packageForCompile(_ package: DocumentPackage) -> DocumentPackage {
+        var package = package
+        if package.onDiskRootURL == nil, let fileURL,
+           fileURL.pathExtension.lowercased() == "typeset" {
+            package.onDiskRootURL = fileURL.standardizedFileURL
+        }
         return package
     }
 
@@ -4206,6 +4335,8 @@ struct TypesetWorkspaceView: View {
         guard var fresh = try? DocumentPackage(directoryURL: root, openedFileURL: openedURL) else {
             return
         }
+        reportSkippedFiles(fresh.skippedFiles)
+        startCloudDownloads(for: fresh)
 
         // The opened .typ is owned by the document machinery (it persists and
         // resolves conflicts for that file natively). Exclude it from our disk

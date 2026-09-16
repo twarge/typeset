@@ -3,7 +3,7 @@
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use libc::c_char;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::{CStr, CString};
 use std::fs;
@@ -654,8 +654,9 @@ pub extern "C" fn typeset_typst_compile_svg(
     main_path: *const c_char,
     package_path: *const c_char,
     package_cache_path: *const c_char,
+    overlay_json: *const c_char,
 ) -> *mut c_char {
-    into_c_string(match compile_svg_response(root, main_path, package_path, package_cache_path) {
+    into_c_string(match compile_svg_response(root, main_path, package_path, package_cache_path, overlay_json) {
         Ok(response) => to_json(&response),
         Err(message) => to_json(&RenderResponse::error(message)),
     })
@@ -667,8 +668,9 @@ pub extern "C" fn typeset_typst_compile_pdf(
     main_path: *const c_char,
     package_path: *const c_char,
     package_cache_path: *const c_char,
+    overlay_json: *const c_char,
 ) -> *mut c_char {
-    into_c_string(match compile_pdf_response(root, main_path, package_path, package_cache_path) {
+    into_c_string(match compile_pdf_response(root, main_path, package_path, package_cache_path, overlay_json) {
         Ok(response) => to_json(&response),
         Err(message) => to_json(&RenderResponse::error(message)),
     })
@@ -680,8 +682,9 @@ pub extern "C" fn typeset_typst_compile_html(
     main_path: *const c_char,
     package_path: *const c_char,
     package_cache_path: *const c_char,
+    overlay_json: *const c_char,
 ) -> *mut c_char {
-    into_c_string(match compile_html_response(root, main_path, package_path, package_cache_path) {
+    into_c_string(match compile_html_response(root, main_path, package_path, package_cache_path, overlay_json) {
         Ok(response) => to_json(&response),
         Err(message) => to_json(&RenderResponse::error(message)),
     })
@@ -753,6 +756,35 @@ fn read_c_string(value: *const c_char) -> Result<String, String> {
         .map_err(|error| error.to_string())
 }
 
+/// One in-memory file for a compile: the package-relative path and its
+/// bytes, base64 so binary assets survive the JSON crossing.
+#[derive(Deserialize)]
+struct OverlayEntry {
+    path: String,
+    data_base64: String,
+}
+
+/// Decodes the compile overlay: a JSON array of `OverlayEntry`, or null for
+/// none. Malformed input is an error rather than an empty overlay, since
+/// silently compiling stale on-disk sources would misrepresent the editor.
+fn parse_overlay(value: *const c_char) -> Result<HashMap<String, Bytes>, String> {
+    if value.is_null() {
+        return Ok(HashMap::new());
+    }
+    let json = read_c_string(value)?;
+    let entries: Vec<OverlayEntry> = serde_json::from_str(&json)
+        .map_err(|error| format!("Compile overlay is malformed: {error}"))?;
+    entries
+        .into_iter()
+        .map(|entry| {
+            let bytes = BASE64
+                .decode(entry.data_base64)
+                .map_err(|error| format!("Compile overlay for {} is malformed: {error}", entry.path))?;
+            Ok((entry.path.trim_start_matches('/').to_string(), Bytes::new(bytes)))
+        })
+        .collect()
+}
+
 fn into_c_string(value: String) -> *mut c_char {
     CString::new(value).unwrap_or_default().into_raw()
 }
@@ -804,13 +836,15 @@ fn compile_svg_response(
     main_path: *const c_char,
     package_path: *const c_char,
     package_cache_path: *const c_char,
+    overlay_json: *const c_char,
 ) -> Result<RenderResponse, String> {
     let root = read_c_string(root)?;
     let main_path = read_c_string(main_path)?;
     let package_path = read_c_string(package_path)?;
     let package_cache_path = read_c_string(package_cache_path)?;
+    let overlay = parse_overlay(overlay_json)?;
     let (world, document, warnings) =
-        match compile_paged_document(&root, &main_path, &package_path, &package_cache_path) {
+        match compile_paged_document(&root, &main_path, &package_path, &package_cache_path, overlay) {
             Ok(compilation) => compilation,
             Err(response) => return Ok(response),
         };
@@ -838,13 +872,15 @@ fn compile_pdf_response(
     main_path: *const c_char,
     package_path: *const c_char,
     package_cache_path: *const c_char,
+    overlay_json: *const c_char,
 ) -> Result<RenderResponse, String> {
     let root = read_c_string(root)?;
     let main_path = read_c_string(main_path)?;
     let package_path = read_c_string(package_path)?;
     let package_cache_path = read_c_string(package_cache_path)?;
+    let overlay = parse_overlay(overlay_json)?;
     let (world, document, warnings) =
-        match compile_paged_document(&root, &main_path, &package_path, &package_cache_path) {
+        match compile_paged_document(&root, &main_path, &package_path, &package_cache_path, overlay) {
             Ok(compilation) => compilation,
             Err(response) => return Ok(response),
         };
@@ -881,12 +917,14 @@ fn compile_html_response(
     main_path: *const c_char,
     package_path: *const c_char,
     package_cache_path: *const c_char,
+    overlay_json: *const c_char,
 ) -> Result<RenderResponse, String> {
     let root = read_c_string(root)?;
     let main_path = read_c_string(main_path)?;
     let package_path = read_c_string(package_path)?;
     let package_cache_path = read_c_string(package_cache_path)?;
-    let world = RenderWorld::new_for_html(&root, &main_path, &package_path, &package_cache_path)?;
+    let overlay = parse_overlay(overlay_json)?;
+    let world = RenderWorld::new_for_html(&root, &main_path, &package_path, &package_cache_path, overlay)?;
     let typst::diag::Warned { output, warnings } = typst::compile::<HtmlDocument>(&world);
     comemo::evict(COMEMO_EVICT_MAX_AGE);
     let document = match output {
@@ -947,8 +985,9 @@ fn compile_paged_document(
     main_path: &str,
     package_path: &str,
     package_cache_path: &str,
+    overlay: HashMap<String, Bytes>,
 ) -> Result<(RenderWorld, PagedDocument, Vec<SourceDiagnostic>), RenderResponse> {
-    let world = RenderWorld::new(root, main_path, package_path, package_cache_path)
+    let world = RenderWorld::new(root, main_path, package_path, package_cache_path, overlay)
         .map_err(RenderResponse::error)?;
     let typst::diag::Warned { output, warnings } = typst::compile::<PagedDocument>(&world);
     comemo::evict(COMEMO_EVICT_MAX_AGE);
@@ -1276,8 +1315,9 @@ impl RenderWorld {
         main_path: &str,
         package_path: &str,
         package_cache_path: &str,
+        overlay: HashMap<String, Bytes>,
     ) -> Result<Self, String> {
-        Self::new_with_html_feature(root, main_path, package_path, package_cache_path, false)
+        Self::new_with_html_feature(root, main_path, package_path, package_cache_path, overlay, false)
     }
 
     fn new_for_html(
@@ -1285,8 +1325,9 @@ impl RenderWorld {
         main_path: &str,
         package_path: &str,
         package_cache_path: &str,
+        overlay: HashMap<String, Bytes>,
     ) -> Result<Self, String> {
-        Self::new_with_html_feature(root, main_path, package_path, package_cache_path, true)
+        Self::new_with_html_feature(root, main_path, package_path, package_cache_path, overlay, true)
     }
 
     fn new_with_html_feature(
@@ -1294,9 +1335,10 @@ impl RenderWorld {
         main_path: &str,
         package_path: &str,
         package_cache_path: &str,
+        overlay: HashMap<String, Bytes>,
         html_enabled: bool,
     ) -> Result<Self, String> {
-        let files = RenderFiles::new(root, main_path, package_path, package_cache_path)?;
+        let files = RenderFiles::new(root, main_path, package_path, package_cache_path, overlay)?;
         Ok(Self {
             main_path: main_path.to_string(),
             library: shared_render_library(html_enabled),
@@ -1345,9 +1387,16 @@ impl World for RenderWorld {
     }
 }
 
+/// Serves project files from the document's real folder, except for the
+/// paths in `overlay`, whose bytes come from memory. The app passes the
+/// files that may differ from disk — the source being edited, anything
+/// added or changed in the session — so a compile sees the editor's state
+/// without the whole package being mirrored to a temporary directory first.
+/// Large assets (images, fonts, data) are read straight from the folder.
 struct RenderFiles {
     main: FileId,
     project: FsRoot,
+    overlay: HashMap<String, Bytes>,
     packages: SystemPackages,
 }
 
@@ -1357,16 +1406,25 @@ impl RenderFiles {
         main_path: &str,
         package_path: &str,
         package_cache_path: &str,
+        overlay: HashMap<String, Bytes>,
     ) -> Result<Self, String> {
         let root = PathBuf::from(root)
             .canonicalize()
             .map_err(|error| format!("Typst root is unavailable: {error}"))?;
-        let input = root
-            .join(main_path)
-            .canonicalize()
-            .map_err(|error| format!("Typst input file is unavailable: {error}"))?;
-        let virtual_path = VirtualPath::virtualize(&root, &input)
-            .map_err(|error| format!("Typst input file must be inside the package: {error:?}"))?;
+        // An overlaid main file need not exist on disk yet (a source added
+        // in the session), so only resolve it through the file system when
+        // the file system is where its bytes will come from.
+        let virtual_path = if overlay.contains_key(main_path) {
+            VirtualPath::new(main_path)
+                .map_err(|error| format!("Typst input path is invalid: {error:?}"))?
+        } else {
+            let input = root
+                .join(main_path)
+                .canonicalize()
+                .map_err(|error| format!("Typst input file is unavailable: {error}"))?;
+            VirtualPath::virtualize(&root, &input)
+                .map_err(|error| format!("Typst input file must be inside the package: {error:?}"))?
+        };
         let main = RootedPath::new(VirtualRoot::Project, virtual_path).intern();
         let packages = SystemPackages::from_parts(
             Some(FsPackages::new(package_path)),
@@ -1377,6 +1435,7 @@ impl RenderFiles {
         Ok(Self {
             main,
             project: FsRoot::new(root),
+            overlay,
             packages,
         })
     }
@@ -1391,6 +1450,11 @@ impl RenderFiles {
 
 impl FileLoader for RenderFiles {
     fn load(&self, id: FileId) -> FileResult<Bytes> {
+        if *id.root() == VirtualRoot::Project
+            && let Some(bytes) = self.overlay.get(id.vpath().get_without_slash())
+        {
+            return Ok(bytes.clone());
+        }
         self.root(id)?.load(id.vpath())
     }
 }
@@ -6797,6 +6861,7 @@ description = "Draw diagrams."
             main_c.as_ptr(),
             package_c.as_ptr(),
             cache_c.as_ptr(),
+            std::ptr::null(),
         )
         .unwrap();
         assert!(svg.ok);
@@ -6811,6 +6876,7 @@ description = "Draw diagrams."
             main_c.as_ptr(),
             package_c.as_ptr(),
             cache_c.as_ptr(),
+            std::ptr::null(),
         )
         .unwrap();
         assert!(pdf.ok);
@@ -6824,6 +6890,7 @@ description = "Draw diagrams."
             main_c.as_ptr(),
             package_c.as_ptr(),
             cache_c.as_ptr(),
+            std::ptr::null(),
         )
         .unwrap();
         assert!(html.ok);
@@ -6832,6 +6899,80 @@ description = "Draw diagrams."
         assert!(html_output.contains("Hello"));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compile_overlay_takes_precedence_over_disk() {
+        let root = test_workspace("overlay");
+        fs::create_dir_all(root.join("Figures")).unwrap();
+        fs::write(root.join("main.typ"), "= Disk").unwrap();
+        fs::write(
+            root.join("Figures/dot.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"><rect width=\"4\" height=\"4\"/></svg>",
+        )
+        .unwrap();
+        let package_path = root.join("packages-local");
+        let package_cache_path = root.join("packages-cache");
+        fs::create_dir_all(&package_path).unwrap();
+        fs::create_dir_all(&package_cache_path).unwrap();
+
+        let root_c = CString::new(root.to_string_lossy().as_bytes()).unwrap();
+        let package_c = CString::new(package_path.to_string_lossy().as_bytes()).unwrap();
+        let cache_c = CString::new(package_cache_path.to_string_lossy().as_bytes()).unwrap();
+
+        // The overlaid main wins over the on-disk one (HTML keeps text literal).
+        let main_c = CString::new("main.typ").unwrap();
+        let overlay = serde_json::json!([
+            { "path": "main.typ", "data_base64": BASE64.encode("= Overlay") },
+        ])
+        .to_string();
+        let overlay_c = CString::new(overlay).unwrap();
+        let html = compile_html_response(
+            root_c.as_ptr(),
+            main_c.as_ptr(),
+            package_c.as_ptr(),
+            cache_c.as_ptr(),
+            overlay_c.as_ptr(),
+        )
+        .unwrap();
+        assert!(html.ok, "{:?}", html.message);
+        let html_output = html.html.unwrap();
+        assert!(html_output.contains("Overlay"));
+        assert!(!html_output.contains("Disk"));
+
+        // A main that exists only in memory still compiles, and files it
+        // references that are NOT overlaid fall through to the real folder.
+        let virtual_c = CString::new("draft.typ").unwrap();
+        let overlay = serde_json::json!([
+            { "path": "/draft.typ", "data_base64": BASE64.encode("#image(\"Figures/dot.svg\")") },
+        ])
+        .to_string();
+        let overlay_c = CString::new(overlay).unwrap();
+        let pdf = compile_pdf_response(
+            root_c.as_ptr(),
+            virtual_c.as_ptr(),
+            package_c.as_ptr(),
+            cache_c.as_ptr(),
+            overlay_c.as_ptr(),
+        )
+        .unwrap();
+        assert!(pdf.ok, "{:?}", pdf.message);
+        assert!(pdf.pdf_base64.unwrap().len() > 100);
+
+        // A malformed overlay is refused outright rather than ignored.
+        let bad_c = CString::new("not json").unwrap();
+        assert!(
+            compile_html_response(
+                root_c.as_ptr(),
+                main_c.as_ptr(),
+                package_c.as_ptr(),
+                cache_c.as_ptr(),
+                bad_c.as_ptr(),
+            )
+            .is_err()
+        );
+
+        fs::remove_dir_all(&root).ok();
     }
 
     fn test_workspace(name: &str) -> PathBuf {
@@ -6948,7 +7089,7 @@ description = "Draw diagrams."
         // An unresolved family would surface as an "unknown font family"
         // warning; a clean compile proves the project font was used.
         let Ok((_world, document, warnings)) =
-            compile_paged_document(root.to_str().unwrap(), "main.typ", "", "")
+            compile_paged_document(root.to_str().unwrap(), "main.typ", "", "", HashMap::new())
         else {
             panic!("compile failed");
         };
@@ -7034,7 +7175,7 @@ description = "Draw diagrams."
         .unwrap();
 
         let Ok((_world, document, _warnings)) =
-            compile_paged_document(root.to_str().unwrap(), "main.typ", "", "")
+            compile_paged_document(root.to_str().unwrap(), "main.typ", "", "", HashMap::new())
         else {
             panic!("compile failed");
         };
@@ -7273,7 +7414,7 @@ description = "Draw diagrams."
         .unwrap();
 
         let Ok((_world, document, _warnings)) =
-            compile_paged_document(root.to_str().unwrap(), "main.typ", "", "")
+            compile_paged_document(root.to_str().unwrap(), "main.typ", "", "", HashMap::new())
         else {
             panic!("compile failed");
         };
@@ -7336,7 +7477,7 @@ description = "Draw diagrams."
             .unwrap();
 
             let Ok((_world, document, _warnings)) =
-                compile_paged_document(root.to_str().unwrap(), "main.typ", "", "")
+                compile_paged_document(root.to_str().unwrap(), "main.typ", "", "", HashMap::new())
             else {
                 panic!("compile failed");
             };

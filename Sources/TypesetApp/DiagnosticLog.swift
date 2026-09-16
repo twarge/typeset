@@ -20,6 +20,9 @@ struct DiagnosticLogEntry: Identifiable, Equatable {
         case info
         case warning
         case error
+        /// A cloud file the document is waiting on; the row's icon pulses
+        /// until the entry is updated with the outcome.
+        case downloading
     }
 
     var id = UUID()
@@ -138,6 +141,7 @@ struct DiagnosticLogRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: icon)
                     .foregroundStyle(color)
+                    .symbolEffect(.pulse, options: .repeating, isActive: entry.level == .downloading)
 
                 Text(entry.title)
                     .font(.subheadline.weight(.semibold))
@@ -172,6 +176,8 @@ struct DiagnosticLogRow: View {
             return "exclamationmark.triangle"
         case .error:
             return "xmark.octagon"
+        case .downloading:
+            return "icloud.and.arrow.down"
         }
     }
 
@@ -183,6 +189,8 @@ struct DiagnosticLogRow: View {
             return .orange
         case .error:
             return .red
+        case .downloading:
+            return .cyan
         }
     }
 

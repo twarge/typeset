@@ -32,11 +32,27 @@ public enum TypesetPackageError: Error, Equatable {
     /// rather than substitute empty content, because a later save would write
     /// that emptiness over the real file.
     case unreadableFile(String)
-    /// The file is an iCloud item that has not been downloaded to this device.
+    /// The file is a cloud item that has not been downloaded to this device.
+    /// The folder loader no longer throws this — it skips such files and
+    /// records them in `skippedFiles` — but the case stays for callers that
+    /// surface it.
     case fileNotDownloaded(String)
     /// Saving was refused because it would write empty content over files that
     /// were loaded with content and never edited in this session.
     case saveWouldEraseContent([String])
+}
+
+/// A file present in the document's folder that could not be imported, with
+/// the reason in user-facing terms. The package neither contains nor tracks
+/// such a file, so a save never writes or removes it.
+public struct SkippedFile: Hashable, Sendable {
+    public var path: String
+    public var reason: String
+
+    public init(path: String, reason: String) {
+        self.path = path
+        self.reason = reason
+    }
 }
 
 public struct PackageFile: Identifiable, Hashable, Sendable {
@@ -166,6 +182,24 @@ public struct DocumentPackage: Equatable, Sendable {
     /// their bytes rewritten by an incremental save. Maintained by the mutating
     /// methods; mutating `files` directly bypasses it.
     public private(set) var changedPaths: Set<String> = []
+
+    /// Files in the loaded folder that were left out because their bytes
+    /// could not be read — a cloud placeholder that would not materialize, a
+    /// stale entry whose content is gone. Empty unless loaded from a folder.
+    public private(set) var skippedFiles: [SkippedFile] = []
+
+    /// Files in the loaded folder whose content the cloud provider has not
+    /// delivered to this device yet. The loader leaves them out rather than
+    /// waiting on a download; the app requests them (see
+    /// `CloudFileMaterializer`) and re-reads the folder once they arrive.
+    public private(set) var pendingDownloads: [String] = []
+
+    /// The directory this package mirrors on disk — the folder it was loaded
+    /// from, or the `.typeset` bundle the document system persists it to —
+    /// so a compile can read unchanged assets straight from disk instead of
+    /// from a temporary copy. Set by the folder loader; the app sets it for
+    /// a saved bundle. `nil` for a package that lives only in memory.
+    public var onDiskRootURL: URL?
 
     // Change-tracking metadata is bookkeeping about the session, not part of
     // the package's value: two packages with the same contents are equal even
@@ -949,7 +983,7 @@ extension TypesetPackageError: LocalizedError {
         case .unreadableFile(let path):
             return "“\(path)” could not be read. The document was left untouched — check that it has finished downloading from iCloud, then try opening it again."
         case .fileNotDownloaded(let path):
-            return "“\(path)” has not finished downloading from iCloud. Its download has been requested — try opening the document again once it is available on this device."
+            return "“\(path)” has not finished downloading from its cloud service. Its download has been requested — try opening the document again once it is available on this device."
         case .saveWouldEraseContent(let paths):
             let listed = paths.prefix(5).map { "“\($0)”" }.joined(separator: ", ")
             let suffix = paths.count > 5 ? " and \(paths.count - 5) more" : ""
@@ -968,6 +1002,8 @@ public extension DocumentPackage {
         // capturing a half-written state.
         var files: [PackageFile] = []
         var folders: [String] = []
+        var skipped: [SkippedFile] = []
+        var pending: [String] = []
         var state: DocumentPackageState?
         var collectionError: Error?
         var coordinationError: NSError?
@@ -988,6 +1024,8 @@ public extension DocumentPackage {
                         rootURL: coordinatedURL.standardizedFileURL,
                         files: &files,
                         folders: &folders,
+                        skipped: &skipped,
+                        pending: &pending,
                         state: &state
                     )
                 }
@@ -1037,6 +1075,9 @@ public extension DocumentPackage {
             persistedState = state
             recordLoadedBaseline()
         }
+        skippedFiles = skipped.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+        pendingDownloads = pending.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        onDiskRootURL = directoryURL
     }
 
     init(fileWrapper: FileWrapper) throws {
@@ -1358,6 +1399,8 @@ public extension DocumentPackage {
         rootURL: URL,
         files: inout [PackageFile],
         folders: inout [String],
+        skipped: inout [SkippedFile],
+        pending: inout [String],
         state: inout DocumentPackageState?
     ) throws {
         let resourceValues = try url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
@@ -1367,12 +1410,14 @@ public extension DocumentPackage {
         // An iCloud placeholder stub (".name.icloud") stands in for a file
         // that has not been materialized on this device. Importing the stub
         // would corrupt the package — and the next save would propagate the
-        // corruption — so start the download and refuse the load instead.
+        // corruption — so start the download and leave the file out; the
+        // app folds it in once it lands.
         if name.hasPrefix("."), name.hasSuffix(".icloud"), name.count > ".icloud".count + 1 {
             let realName = String(name.dropFirst().dropLast(".icloud".count))
             let parent = (relativePath as NSString).deletingLastPathComponent
             try? FileManager.default.startDownloadingUbiquitousItem(at: url)
-            throw TypesetPackageError.fileNotDownloaded(parent.isEmpty ? realName : "\(parent)/\(realName)")
+            pending.append(parent.isEmpty ? realName : "\(parent)/\(realName)")
+            return
         }
 
         if url.deletingLastPathComponent().standardizedFileURL == rootURL {
@@ -1402,21 +1447,89 @@ public extension DocumentPackage {
                     rootURL: rootURL,
                     files: &files,
                     folders: &folders,
+                    skipped: &skipped,
+                    pending: &pending,
                     state: &state
                 )
             }
         } else if resourceValues.isRegularFile == true {
-            // Refuse files iCloud has not finished downloading rather than
-            // blocking on (or partially reading) an unmaterialized item.
-            let cloudValues = try? url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey])
-            if let status = cloudValues?.ubiquitousItemDownloadingStatus, status == .notDownloaded {
-                try? FileManager.default.startDownloadingUbiquitousItem(at: url)
-                throw TypesetPackageError.fileNotDownloaded(relativePath)
+            switch readRegularFile(at: url) {
+            case .data(let data):
+                files.append(PackageFile(path: relativePath, data: data))
+            case .notDownloaded:
+                // Not on this device yet. Left out for now — waiting here
+                // would hold the whole document open on a download — and
+                // requested by the app, which folds the file in on arrival.
+                pending.append(relativePath)
+            case .unreadable(let reason):
+                // Left out rather than failing the whole folder: the file is
+                // not in the package, so nothing can write over or remove it,
+                // and the rest of the document still loads.
+                skipped.append(SkippedFile(path: relativePath, reason: reason))
             }
-            // Mapping keeps large assets backed by the file on disk instead of
-            // resident in memory; safe because writers here replace atomically.
-            files.append(PackageFile(path: relativePath, data: try Data(contentsOf: url, options: [.mappedIfSafe])))
         }
+    }
+
+    /// Reads a folder file's bytes, materializing a cloud placeholder first.
+    ///
+    /// Items in a File Provider volume (iCloud Drive, Box, Dropbox, OneDrive…)
+    /// report `.notDownloaded` until their content is on this device. A plain
+    /// read of such an item does not fetch it — on third-party providers it
+    /// fails outright — and `startDownloadingUbiquitousItem` only reaches
+    /// iCloud. A read under `NSFileCoordinator` is what every provider honors:
+    /// it asks the provider for the content and blocks until it arrives. If
+    /// even that fails, the provider has a stale entry for content it can no
+    /// longer produce, and the caller leaves the file out.
+    ///
+    /// Mapping keeps large assets backed by the file on disk instead of
+    /// resident in memory; safe because writers here replace atomically.
+    private enum RegularFileRead {
+        case data(Data)
+        case notDownloaded
+        case unreadable(String)
+    }
+
+    /// Reads a folder file's bytes.
+    ///
+    /// Items in a File Provider volume (iCloud Drive, Box, Dropbox, OneDrive…)
+    /// report `.notDownloaded` until their content is on this device; those
+    /// are reported as such rather than read, so opening never blocks on a
+    /// download. A file the provider reports as present that still fails a
+    /// plain read (a stale entry, a transient provider hiccup) gets one read
+    /// under `NSFileCoordinator`, which asks the provider for the content; if
+    /// that fails too, the file is unreadable and left out.
+    ///
+    /// Mapping keeps large assets backed by the file on disk instead of
+    /// resident in memory; safe because writers here replace atomically.
+    private static func readRegularFile(at url: URL) -> RegularFileRead {
+        // Resource values are cached on the URL instance, so look them up on
+        // a fresh one to see the provider's current answer.
+        let cloudValues = try? URL(fileURLWithPath: url.path)
+            .resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey])
+        if cloudValues?.ubiquitousItemDownloadingStatus == .notDownloaded {
+            return .notDownloaded
+        }
+        if let data = try? Data(contentsOf: url, options: [.mappedIfSafe]) {
+            return .data(data)
+        }
+
+        var coordinationError: NSError?
+        var outcome: RegularFileRead = .unreadable("could not be read")
+        NSFileCoordinator(filePresenter: nil).coordinate(
+            readingItemAt: url,
+            options: [],
+            error: &coordinationError
+        ) { coordinatedURL in
+            do {
+                outcome = .data(try Data(contentsOf: coordinatedURL, options: [.mappedIfSafe]))
+            } catch {
+                outcome = .unreadable(error.localizedDescription)
+            }
+        }
+        if let coordinationError {
+            return .unreadable(coordinationError.localizedDescription)
+        }
+        return outcome
     }
 
     private static func relativePackagePath(for url: URL, rootURL: URL) -> String {
@@ -1469,5 +1582,45 @@ public extension DocumentPackage {
         }
 
         append(file: file, parts: Array(parts.dropFirst()), reusing: reusableWrapper, to: childDirectory)
+    }
+}
+
+/// Fetches a cloud placeholder's content onto this device.
+///
+/// A plain read of an item a File Provider has not materialized does not fetch
+/// it (on third-party providers it fails outright), and
+/// `startDownloadingUbiquitousItem` only reaches iCloud. A read under
+/// `NSFileCoordinator` is what every provider honors: it asks the provider for
+/// the content and returns once it is on disk. The bytes are streamed through
+/// and discarded, so a large file costs no memory.
+public enum CloudFileMaterializer {
+    /// Returns the file's size once its content is local, or throws with the
+    /// provider's reason (a stale entry whose content is gone, no connection).
+    public static func materialize(fileAt url: URL) async throws -> Int {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                var coordinationError: NSError?
+                var outcome: Result<Int, Error> = .failure(CocoaError(.fileReadUnknown))
+                NSFileCoordinator(filePresenter: nil).coordinate(
+                    readingItemAt: url,
+                    options: [],
+                    error: &coordinationError
+                ) { coordinatedURL in
+                    outcome = Result {
+                        let handle = try FileHandle(forReadingFrom: coordinatedURL)
+                        defer { try? handle.close() }
+                        var total = 0
+                        while let chunk = try handle.read(upToCount: 4 << 20), !chunk.isEmpty {
+                            total += chunk.count
+                        }
+                        return total
+                    }
+                }
+                if let coordinationError {
+                    outcome = .failure(coordinationError)
+                }
+                continuation.resume(with: outcome)
+            }
+        }
     }
 }

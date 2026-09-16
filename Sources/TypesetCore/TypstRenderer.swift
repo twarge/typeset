@@ -47,10 +47,12 @@ public struct PDFPreview: Equatable, Sendable {
 
 public struct TypstRenderer: TypstRendering {
     private let previewBuilder: PreviewHTMLBuilder
-    /// Reused across preview compiles so each recompile writes only the files
-    /// whose bytes changed (typically just the source being edited) instead of
-    /// mirroring the entire package — a large-asset package would otherwise pay
-    /// its full size in I/O on every keystroke's compile.
+    /// The on-disk mirror for preview compiles of a package that has no folder
+    /// of its own (see `compileInput`). Reused across compiles so each
+    /// recompile writes only the files whose bytes changed (typically just the
+    /// source being edited) instead of mirroring the entire package — a
+    /// large-asset package would otherwise pay its full size in I/O on every
+    /// keystroke's compile.
     private let previewWorkspace = IncrementalPackageWorkspace()
 
     public init(previewBuilder: PreviewHTMLBuilder = PreviewHTMLBuilder()) {
@@ -61,18 +63,18 @@ public struct TypstRenderer: TypstRendering {
         guard let mainPath = package.mainTypstPath else { throw TypstRenderError.noMainFile }
 
         #if canImport(TypesetLang)
-        let workspace = try TemporaryPackageWriter().write(package: package)
-        defer { try? FileManager.default.removeItem(at: workspace) }
+        let input = try compileInput(for: package) { try previewWorkspace.sync(package: package) }
 
         let packageStorage = try TypstPackageStorage.appSupportStorage()
         try packageStorage.createDirectories()
 
         let response = try await callEmbeddedTypst {
             typeset_typst_compile_svg(
-                workspace.path,
+                input.root,
                 mainPath,
                 packageStorage.localPackagesURL.path,
-                packageStorage.packageCacheURL.path
+                packageStorage.packageCacheURL.path,
+                input.overlayJSON
             )
         }
         guard response.ok else {
@@ -127,18 +129,19 @@ public struct TypstRenderer: TypstRendering {
         guard let mainPath = package.mainTypstPath else { throw TypstRenderError.noMainFile }
 
         #if canImport(TypesetLang)
-        let workspace = try TemporaryPackageWriter().write(package: package)
-        defer { try? FileManager.default.removeItem(at: workspace) }
+        let input = try compileInput(for: package) { try TemporaryPackageWriter().write(package: package) }
+        defer { if let mirror = input.mirror { try? FileManager.default.removeItem(at: mirror) } }
 
         let packageStorage = try TypstPackageStorage.appSupportStorage()
         try packageStorage.createDirectories()
 
         let response = try await callEmbeddedTypst {
             typeset_typst_compile_html(
-                workspace.path,
+                input.root,
                 mainPath,
                 packageStorage.localPackagesURL.path,
-                packageStorage.packageCacheURL.path
+                packageStorage.packageCacheURL.path,
+                input.overlayJSON
             )
         }
         guard response.ok else {
@@ -180,17 +183,18 @@ public struct TypstRenderer: TypstRendering {
         guard let mainPath = package.mainTypstPath else { throw TypstRenderError.noMainFile }
 
         #if canImport(TypesetLang)
-        let workspace = try previewWorkspace.sync(package: package)
+        let input = try compileInput(for: package) { try previewWorkspace.sync(package: package) }
 
         let packageStorage = try TypstPackageStorage.appSupportStorage()
         try packageStorage.createDirectories()
 
         let response = try await callEmbeddedTypst {
             typeset_typst_compile_pdf(
-                workspace.path,
+                input.root,
                 mainPath,
                 packageStorage.localPackagesURL.path,
-                packageStorage.packageCacheURL.path
+                packageStorage.packageCacheURL.path,
+                input.overlayJSON
             )
         }
         guard response.ok else {
@@ -234,18 +238,19 @@ public struct TypstRenderer: TypstRendering {
         guard let mainPath = package.mainTypstPath else { throw TypstRenderError.noMainFile }
 
         #if canImport(TypesetLang)
-        let workspace = try TemporaryPackageWriter().write(package: package)
-        defer { try? FileManager.default.removeItem(at: workspace) }
+        let input = try compileInput(for: package) { try TemporaryPackageWriter().write(package: package) }
+        defer { if let mirror = input.mirror { try? FileManager.default.removeItem(at: mirror) } }
 
         let packageStorage = try TypstPackageStorage.appSupportStorage()
         try packageStorage.createDirectories()
 
         let response = try await callEmbeddedTypst {
             typeset_typst_compile_pdf(
-                workspace.path,
+                input.root,
                 mainPath,
                 packageStorage.localPackagesURL.path,
-                packageStorage.packageCacheURL.path
+                packageStorage.packageCacheURL.path,
+                input.overlayJSON
             )
         }
         guard response.ok else {
@@ -280,6 +285,46 @@ public struct TypstRenderer: TypstRendering {
     }
 
     #if canImport(TypesetLang)
+    /// Where the embedded compiler reads a package from.
+    private struct CompileInput: Sendable {
+        /// The Typst project root on disk.
+        var root: String
+        /// JSON array of in-memory files that take precedence over `root`;
+        /// `nil` when everything the compile needs is on disk.
+        var overlayJSON: String?
+        /// A mirror created for this compile, for the caller to dispose of
+        /// as it sees fit; `nil` when the compile reads the real folder.
+        var mirror: URL?
+    }
+
+    private struct OverlayEntry: Encodable {
+        var path: String
+        var data_base64: String
+    }
+
+    /// Compiles a package straight out of the folder it was loaded from,
+    /// overlaying only the files whose bytes may differ from disk: the Typst
+    /// sources (the editor's live text, which the folder write-through and the
+    /// document autosave trail) and anything the session added or changed.
+    /// Images, fonts, and data are read by the compiler from where they
+    /// already are, so nothing large is copied per compile. A package with no
+    /// folder — a new document, a QuickLook wrapper — is mirrored with
+    /// `makeMirror` instead.
+    private func compileInput(
+        for package: DocumentPackage,
+        mirror makeMirror: () throws -> URL
+    ) throws -> CompileInput {
+        guard let root = package.onDiskRootURL else {
+            let mirror = try makeMirror()
+            return CompileInput(root: mirror.path, overlayJSON: nil, mirror: mirror)
+        }
+        let entries = package.files
+            .filter { $0.isTypstSource || package.changedPaths.contains($0.path) }
+            .map { OverlayEntry(path: $0.path, data_base64: $0.data.base64EncodedString()) }
+        let json = String(decoding: try JSONEncoder().encode(entries), as: UTF8.self)
+        return CompileInput(root: root.path, overlayJSON: json, mirror: nil)
+    }
+
     private func callEmbeddedTypst(
         _ body: @escaping @Sendable () -> UnsafeMutablePointer<CChar>?
     ) async throws -> EmbeddedTypstRenderResponse {

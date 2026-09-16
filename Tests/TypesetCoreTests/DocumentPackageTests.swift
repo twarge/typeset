@@ -907,7 +907,7 @@ private final class UnreadableFileWrapper: FileWrapper {
     #expect(savedMain.regularFileContents == Data("= Edited".utf8))
 }
 
-@Test func directoryLoadRejectsICloudPlaceholders() throws {
+@Test func directoryLoadDefersICloudPlaceholders() throws {
     let root = FileManager.default.temporaryDirectory
         .appending(path: "TypesetTests-\(UUID().uuidString)", directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -917,8 +917,78 @@ private final class UnreadableFileWrapper: FileWrapper {
     try Data("= Hello".utf8).write(to: mainURL)
     try Data().write(to: root.appending(path: ".photo.png.icloud"))
 
-    #expect(throws: TypesetPackageError.fileNotDownloaded("photo.png")) {
-        _ = try DocumentPackage(directoryURL: root, openedFileURL: mainURL)
+    // The stub is neither imported as a file nor allowed to fail the open:
+    // the document loads without it and reports it as pending download.
+    let package = try DocumentPackage(directoryURL: root, openedFileURL: mainURL)
+    #expect(package.files.map(\.path) == ["main.typ"])
+    #expect(package.pendingDownloads == ["photo.png"])
+    #expect(package.skippedFiles.isEmpty)
+    #expect(package.onDiskRootURL == root.standardizedFileURL)
+}
+
+@Test func directoryLoadSkipsUnreadableFilesAndKeepsTheRest() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: "TypesetTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: root.appending(path: "assets"), withIntermediateDirectories: true)
+    let unreadableURL = root.appending(path: "assets/photo.png")
+    defer {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: unreadableURL.path)
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    let mainURL = root.appending(path: "main.typ")
+    try Data("= Hello".utf8).write(to: mainURL)
+    try Data(repeating: 0xAB, count: 64).write(to: root.appending(path: "assets/ok.png"))
+    try Data(repeating: 0xCD, count: 64).write(to: unreadableURL)
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: unreadableURL.path)
+
+    let package = try DocumentPackage(directoryURL: root, openedFileURL: mainURL)
+    #expect(package.files.map(\.path) == ["assets/ok.png", "main.typ"])
+    #expect(package.skippedFiles.map(\.path) == ["assets/photo.png"])
+    // Not tracked at all, so a save can neither rewrite nor remove it.
+    #expect(package.loadedByteCounts["assets/photo.png"] == nil)
+    #expect(package.loadedByteCounts["assets/ok.png"] == 64)
+}
+
+@Test func bundleOnDiskCompilesInPlaceAndOverlaysSessionEdits() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: "TypesetTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    let bundle = root.appending(path: "Report.typeset", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: bundle.appending(path: "Figures"), withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Data("#image(\"Figures/dot.svg\")".utf8).write(to: bundle.appending(path: "main.typ"))
+    try Data("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"><rect width=\"4\" height=\"4\"/></svg>".utf8)
+        .write(to: bundle.appending(path: "Figures/dot.svg"))
+
+    // Loaded the way the document system loads a bundle: no root of its own.
+    var package = try DocumentPackage(fileWrapper: FileWrapper(url: bundle, options: .immediate))
+    #expect(package.onDiskRootURL == nil)
+
+    // With the bundle as root, the image is read from the bundle itself.
+    package.onDiskRootURL = bundle
+    let preview = try await TypstRenderer().previewPDF(package: package)
+    #expect(preview.data.count > 100)
+    #expect(!preview.diagnosticsMessage.contains("file not found"))
+
+    // An unsaved edit is what gets compiled, not the bytes on disk.
+    try package.updateText("#image(\"Figures/missing.svg\")", for: "main.typ")
+    await #expect(throws: TypstRenderError.self) {
+        _ = try await TypstRenderer().previewPDF(package: package)
+    }
+}
+
+@Test func cloudFileMaterializerReportsLocalSizeAndMissingFiles() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: "TypesetTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Data(repeating: 0xAB, count: 3).write(to: root.appending(path: "photo.png"))
+
+    // A local file is already materialized; the read just reports its size.
+    let size = try await CloudFileMaterializer.materialize(fileAt: root.appending(path: "photo.png"))
+    #expect(size == 3)
+    await #expect(throws: (any Error).self) {
+        _ = try await CloudFileMaterializer.materialize(fileAt: root.appending(path: "missing.png"))
     }
 }
 

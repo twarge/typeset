@@ -33,9 +33,9 @@ char *typeset_lang_prepare_rename(TypesetLangSession *session, const char *path,
 char *typeset_lang_rename(TypesetLangSession *session, const char *path, uint32_t utf8_offset, const char *new_name);
 char *typeset_lang_format(TypesetLangSession *session, const char *path, uint32_t start_utf8, uint32_t end_utf8, uint8_t selection_only);
 char *typeset_lang_code_actions(TypesetLangSession *session, const char *path, uint32_t start_utf8, uint32_t end_utf8);
-char *typeset_typst_compile_svg(const char *root, const char *main_path, const char *package_path, const char *package_cache_path);
-char *typeset_typst_compile_pdf(const char *root, const char *main_path, const char *package_path, const char *package_cache_path);
-char *typeset_typst_compile_html(const char *root, const char *main_path, const char *package_path, const char *package_cache_path);
+char *typeset_typst_compile_svg(const char *root, const char *main_path, const char *package_path, const char *package_cache_path, const char *overlay_json);
+char *typeset_typst_compile_pdf(const char *root, const char *main_path, const char *package_path, const char *package_cache_path, const char *overlay_json);
+char *typeset_typst_compile_html(const char *root, const char *main_path, const char *package_path, const char *package_cache_path, const char *overlay_json);
 char *typeset_typst_set_bundled_font_directory(const char *directory);
 char *typeset_typst_version(void);
 void typeset_lang_string_free(char *string);
