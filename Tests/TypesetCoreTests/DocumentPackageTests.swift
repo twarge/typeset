@@ -1024,3 +1024,113 @@ private final class UnreadableFileWrapper: FileWrapper {
     try twin.updateText("= Changed", for: "main.typ")
     #expect(loaded != twin)
 }
+
+/// A folder on disk the way a report script leaves it, loaded the way the app
+/// loads the folder around an opened `.typ`.
+private func makeMirroredReportFolder() throws -> (root: URL, package: DocumentPackage) {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: "TypesetTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: root.appending(path: "figures"), withIntermediateDirectories: true)
+    try Data("= Report".utf8).write(to: root.appending(path: "report.typ"))
+    try Data("a,b".utf8).write(to: root.appending(path: "data.csv"))
+    try Data(repeating: 0xAB, count: 64).write(to: root.appending(path: "figures/plot.png"))
+    let package = try DocumentPackage(directoryURL: root, openedFileURL: root.appending(path: "report.typ"))
+    return (root, package)
+}
+
+@Test func revertedLoneFilePackageRemovesNothingFromTheFolder() throws {
+    let (root, mirrored) = try makeMirroredReportFolder()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    // Revert makes the document system re-read only the opened file, exactly
+    // like `TypesetDocument.init(configuration:)`: no folder root, no siblings.
+    var reverted = try DocumentPackage(
+        files: [PackageFile(path: "report.typ", data: Data("= Report".utf8))],
+        compileTargetPath: "report.typ"
+    )
+    reverted.recordLoadedBaseline()
+
+    let plan = reverted.mirrorRemovalPlan(
+        mirroredFiles: Set(mirrored.files.map(\.path)).subtracting(["report.typ"]),
+        mirroredFolders: Set(mirrored.allFolderPaths),
+        // Even a file the app wrote itself stays: this package mirrors nothing.
+        createdByMirror: ["data.csv"]
+    )
+    #expect(plan.files.isEmpty)
+    #expect(plan.folders.isEmpty)
+    #expect(Set(plan.retained) == ["data.csv", "figures/plot.png", "figures"])
+}
+
+@Test func undoPastAnExternalAddKeepsTheAddedFilesOnDisk() throws {
+    let (root, beforeScript) = try makeMirroredReportFolder()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    // A script adds output; the folder is re-read and mirrored…
+    try FileManager.default.createDirectory(at: root.appending(path: "tables"), withIntermediateDirectories: true)
+    try Data("x".utf8).write(to: root.appending(path: "tables/summary.csv"))
+    try Data("y".utf8).write(to: root.appending(path: "appendix.typ"))
+    let afterScript = try DocumentPackage(directoryURL: root, openedFileURL: root.appending(path: "report.typ"))
+
+    // …then an undo restores the package from before the script ran. It never
+    // knew those files, which is not the same as having deleted them.
+    let plan = beforeScript.mirrorRemovalPlan(
+        mirroredFiles: Set(afterScript.files.map(\.path)).subtracting(["report.typ"]),
+        mirroredFolders: Set(afterScript.allFolderPaths),
+        createdByMirror: []
+    )
+    #expect(plan.files.isEmpty)
+    #expect(plan.folders.isEmpty)
+    #expect(Set(plan.retained) == ["appendix.typ", "tables/summary.csv", "tables"])
+}
+
+@Test func deliberateDeletesAreRemovedFromTheFolder() throws {
+    let (root, loaded) = try makeMirroredReportFolder()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let mirroredFiles = Set(loaded.files.map(\.path)).subtracting(["report.typ"])
+    let mirroredFolders = Set(loaded.allFolderPaths)
+
+    var package = loaded
+    try package.deleteFile(at: "data.csv")
+    try package.deleteFolder(at: "figures")
+    let plan = package.mirrorRemovalPlan(
+        mirroredFiles: mirroredFiles,
+        mirroredFolders: mirroredFolders,
+        createdByMirror: []
+    )
+    #expect(plan.files == ["data.csv", "figures/plot.png"])
+    #expect(plan.folders == ["figures"])
+    #expect(plan.retained.isEmpty)
+
+    // A rename takes the old location away just as deliberately — including
+    // an empty folder (mirrored earlier), which has no files to vouch for it.
+    var renamed = loaded
+    _ = try renamed.createFolder(named: "empty")
+    _ = try renamed.renameFolder(at: "figures", to: "plots")
+    _ = try renamed.renameFolder(at: "empty", to: "scratch")
+    let renamePlan = renamed.mirrorRemovalPlan(
+        mirroredFiles: mirroredFiles,
+        mirroredFolders: mirroredFolders.union(["empty"]),
+        createdByMirror: []
+    )
+    #expect(renamePlan.files == ["figures/plot.png"])
+    #expect(Set(renamePlan.folders) == ["figures", "empty"])
+    #expect(renamePlan.retained.isEmpty)
+}
+
+@Test func undoingAnInAppCreateRemovesOnlyWhatTheAppCreated() throws {
+    let (root, loaded) = try makeMirroredReportFolder()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    // The app created notes.typ and drafts/ and wrote them through; a script
+    // then dropped a file into drafts/. Undo restores the package from before
+    // the creates: the app's own file goes, but drafts/ now holds someone
+    // else's file, so the folder — and that file — stay.
+    let plan = loaded.mirrorRemovalPlan(
+        mirroredFiles: ["data.csv", "figures/plot.png", "notes.typ", "drafts/from-script.txt"],
+        mirroredFolders: ["figures", "drafts"],
+        createdByMirror: ["notes.typ", "drafts"]
+    )
+    #expect(plan.files == ["notes.typ"])
+    #expect(plan.folders.isEmpty)
+    #expect(Set(plan.retained) == ["drafts/from-script.txt", "drafts"])
+}

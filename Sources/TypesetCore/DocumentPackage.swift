@@ -149,6 +149,18 @@ public struct DocumentPackageState: Equatable, Sendable {
     }
 }
 
+/// What a folder write-through may take off disk on a package's behalf. See
+/// `DocumentPackage.mirrorRemovalPlan`.
+public struct MirrorRemovalPlan: Equatable, Sendable {
+    /// Files to remove.
+    public var files: [String] = []
+    /// Folders to remove, deepest first.
+    public var folders: [String] = []
+    /// Mirrored files and folders that are gone from the package but must
+    /// stay on disk, because nothing shows this session meant to remove them.
+    public var retained: [String] = []
+}
+
 public struct DocumentPackage: Equatable, Sendable {
     /// Obsolete standalone compile-target file from earlier versions. Never
     /// read or written anymore — only skipped, so stale copies don't appear
@@ -177,9 +189,10 @@ public struct DocumentPackage: Equatable, Sendable {
     public private(set) var loadedByteCounts: [String: Int] = [:]
 
     /// Package paths whose bytes or location this session deliberately changed
-    /// (edits, adds, moves, renames, deletes). Only these files may shrink to
-    /// empty or disappear relative to `loadedByteCounts`, and only these need
-    /// their bytes rewritten by an incremental save. Maintained by the mutating
+    /// (edits, adds, moves, renames, deletes) — files, and the folders that
+    /// were moved, renamed or deleted. Only these files may shrink to empty or
+    /// disappear relative to `loadedByteCounts`, and only these need their
+    /// bytes rewritten by an incremental save. Maintained by the mutating
     /// methods; mutating `files` directly bypasses it.
     public private(set) var changedPaths: Set<String> = []
 
@@ -247,6 +260,54 @@ public struct DocumentPackage: Equatable, Sendable {
         guard erased.isEmpty else {
             throw TypesetPackageError.saveWouldEraseContent(erased)
         }
+    }
+
+    /// Decides which previously mirrored items a folder write-through may
+    /// take off disk now that they are gone from the package. Absence alone is
+    /// not intent: the document system can swap in a package that never knew
+    /// the folder (Revert re-reads only the opened `.typ`), and an undo can
+    /// restore one that predates files another program has added since. So an
+    /// item goes only when this package records its removal (`changedPaths`)
+    /// or the write-through itself put it on disk (`createdByMirror` — what
+    /// lets undoing an in-app create take the file back off disk). Everything
+    /// else is retained, for the caller to fold back into the package.
+    public func mirrorRemovalPlan(
+        mirroredFiles: Set<String>,
+        mirroredFolders: Set<String>,
+        createdByMirror: Set<String>
+    ) -> MirrorRemovalPlan {
+        var plan = MirrorRemovalPlan()
+        let missingFiles = mirroredFiles.subtracting(files.map(\.path)).sorted()
+        let missingFolders = mirroredFolders.subtracting(allFolderPaths)
+            .sorted { $0.count > $1.count }
+
+        // A package that was not loaded from a folder mirrors nothing, so
+        // nothing may be removed on its behalf.
+        guard onDiskRootURL != nil else {
+            plan.retained = missingFiles + missingFolders
+            return plan
+        }
+
+        for path in missingFiles {
+            if changedPaths.contains(path) || createdByMirror.contains(path) {
+                plan.files.append(path)
+            } else {
+                plan.retained.append(path)
+            }
+        }
+        // Removing a folder takes everything inside along, so beyond being
+        // meant it must hold nothing retained. Deepest first: a retained
+        // subfolder pins its ancestors too.
+        for folder in missingFolders {
+            let isMeant = changedPaths.contains(folder) || createdByMirror.contains(folder)
+            let holdsRetained = plan.retained.contains { $0.hasPrefix(folder + "/") }
+            if isMeant && !holdsRetained {
+                plan.folders.append(folder)
+            } else {
+                plan.retained.append(folder)
+            }
+        }
+        return plan
     }
 
     public init(
@@ -633,6 +694,7 @@ public struct DocumentPackage: Equatable, Sendable {
             throw TypesetPackageError.fileAlreadyExists(destinationPath)
         }
 
+        recordFolderChange(at: folderPath, movedTo: destinationPath)
         folders = allFolderPaths.map {
             Self.pathByReplacingPrefix($0, sourcePrefix: folderPath, destinationPrefix: destinationPath)
         }
@@ -721,6 +783,7 @@ public struct DocumentPackage: Equatable, Sendable {
             throw TypesetPackageError.fileAlreadyExists(newPath)
         }
 
+        recordFolderChange(at: folderPath, movedTo: newPath)
         folders = allFolderPaths.map {
             Self.pathByReplacingPrefix($0, sourcePrefix: folderPath, destinationPrefix: newPath)
         }
@@ -788,6 +851,7 @@ public struct DocumentPackage: Equatable, Sendable {
         for file in files where file.path.hasPrefix(folderPath + "/") {
             changedPaths.insert(file.path)
         }
+        recordFolderChange(at: folderPath, movedTo: nil)
         files = remainingFiles
         folders = allFolderPaths.filter { folder in
             folder != folderPath && !folder.hasPrefix(folderPath + "/")
@@ -883,6 +947,21 @@ public struct DocumentPackage: Equatable, Sendable {
             if updated != original {
                 files[index].data = Data(updated.utf8)
                 changedPaths.insert(files[index].path)
+            }
+        }
+    }
+
+    /// Records a folder and its subfolders as deliberately deleted (or moved
+    /// to `destinationPath`). Files carry their own entries; this covers the
+    /// folders themselves, so removing even an empty one counts as intent.
+    /// Call before `folders` is rewritten.
+    private mutating func recordFolderChange(at folderPath: String, movedTo destinationPath: String?) {
+        for folder in allFolderPaths where folder == folderPath || folder.hasPrefix(folderPath + "/") {
+            changedPaths.insert(folder)
+            if let destinationPath {
+                changedPaths.insert(
+                    Self.pathByReplacingPrefix(folder, sourcePrefix: folderPath, destinationPrefix: destinationPath)
+                )
             }
         }
     }

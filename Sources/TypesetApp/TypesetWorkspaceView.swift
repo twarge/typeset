@@ -216,6 +216,11 @@ struct TypesetWorkspaceView: View {
     // we manage — never unrelated files that exist on disk.
     @State private var diskFileSnapshot: [String: Int] = [:]
     @State private var diskFolderSnapshot: Set<String> = []
+    /// Files and folders the write-through itself put on disk this session,
+    /// as opposed to ones adopted from the folder. Only these may be removed
+    /// without the package recording the removal — which is what lets undoing
+    /// an in-app create take the file back off disk.
+    @State private var writeThroughCreatedPaths: Set<String> = []
     @State private var directorySyncTask: Task<Void, Never>?
     // Live folder monitoring (macOS directory mode): reflect external changes in
     // the sidebar/editor and prompt on a true conflict for the open file.
@@ -448,7 +453,10 @@ struct TypesetWorkspaceView: View {
                 syncLanguageServiceWorkspace()
                 refreshPreview()
             }
-            .onChange(of: document.package) { _, _ in
+            .onChange(of: document.package) { previous, _ in
+                // The document system swapped in its own read of the lone
+                // .typ (Revert, a restored version): not an edit to mirror.
+                if readoptFolderIfDocumentWasReplaced(previous: previous) { return }
                 reconcileViewStateWithPackage()
                 // In directory mode, mirror the change back to the folder on disk.
                 scheduleDirectorySync()
@@ -1414,11 +1422,15 @@ struct TypesetWorkspaceView: View {
                 }
             }
 
-            document.package = try DocumentPackage(
+            let loaded = try DocumentPackage(
                 directoryURL: fileURL.deletingLastPathComponent(),
                 openedFileURL: fileURL,
                 openedFileIsAuthoritative: true
             )
+            // Not an edit: undoing it would put back the lone-file package.
+            withoutDocumentUndo {
+                document.package = loaded
+            }
             loadedTypstDirectoryFileURL = fileURL
             // The freshly loaded package already matches the folder on disk.
             resetDiskSnapshotFromPackage()
@@ -4129,6 +4141,7 @@ struct TypesetWorkspaceView: View {
             uniquingKeysWith: { first, _ in first }
         )
         diskFolderSnapshot = Set(document.package.allFolderPaths)
+        writeThroughCreatedPaths = []
         // The freshly loaded package matches disk, so the opened file's bytes are
         // the agreed baseline for its external-change detection.
         managedFileDiskHash = managed.flatMap { path in
@@ -4150,21 +4163,28 @@ struct TypesetWorkspaceView: View {
     /// changed files, creates new folders, and removes files/folders that were
     /// previously ours but have since been deleted/renamed/moved out of the
     /// package. Removals are scoped to the snapshot, so a file that exists on
-    /// disk but was never part of the package is never touched.
+    /// disk but was never part of the package is never touched — and within
+    /// the snapshot, to what this session meant to remove (see
+    /// `DocumentPackage.mirrorRemovalPlan`).
     private func syncDirectoryToDisk(root explicitRoot: URL? = nil) {
         directorySyncTask?.cancel()
         directorySyncTask = nil
         guard let root = explicitRoot ?? directoryModeRootURL else { return }
+        // Every package we install in directory mode comes from the folder
+        // loader. One without a root is the document system's own read of the
+        // lone .typ: it says nothing about the folder, so mirroring it would
+        // remove every sibling. It is re-adopted instead; keep the snapshot.
+        guard document.package.onDiskRootURL != nil else { return }
         let fileManager = FileManager.default
         let currentFolders = Set(document.package.allFolderPaths)
 
         // 1. Create newly added folders, shallowest first.
         for folder in currentFolders.subtracting(diskFolderSnapshot)
             .sorted(by: { $0.count < $1.count }) {
-            try? fileManager.createDirectory(
-                at: root.appending(path: folder),
-                withIntermediateDirectories: true
-            )
+            let url = root.appending(path: folder)
+            let existed = fileManager.fileExists(atPath: url.path)
+            try? fileManager.createDirectory(at: url, withIntermediateDirectories: true)
+            if !existed { writeThroughCreatedPaths.insert(folder) }
         }
 
         // 2. Write new and changed files.
@@ -4203,38 +4223,44 @@ struct TypesetWorkspaceView: View {
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
+            let isNewOnDisk = diskFileSnapshot[file.path] == nil && !fileManager.fileExists(atPath: url.path)
             do {
                 try file.data.write(to: url, options: .atomic)
+                if isNewOnDisk { writeThroughCreatedPaths.insert(file.path) }
             } catch {
                 recordLog("Save failed", message: "\(file.path): \(error.localizedDescription)", level: .error, present: true)
             }
         }
 
-        // 3. Remove files we previously managed that are gone from the package.
-        // Only a tracked change (delete, rename, move) may remove a file that
-        // was loaded with content; an untracked disappearance means the
-        // in-memory package is no longer trustworthy for that path.
-        for removed in Set(diskFileSnapshot.keys).subtracting(nextSnapshot.keys) {
-            if !document.package.changedPaths.contains(removed),
-               document.package.loadedByteCounts[removed, default: 0] > 0 {
-                recordLog(
-                    "Removal skipped",
-                    message: "\(removed) disappeared from the in-memory package without an edit; the file on disk was left untouched.",
-                    level: .warning
-                )
-                continue
-            }
+        // 3. Remove the files, then the folders (deepest first), that this
+        // session took out of the package. Being gone from the package is not
+        // enough: an undo can restore a package that predates files another
+        // program has added since, and those must survive it.
+        let removals = document.package.mirrorRemovalPlan(
+            mirroredFiles: Set(diskFileSnapshot.keys),
+            mirroredFolders: diskFolderSnapshot,
+            createdByMirror: writeThroughCreatedPaths
+        )
+        for removed in removals.files + removals.folders {
             removeManagedItemGently(at: root.appending(path: removed))
-        }
-
-        // 4. Remove folders dropped from the package, deepest first.
-        for removed in diskFolderSnapshot.subtracting(currentFolders)
-            .sorted(by: { $0.count > $1.count }) {
-            removeManagedItemGently(at: root.appending(path: removed))
+            writeThroughCreatedPaths.remove(removed)
         }
 
         diskFileSnapshot = nextSnapshot
         diskFolderSnapshot = currentFolders
+
+        // Retained items are no longer in the snapshot, so the next re-read
+        // sees them as new on disk and folds them back into the package.
+        if !removals.retained.isEmpty {
+            let listed = removals.retained.prefix(5).joined(separator: ", ")
+            let more = removals.retained.count > 5 ? " and \(removals.retained.count - 5) more" : ""
+            recordLog(
+                "Removal skipped",
+                message: "\(listed)\(more) left the in-memory package without being deleted here; the folder on disk was left untouched.",
+                level: .warning
+            )
+            if explicitRoot == nil { scheduleExternalReconcile() }
+        }
     }
 
     /// Removes an item the write-through previously managed, preferring the
@@ -4327,6 +4353,9 @@ struct TypesetWorkspaceView: View {
         #endif
         // Don't reconcile while a conflict prompt is up; we re-run after it resolves.
         guard pendingConflict == nil else { return }
+        // A replaced document that could not be re-adopted yet: retry that
+        // rather than merging the folder into a package that isn't one.
+        if readoptFolderIfDocumentWasReplaced(previous: nil) { return }
         guard let root = directoryModeRootURL, let openedURL = loadedTypstDirectoryFileURL else { return }
 
         // Re-read disk through the same loader so file filtering can't drift. A
@@ -4459,7 +4488,11 @@ struct TypesetWorkspaceView: View {
             fresh.state.selectedFile = fresh.selectedPath
         }
 
-        document.package = fresh
+        // Adopting what another program did is not an edit of ours: an undo
+        // step for it would only take those files back out of the package.
+        withoutDocumentUndo {
+            document.package = fresh
+        }
 
         // Clean open file changed externally -> reload its editor text from disk.
         if openDiskDiffersFromEditor, !openDirty,
@@ -4470,6 +4503,13 @@ struct TypesetWorkspaceView: View {
                 selectedRange = nil
                 syncLanguageServiceFile(path: openPath, text: diskText, selectionRange: nil)
             }
+        }
+
+        // Something we created that another program has since rewritten or
+        // removed is no longer ours alone to take off disk.
+        writeThroughCreatedPaths = writeThroughCreatedPaths.filter { path in
+            diskFolders.contains(path)
+                || (diskHashes[path] != nil && diskHashes[path] == diskFileSnapshot[path])
         }
 
         // Re-baseline to the ACTUAL disk state (excluding in-memory-only pending
@@ -4503,6 +4543,54 @@ struct TypesetWorkspaceView: View {
 
         syncLanguageServiceWorkspace()
         refreshPreview()
+    }
+
+    /// In directory mode every package we install comes from the folder loader
+    /// and carries its root. One without it was put there by the document
+    /// system — Revert, a restored version — which reads only the opened
+    /// `.typ`. That package says nothing about the folder, so it must never be
+    /// mirrored to disk: re-read the folder around the document's new text
+    /// instead. Returns true when the document had been replaced; if the
+    /// folder can't be read right now, the next folder event retries.
+    @discardableResult
+    private func readoptFolderIfDocumentWasReplaced(previous: DocumentPackage?) -> Bool {
+        guard let root = directoryModeRootURL, let openedURL = loadedTypstDirectoryFileURL,
+              document.package.onDiskRootURL == nil else { return false }
+        directorySyncTask?.cancel()
+        directorySyncTask = nil
+        guard var fresh = try? DocumentPackage(directoryURL: root, openedFileURL: openedURL) else {
+            return true
+        }
+
+        // The opened file's text is the document system's to decide; its
+        // on-disk bytes stay the baseline that text is compared against.
+        let managed = documentManagedPath
+        let managedDiskData = fresh.files.first { $0.path == managed }?.data
+        let replacement = document.package.files.first { $0.path == managed }
+            ?? document.package.files.first(where: \.isTypstSource)
+        if let managed, let replacement, let managedDiskData, managedDiskData != replacement.data {
+            try? fresh.updateFileData(replacement.data, for: managed)
+        }
+
+        // Keep the view where it was; the lone-file package knows none of it.
+        if let previous, previous.onDiskRootURL != nil {
+            fresh.state = previous.state
+        }
+        let openPath = fresh.files.contains { $0.path == selectedPath } ? selectedPath : fresh.selectedPath
+        fresh.selectedPath = openPath
+        fresh.state.selectedFile = openPath
+
+        withoutDocumentUndo {
+            document.package = fresh
+        }
+        resetDiskSnapshotFromPackage()
+        managedFileDiskHash = managedDiskData?.hashValue
+        reportSkippedFiles(fresh.skippedFiles)
+        startCloudDownloads(for: fresh)
+        reconcileViewStateWithPackage()
+        syncLanguageServiceWorkspace()
+        refreshPreview()
+        return true
     }
 
     /// Adopt the opened document's on-disk bytes into the editor and package
