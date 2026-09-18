@@ -98,8 +98,18 @@ struct FileSidebar: View {
             case .files: return "Files"
             case .outline: return "Outline"
             case .figures: return "Figures"
-            case .references: return "Refs"
-            case .search: return "Find"
+            case .references: return "References"
+            case .search: return "Find in Files"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .files: return "folder"
+            case .outline: return "list.bullet.indent"
+            case .figures: return "photo.on.rectangle.angled"
+            case .references: return "link"
+            case .search: return "magnifyingglass"
             }
         }
     }
@@ -202,15 +212,34 @@ struct FileSidebar: View {
     }
 
     private var tabSelector: some View {
+        Group {
+            #if os(macOS)
+            // Regular size whenever the column has room for it. The small
+            // fallback is what lets the sidebar narrow past the regular
+            // control's intrinsic width.
+            ViewThatFits(in: .horizontal) {
+                tabPicker.controlSize(.regular)
+                tabPicker.controlSize(.small)
+            }
+            #else
+            tabPicker
+            #endif
+        }
+        .padding(.horizontal, sidebarToolbarHorizontalPadding)
+        .padding(.vertical, sidebarToolbarVerticalPadding)
+    }
+
+    private var tabPicker: some View {
         Picker("Sidebar View", selection: $sidebarTab) {
             ForEach(SidebarTab.allCases) { tab in
-                Text(tab.title).tag(tab)
+                Image(systemName: tab.systemImage)
+                    .accessibilityLabel(tab.title)
+                    .help(tab.title)
+                    .tag(tab)
             }
         }
         .pickerStyle(.segmented)
         .labelsHidden()
-        .padding(.horizontal, sidebarToolbarHorizontalPadding)
-        .padding(.vertical, sidebarToolbarVerticalPadding)
     }
 
     @ViewBuilder

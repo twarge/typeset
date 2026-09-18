@@ -269,7 +269,7 @@ struct WorkspaceSearchView: View {
                 }
             }
 
-            HStack(spacing: 8) {
+            HStack(spacing: searchOptionSpacing) {
                 Button {
                     withAnimation(.snappy(duration: 0.15)) { isReplaceVisible.toggle() }
                 } label: {
@@ -348,6 +348,15 @@ struct WorkspaceSearchView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
+    }
+
+    // Tight on macOS so this row is never what stops the sidebar narrowing.
+    private var searchOptionSpacing: CGFloat {
+        #if os(iOS)
+        8
+        #else
+        4
+        #endif
     }
 
     private func searchOptionButton(

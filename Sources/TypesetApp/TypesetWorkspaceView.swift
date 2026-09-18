@@ -306,7 +306,7 @@ struct TypesetWorkspaceView: View {
         NavigationSplitView(columnVisibility: navigationColumnVisibility) {
             fileSidebar(dismissAfterSelect: false)
                 .navigationTitle("Package")
-                .navigationSplitViewColumnWidth(min: 160, ideal: 320, max: 480)
+                .navigationSplitViewColumnWidth(min: 140, ideal: 320, max: 480)
                 // The sidebar toggle is owned by the sidebar column, so this only
                 // takes effect here (not on the detail). The sidebar still toggles
                 // from the View menu / ⌃⌘S (SidebarCommands).
