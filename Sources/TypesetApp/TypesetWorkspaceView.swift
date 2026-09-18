@@ -4358,6 +4358,10 @@ struct TypesetWorkspaceView: View {
         if readoptFolderIfDocumentWasReplaced(previous: nil) { return }
         guard let root = directoryModeRootURL, let openedURL = loadedTypstDirectoryFileURL else { return }
 
+        // Read BEFORE the bytes below, so it is never newer than the version we
+        // load: acknowledging it to the NSDocument can't hide a later write.
+        let managedDiskDate = managedFileModificationDate(at: openedURL)
+
         // Re-read disk through the same loader so file filtering can't drift. A
         // transient failure (root vanished, mid atomic-rename) just bails; a later
         // event retries.
@@ -4409,6 +4413,9 @@ struct TypesetWorkspaceView: View {
         // as an unsaved change against a stale baseline.
         if managed != nil, let managedDiskHash, managedDiskText == managedEditorText {
             managedFileDiskHash = managedDiskHash
+            // Same bytes under a new date (a rewrite that changed nothing, or a
+            // reload whose date was read a write too early): nothing to lose.
+            acknowledgeManagedFileVersion(modifiedAt: managedDiskDate)
         }
 
         // Self-write echo / no genuine change. The opened file is tracked apart
@@ -4529,11 +4536,16 @@ struct TypesetWorkspaceView: View {
             if managedHasUnsavedEdits {
                 if pendingConflict == nil {
                     pendingConflict = DiskConflict(path: managed, diskText: managedDiskText)
+                    // The version being decided on is in hand, so the document
+                    // may save meanwhile; it must, or its save wedges (see
+                    // `acknowledgeManagedFileVersion`).
+                    acknowledgeManagedFileVersion(modifiedAt: managedDiskDate)
                 }
                 // Leave the baseline divergent; resolving the prompt advances it.
             } else {
                 reloadManagedFileFromDisk(managed, diskText: managedDiskText)
                 managedFileDiskHash = managedDiskHash
+                acknowledgeManagedFileVersion(modifiedAt: managedDiskDate)
             }
         } else if let managedDiskHash {
             // No external change (or our own save echoing back): keep the baseline
@@ -4608,17 +4620,76 @@ struct TypesetWorkspaceView: View {
         refreshPreview()
     }
 
+    /// The opened file's modification date, which only the macOS document
+    /// machinery cares about (see `acknowledgeManagedFileVersion`).
+    private func managedFileModificationDate(at url: URL) -> Date? {
+        #if os(macOS)
+        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+        #else
+        nil
+        #endif
+    }
+
+    /// The NSDocument behind the opened file remembers the modification date it
+    /// last read or wrote, and won't save over any other: the autosave fails
+    /// with "The file has been changed by another application". Once we hold
+    /// an external version ourselves — reloaded into the editor, or captured
+    /// for our prompt — that sheet would only ask the same question again, so
+    /// record the version as the one the document knows. Doing so at prompt
+    /// time is essential, not just tidy: our alert is a sheet, and an autosave
+    /// that fails behind another sheet cannot present its own, which leaves
+    /// the document's save activity open for good (every later save, and ⌘S,
+    /// then deadlocks). Nothing is at risk from a save during the prompt: the
+    /// disk version is in the conflict, and Revert puts it back.
+    ///
+    /// `date` must have been read before the bytes it stands for; if the file
+    /// has moved on since (a newer write nobody has seen, or the document's own
+    /// save) the date is left alone, so a change nobody looked at is never masked.
+    private func acknowledgeManagedFileVersion(modifiedAt date: Date?) {
+        #if os(macOS)
+        guard let date, let openedURL = loadedTypstDirectoryFileURL,
+              managedFileModificationDate(at: openedURL) == date,
+              let nsDocument = NSDocumentController.shared.document(for: openedURL),
+              nsDocument.fileModificationDate != date else { return }
+        nsDocument.fileModificationDate = date
+        #endif
+    }
+
+    /// The opened file's bytes as they are on disk right now, hashed the way
+    /// `managedFileDiskHash` is.
+    private func currentManagedFileDiskHash() -> Int? {
+        guard let url = loadedTypstDirectoryFileURL, let data = try? Data(contentsOf: url) else { return nil }
+        return Data(String(decoding: data, as: UTF8.self).utf8).hashValue
+    }
+
+    /// After the user resolved a prompt about the opened document. Disk may
+    /// hold either version by now — the document was free to save the editor's
+    /// text while the prompt was up — so baseline whatever is there, or the
+    /// next pass would take that interim save for a fresh external change and
+    /// reload it over a revert. If disk and editor still differ, the document
+    /// has to save the chosen text over it; normally it is already dirty.
+    private func rebaselineManagedFileAfterConflict(_ conflict: DiskConflict) {
+        let diskHash = currentManagedFileDiskHash()
+        managedFileDiskHash = diskHash ?? Data(conflict.diskText.utf8).hashValue
+        let editorText = conflict.path == selectedPath ? sourceText : document.package.text(for: conflict.path)
+        guard diskHash != Data(editorText.utf8).hashValue else { return }
+        #if os(macOS)
+        guard let url = loadedTypstDirectoryFileURL,
+              let nsDocument = NSDocumentController.shared.document(for: url),
+              !nsDocument.isDocumentEdited else { return }
+        nsDocument.updateChangeCount(.changeDone)
+        #endif
+    }
+
     private func resolveConflictKeepingMine(_ conflict: DiskConflict) {
         // Idempotent: a button tap and the alert's dismiss-binding can both fire.
         guard pendingConflict?.id == conflict.id else { return }
         pendingConflict = nil
         // The opened document is SwiftUI-managed: don't write it ourselves (that
         // desyncs SwiftUI's change tracking). The editor keeps the user's text
-        // and the document stays dirty, so SwiftUI saves it over the external
-        // version. Advance the baseline to the current on-disk bytes so the same
-        // external change doesn't re-prompt before that save lands.
+        // and the document saves it over the external version.
         if conflict.path == documentManagedPath {
-            managedFileDiskHash = Data(conflict.diskText.utf8).hashValue
+            rebaselineManagedFileAfterConflict(conflict)
             scheduleExternalReconcile()
             return
         }
@@ -4641,7 +4712,7 @@ struct TypesetWorkspaceView: View {
         // disk bytes and advance its own baseline instead.
         if conflict.path == documentManagedPath {
             reloadManagedFileFromDisk(conflict.path, diskText: conflict.diskText)
-            managedFileDiskHash = Data(conflict.diskText.utf8).hashValue
+            rebaselineManagedFileAfterConflict(conflict)
             scheduleExternalReconcile()
             return
         }
