@@ -392,8 +392,7 @@ struct WorkspaceSearchView: View {
                     }
                 }
             }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
+            .sidebarListStyle()
         }
     }
 

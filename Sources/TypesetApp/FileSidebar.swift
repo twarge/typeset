@@ -78,6 +78,11 @@ struct FileSidebar: View {
     @AppStorage("Typeset.workspaceSearch.history") private var searchHistoryStorage = "[]"
     @State private var referenceFilter = ""
     @FocusState private var isReferenceFilterFocused: Bool
+    #if os(macOS)
+    // The List owns the highlight; this mirrors the workspace's selection into
+    // it and routes native (click / arrow-key) selection changes back out.
+    @State private var listSelection: FileTreeSelection?
+    #endif
 
     private enum SidebarTab: String, CaseIterable, Identifiable {
         case files
@@ -117,7 +122,6 @@ struct FileSidebar: View {
                 searchTab
             }
         }
-        .platformSidebarColumnBackground()
         .onAppear {
             consumePendingEdit()
             // A pending Find activation wins over the restored tab. Checking it
@@ -207,7 +211,6 @@ struct FileSidebar: View {
         .labelsHidden()
         .padding(.horizontal, sidebarToolbarHorizontalPadding)
         .padding(.vertical, sidebarToolbarVerticalPadding)
-        .platformSidebarToolbarBackground()
     }
 
     @ViewBuilder
@@ -239,8 +242,7 @@ struct FileSidebar: View {
                     .buttonStyle(.plain)
                 }
             }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
+            .sidebarListStyle()
         }
     }
 
@@ -279,8 +281,7 @@ struct FileSidebar: View {
                     .buttonStyle(.plain)
                 }
             }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
+            .sidebarListStyle()
         }
     }
 
@@ -306,7 +307,6 @@ struct FileSidebar: View {
             }
             .padding(.horizontal, sidebarToolbarHorizontalPadding)
             .padding(.vertical, sidebarToolbarVerticalPadding)
-            .platformSidebarToolbarBackground()
 
             if documentSymbols.references.isEmpty {
                 sidebarEmptyState(
@@ -369,8 +369,7 @@ struct FileSidebar: View {
                     }
                 }
                 }
-                .listStyle(.sidebar)
-                .scrollContentBackground(.hidden)
+                .sidebarListStyle()
             }
         }
     }
@@ -452,7 +451,6 @@ struct FileSidebar: View {
         .font(sidebarToolbarFont)
         .padding(.horizontal, sidebarToolbarHorizontalPadding)
         .padding(.vertical, sidebarToolbarVerticalPadding)
-        .platformSidebarToolbarBackground()
         .overlay(alignment: .bottom) { Divider() }
     }
 
@@ -525,10 +523,17 @@ struct FileSidebar: View {
             )
         )
         #else
-        List {
+        List(selection: $listSelection) {
             fileTreeRows
         }
         .listStyle(.sidebar)
+        .onAppear { listSelection = workspaceSelection }
+        .onChange(of: workspaceSelection) { _, selection in
+            listSelection = selection
+        }
+        .onChange(of: listSelection) { _, selection in
+            applyListSelection(selection)
+        }
         .overlay {
             rootDropHighlight
         }
@@ -547,6 +552,29 @@ struct FileSidebar: View {
         )
         #endif
     }
+
+    #if os(macOS)
+    private var workspaceSelection: FileTreeSelection {
+        selectedFolderPath.map(FileTreeSelection.folder) ?? .file(selectedPath)
+    }
+
+    private func applyListSelection(_ selection: FileTreeSelection?) {
+        guard let selection else {
+            // Clicking empty space clears a List's selection, but a file is
+            // always open — put the highlight back on it.
+            listSelection = workspaceSelection
+            return
+        }
+        guard selection != workspaceSelection else { return }
+        if case .file(let path) = selection,
+           visibleFiles.first(where: { $0.path == path })?.isPopoverPreviewable == true {
+            // Images and fonts preview in a popover instead of opening, so
+            // arrowing onto one only highlights it.
+            return
+        }
+        select(selection)
+    }
+    #endif
 
     private var fileTreeNodes: [FileTreeNode] {
         FileTreeNode.roots(files: visibleFiles, folders: visibleFolders, compileTargetPath: compileTargetPath)
@@ -717,13 +745,8 @@ struct FileTreeRow: View {
             } label: {
                 folderLabel
             }
-            .background {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(.clear)
-            }
-            #if os(macOS)
-            .listRowBackground(folderRowBackground)
-            #endif
+            .tag(FileTreeSelection.folder(node.path))
+            .listRowBackground(isDropTargetedFolder ? dropTargetRowBackground : nil)
             .animation(.snappy(duration: 0.18), value: isDropTargetedFolder)
             #endif
         case .file(let file):
@@ -962,24 +985,18 @@ struct FileTreeRow: View {
                 }
             )
             .sidebarRowInsets(depth: depth)
-            .sidebarRowBackground {
+            .iosSidebarRowBackground {
                 fileRowBackground(for: file)
             }
+            .tag(FileTreeSelection.file(file.path))
         } else {
-            HStack(spacing: 6) {
-                fileIcon(for: file)
-
-                Text(file.name)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-
-                Spacer(minLength: 0)
-            }
+            fileLabel(for: file)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .sidebarRowInsets(depth: depth)
-                .sidebarRowBackground {
+                .iosSidebarRowBackground {
                     fileRowBackground(for: file)
                 }
+                .tag(FileTreeSelection.file(file.path))
                 .contentShape(Rectangle())
                 .onTapGesture {
                     let selection = FileTreeSelection.file(file.path)
@@ -1088,6 +1105,27 @@ struct FileTreeRow: View {
     }
 
     @ViewBuilder
+    private func fileLabel(for file: PackageFile) -> some View {
+        #if os(macOS)
+        // A plain Label lets the sidebar list style size and tint the icon.
+        Label(file.name, systemImage: icon(for: file))
+            .lineLimit(1)
+            .truncationMode(.middle)
+        #else
+        HStack(spacing: 6) {
+            fileIcon(for: file)
+
+            Text(file.name)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer(minLength: 0)
+        }
+        #endif
+    }
+
+    #if os(iOS)
+    @ViewBuilder
     private func fileIcon(for file: PackageFile) -> some View {
         if file.path == compileTargetPath {
             Image(systemName: icon(for: file))
@@ -1099,6 +1137,7 @@ struct FileTreeRow: View {
                 .frame(width: 18)
         }
     }
+    #endif
 
     private func shouldBeginRename(for selection: FileTreeSelection, isCurrentSelection: Bool) -> Bool {
         #if os(iOS)
@@ -1119,17 +1158,13 @@ struct FileTreeRow: View {
         highlightedDropFolder == node.path
     }
 
-    private var folderBackgroundOpacity: Double {
-        if isDropTargetedFolder { return 0.16 }
-        if selectedFolderPath == node.path { return 0.16 }
-        return 0
-    }
-
+    // iOS lays the tree out in a ScrollView, so it paints selection itself.
+    // The macOS List draws selection natively and only needs a drop highlight.
     @ViewBuilder
     private var folderRowBackground: some View {
-        if folderBackgroundOpacity > 0 {
+        if isDropTargetedFolder || selectedFolderPath == node.path {
             Rectangle()
-                .fill(.tint.opacity(folderBackgroundOpacity))
+                .fill(.tint.opacity(0.16))
         }
     }
 
@@ -1140,23 +1175,33 @@ struct FileTreeRow: View {
                 .fill(.tint.opacity(0.16))
         }
     }
+
+    #if os(macOS)
+    private var dropTargetRowBackground: some View {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(.tint.opacity(0.16))
+            .padding(.horizontal, 10)
+    }
+    #endif
+}
+
+extension View {
+    /// On macOS the NavigationSplitView sidebar column supplies the material, so
+    /// lists are left entirely to the system. iOS hosts the sidebar in a custom
+    /// trailing overlay that paints one surface of its own, so lists there must
+    /// not stack the grouped background on top of it.
+    @ViewBuilder
+    func sidebarListStyle() -> some View {
+        #if os(iOS)
+        self.listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+        #else
+        self.listStyle(.sidebar)
+        #endif
+    }
 }
 
 private extension View {
-    @ViewBuilder
-    func platformSidebarColumnBackground() -> some View {
-        // On macOS the NavigationSplitView sidebar column already paints the
-        // native sidebar vibrancy; a custom NSVisualEffectView placed inside it
-        // only blends against the opaque window backing and reads as flat gray.
-        // Leaving the content transparent lets the real material show through.
-        self
-    }
-
-    @ViewBuilder
-    func platformSidebarToolbarBackground() -> some View {
-        self.background(.bar)
-    }
-
     @ViewBuilder
     func sidebarRowInsets(depth: Int = 0) -> some View {
         #if os(iOS)
@@ -1168,17 +1213,6 @@ private extension View {
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         #else
         self
-        #endif
-    }
-
-    @ViewBuilder
-    func sidebarRowBackground<Background: View>(@ViewBuilder _ background: () -> Background) -> some View {
-        #if os(iOS)
-        self.iosSidebarRowBackground {
-            background()
-        }
-        #else
-        self.listRowBackground(background())
         #endif
     }
 
