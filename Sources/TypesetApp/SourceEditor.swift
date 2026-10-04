@@ -93,7 +93,6 @@ struct SourceEditor: View {
     var showLineNumbers = false
     var spellCheckingEnabled = true
     var syntax: SourceSyntax = .typst
-    var fixedTopContentInset: CGFloat?
     var onTextChange: (String, NSRange) -> Void = { _, _ in }
     var onSelectionChange: (NSRange) -> Void = { _ in }
     var onCompletionSelected: (TypstCompletionItem) -> Void = { _ in }
@@ -141,7 +140,6 @@ struct SourceEditor: View {
             showLineNumbers: showLineNumbers,
             spellCheckingEnabled: spellCheckingEnabled,
             syntax: syntax,
-            fixedTopContentInset: fixedTopContentInset,
             onTextChange: onTextChange,
             onSelectionChange: onSelectionChange,
             isCompletionPresented: !completions.isEmpty,

@@ -1292,7 +1292,6 @@ struct TypesetWorkspaceView: View {
                     // a data file or a generator script.
                     spellCheckingEnabled: spellCheckingEnabled && selectedFile.isTypstSource,
                     syntax: SourceSyntax.forPath(selectedFile.path),
-                    fixedTopContentInset: fixedEditorTopContentInset,
                     onTextChange: { text, range in
                         updateSource(text, selectionRange: range)
                     },
@@ -1323,6 +1322,16 @@ struct TypesetWorkspaceView: View {
                         revealSelection: scrollRestoreReveal
                     )
                 )
+                #if os(macOS)
+                // The source pane ignores the top safe area (so its surface
+                // reaches the top edge), which makes SwiftUI disable the scroll
+                // view's automatic toolbar inset, so the code would otherwise
+                // sit under the toolbar. Pin it to the chrome height instead.
+                // iOS needs nothing here: its editor takes the corner-adapted
+                // safe area, which clears the windowed-app controls even once
+                // distraction-free hides the navigation bar.
+                .environment(\.sourceEditorFixedTopInset, Self.macOSEditorTopInset)
+                #endif
                 .id(selectedPath)
             } else {
                 PackageAssetPreview(file: selectedFile)
@@ -1330,25 +1339,6 @@ struct TypesetWorkspaceView: View {
         } else {
             ContentUnavailableView("No File Selected", systemImage: "doc")
         }
-    }
-
-    /// A floor for the editor's top content inset, or `nil` to leave it to the
-    /// safe area. The source pane reaches the window's top edge, so this is what
-    /// keeps the first line out from under the chrome.
-    private var fixedEditorTopContentInset: CGFloat? {
-        #if os(macOS)
-        // One fixed inset for both modes. The source pane ignores the top safe
-        // area (so its surface reaches the top edge), which makes SwiftUI disable
-        // the scroll view's automatic toolbar inset — so the code would otherwise
-        // sit under the toolbar. Pin it to the chrome height instead; distraction-
-        // free uses the same value, so the code never shifts as the toolbar hides.
-        Self.macOSEditorTopInset
-        #else
-        // The iOS editor takes its top inset from the corner-adapted safe area,
-        // which already clears the windowed-app controls once distraction-free
-        // hides the navigation bar, so no floor is needed.
-        nil
-        #endif
     }
 
     /// Where the chrome ends, measured from the top of the source pane, which

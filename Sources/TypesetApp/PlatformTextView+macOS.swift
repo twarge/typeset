@@ -14,6 +14,12 @@ import UIKit
 #endif
 
 #if os(macOS)
+extension EnvironmentValues {
+    /// A fixed top content inset for the source editor, set by a host that
+    /// lays the editor out under its toolbar. `nil` leaves it to AppKit.
+    @Entry var sourceEditorFixedTopInset: CGFloat? = nil
+}
+
 struct PlatformTextView: NSViewRepresentable {
     @Binding var text: String
     @Binding var selectedRange: NSRange?
@@ -33,7 +39,6 @@ struct PlatformTextView: NSViewRepresentable {
     var showLineNumbers: Bool
     var spellCheckingEnabled: Bool
     var syntax: SourceSyntax
-    var fixedTopContentInset: CGFloat?
     var onTextChange: (String, NSRange) -> Void
     var onSelectionChange: (NSRange) -> Void
     var isCompletionPresented: Bool
@@ -103,14 +108,14 @@ struct PlatformTextView: NSViewRepresentable {
         context.coordinator.configureDropHandling(for: textView)
         context.coordinator.applyHighlighting(to: textView, text: text)
 
-        // In normal mode AppKit owns the toolbar/safe-area inset. In
-        // distraction-free mode the toolbar itself is transient, so AppKit's
-        // automatic inset changes as the toolbar shows/hides and fights the
-        // fixed editor margin. Then the editor owns that top inset explicitly.
+        // A host that sets `sourceEditorFixedTopInset` owns the top inset;
+        // otherwise AppKit's automatic one applies. The workspace sets it in
+        // both modes, because the automatic inset follows the toolbar, and in
+        // distraction-free that comes and goes, shifting the code with it.
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
-        applyEditorContentInsets(to: scrollView)
+        applyEditorContentInsets(to: scrollView, fixedTop: context.environment.sourceEditorFixedTopInset)
         scrollView.documentView = textView
         scrollView.contentView.postsBoundsChangedNotifications = true
         context.coordinator.observeScrollView(scrollView)
@@ -194,7 +199,7 @@ struct PlatformTextView: NSViewRepresentable {
         if textView.textContainerInset != containerInset {
             textView.textContainerInset = containerInset
         }
-        applyEditorContentInsets(to: scrollView)
+        applyEditorContentInsets(to: scrollView, fixedTop: context.environment.sourceEditorFixedTopInset)
         if scrollView.hasVerticalRuler != showLineNumbers {
             scrollView.hasVerticalRuler = showLineNumbers
         }
@@ -280,15 +285,15 @@ struct PlatformTextView: NSViewRepresentable {
     private static let nativeTextCheckingTypes =
         NSTextCheckingResult.CheckingType.correction.rawValue
 
-    private func applyEditorContentInsets(to scrollView: NSScrollView) {
+    private func applyEditorContentInsets(to scrollView: NSScrollView, fixedTop: CGFloat?) {
         // Assign only on change: these AppKit setters invalidate layout even
         // for equal values, and this runs on every SwiftUI update pass.
-        if let fixedTopContentInset {
+        if let fixedTop {
             if scrollView.automaticallyAdjustsContentInsets {
                 scrollView.automaticallyAdjustsContentInsets = false
             }
             let insets = NSEdgeInsets(
-                top: fixedTopContentInset,
+                top: fixedTop,
                 left: 0,
                 bottom: 0,
                 right: 0

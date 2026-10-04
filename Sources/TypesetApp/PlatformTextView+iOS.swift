@@ -33,7 +33,6 @@ struct PlatformTextView: UIViewRepresentable {
     var showLineNumbers: Bool
     var spellCheckingEnabled: Bool
     var syntax: SourceSyntax
-    var fixedTopContentInset: CGFloat?
     var onTextChange: (String, NSRange) -> Void
     var onSelectionChange: (NSRange) -> Void
     var isCompletionPresented: Bool
@@ -136,7 +135,6 @@ struct PlatformTextView: UIViewRepresentable {
         context.coordinator.isPackageDropTargeted = $isPackageDropTargeted
         context.coordinator.updateFontSize(fontSize, in: textView)
         textView.textContainerInset = UIEdgeInsets(top: 18, left: 14, bottom: 18, right: 14)
-        (textView as? PackageTextView)?.fixedTopContentInset = fixedTopContentInset ?? 0
         let annotationsChanged = context.coordinator.consumeAnnotationChanges(
             diagnostics: diagnostics,
             proseRanges: context.coordinator.proseRanges,
@@ -1347,16 +1345,6 @@ struct PlatformTextView: UIViewRepresentable {
         private var diagnosticBadgeViews: [UIView] = []
         private var lastDecorationLayoutWidth: CGFloat = 0
 
-        /// A floor applied over the safe-area top inset. The workspace no longer
-        /// sets one: the corner-adapted safe area clears the windowed-app
-        /// controls on its own (see `applySafeAreaScrollInsets`).
-        var fixedTopContentInset: CGFloat = 0 {
-            didSet {
-                guard fixedTopContentInset != oldValue else { return }
-                applySafeAreaScrollInsets()
-            }
-        }
-
         override init(frame: CGRect, textContainer: NSTextContainer?) {
             super.init(frame: frame, textContainer: textContainer)
             // Manage the top scroll inset ourselves. UIKit's automatic
@@ -1567,8 +1555,7 @@ struct PlatformTextView: UIViewRepresentable {
             // UI in the top corners — the windowed-app controls, once
             // distraction-free hides the navigation bar that otherwise holds
             // them — so the first line starts below it.
-            let cornerAdaptedTop = edgeInsets(for: .safeArea(cornerAdaptation: .vertical)).top
-            let desiredTop = max(cornerAdaptedTop, fixedTopContentInset)
+            let desiredTop = edgeInsets(for: .safeArea(cornerAdaptation: .vertical)).top
             let desiredBottom = safeAreaInsets.bottom
 
             if abs(contentInset.top - desiredTop) > 0.5 ||
