@@ -29,6 +29,111 @@ struct StableSourcePane<Content: View>: View {
     }
 }
 
+#if os(iOS)
+/// Two panes side by side, divided by a separator the user drags to share
+/// the width between them. On iPhone Duo folded like a book, the separator
+/// sits on the fold instead, so each pane keeps to its own side of it.
+struct PaneSplit<Leading: View, Trailing: View>: View {
+    /// The leading pane's share of the width.
+    @Binding var fraction: Double
+    @ViewBuilder var leading: Leading
+    @ViewBuilder var trailing: Trailing
+
+    /// The live share while a drag is under way. It's committed to `fraction`
+    /// when the drag ends, so the stored value isn't rewritten every frame.
+    @State private var dragFraction: Double?
+    @State private var dragStartWidth: CGFloat?
+
+    private static var minimumPaneWidth: CGFloat { 220 }
+    /// The strip centered on the separator that picks up a drag.
+    private static var handleWidth: CGFloat { 20 }
+    private static var coordinateSpaceName: String { "PaneSplit" }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let fold = Self.fold(in: proxy)
+            let leadingWidth = fold?.minX ?? Self.leadingWidth(for: dragFraction ?? fraction, in: width)
+
+            HStack(spacing: 0) {
+                leading
+                    .frame(width: leadingWidth)
+                Divider()
+                    .frame(width: fold?.width)
+                    .overlay {
+                        // Folded, the separator belongs to the hinge.
+                        if fold == nil {
+                            dragHandle(leadingWidth: leadingWidth, totalWidth: width)
+                        }
+                    }
+                    // Above the trailing pane, so the handle's overhang
+                    // there still picks up touches.
+                    .zIndex(1)
+                trailing
+            }
+            .coordinateSpace(.named(Self.coordinateSpaceName))
+            .animation(.snappy(duration: 0.24), value: fold)
+        }
+    }
+
+    private func dragHandle(leadingWidth: CGFloat, totalWidth: CGFloat) -> some View {
+        Color.clear
+            .frame(width: Self.handleWidth)
+            .contentShape(Rectangle())
+            .overlay {
+                Capsule()
+                    .fill(.tertiary)
+                    .frame(width: 5, height: 40)
+            }
+            .gesture(
+                DragGesture(coordinateSpace: .named(Self.coordinateSpaceName))
+                    .onChanged { value in
+                        let startWidth = dragStartWidth ?? leadingWidth
+                        dragStartWidth = startWidth
+                        dragFraction = (startWidth + value.translation.width) / totalWidth
+                    }
+                    .onEnded { _ in
+                        if let dragFraction {
+                            fraction = Self.leadingWidth(for: dragFraction, in: totalWidth) / totalWidth
+                        }
+                        dragFraction = nil
+                        dragStartWidth = nil
+                    }
+            )
+            .accessibilityElement()
+            .accessibilityLabel("Pane Divider")
+            .accessibilityValue(Text(fraction, format: .percent.precision(.fractionLength(0))))
+            .accessibilityAdjustableAction { direction in
+                let step = direction == .increment ? 0.05 : direction == .decrement ? -0.05 : 0
+                fraction = Self.leadingWidth(for: fraction + step, in: totalWidth) / totalWidth
+            }
+    }
+
+    /// The leading pane's width for a share of the total, leaving both panes
+    /// at least the minimum width, or an even split when there isn't room
+    /// for that.
+    private static func leadingWidth(for fraction: Double, in totalWidth: CGFloat) -> CGFloat {
+        guard totalWidth >= 2 * minimumPaneWidth else { return totalWidth / 2 }
+        return min(max(totalWidth * fraction, minimumPaneWidth), totalWidth - minimumPaneWidth)
+    }
+
+    /// The fold, in local coordinates, while the device is folded like a
+    /// book: an active division region running top to bottom with room for
+    /// a pane on either side. Flat, the region is inactive and isn't reported.
+    private static func fold(in proxy: GeometryProxy) -> CGRect? {
+        guard #available(iOS 27.1, *) else { return nil }
+        let totalWidth = proxy.size.width
+        return proxy.reservedRegions(kind: .division)
+            .map(\.frame)
+            .first { frame in
+                frame.height > frame.width
+                    && frame.minX >= minimumPaneWidth
+                    && frame.maxX <= totalWidth - minimumPaneWidth
+            }
+    }
+}
+#endif
+
 struct ToolbarStatusIcon: View {
     var isLogPresented: Bool
     var isCompiling: Bool

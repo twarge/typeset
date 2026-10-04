@@ -251,6 +251,10 @@ struct TypesetWorkspaceView: View {
     @State private var managedFileDiskHash: Int?
     @AppStorage("workspace.splitBehavior") private var splitBehaviorRaw = SplitBehavior.sideBySide.rawValue
     @AppStorage("workspace.tallSplitThreshold") private var tallSplitThreshold = 1.12
+    #if os(iOS)
+    /// The code pane's share of the side-by-side split, as last dragged.
+    @AppStorage("workspace.paneSplitFraction") private var paneSplitFraction = 0.5
+    #endif
     @AppStorage("appearance.theme") private var themePreferenceRaw = ThemePreference.system.rawValue
     @AppStorage("sourceEditor.imageInsertTemplate") private var imageInsertTemplate = SourceEditorDropSnippet.defaultImageTemplate
     @AppStorage("sourceEditor.figureInsertTemplate") private var figureInsertTemplate = SourceEditorDropSnippet.defaultFigureTemplate
@@ -1193,9 +1197,9 @@ struct TypesetWorkspaceView: View {
                 .frame(minWidth: 320)
         }
         #else
-        HStack(spacing: 0) {
+        PaneSplit(fraction: $paneSplitFraction) {
             sourcePane
-            Divider()
+        } trailing: {
             preview
         }
         #endif
