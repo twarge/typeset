@@ -128,6 +128,10 @@ struct TypesetWorkspaceView: View {
     @State private var isIOSDistractionFreePointerInRevealArea = false
     @State private var iosDistractionFreeLastHoverY: CGFloat?
     @State private var iosDistractionFreeHideTask: Task<Void, Never>?
+    // Where the navigation chrome ends, in window coordinates: the workspace's
+    // top edge, measured while the bar is showing. The distraction-free reveal
+    // band and hide threshold derive from it instead of fixed bar heights.
+    @State private var iosChromeBottomEdge: CGFloat = 0
     #endif
     @State private var isLogPresented = false
     @State private var diagnosticRunID = UUID()
@@ -180,8 +184,8 @@ struct TypesetWorkspaceView: View {
     @State private var scrollRestoreReveal = false
     /// One-shot signal that the user invoked Find-in-Files (⌘⇧F): the sidebar
     /// switches to the Find tab and focuses the field, then resets it. Owned by
-    /// the workspace so it survives the iOS sidebar overlay being torn down and
-    /// re-created, where `.onChange` can't fire on a fresh mount.
+    /// the workspace so it survives the iOS sidebar inspector being torn down
+    /// and re-created, where `.onChange` can't fire on a fresh mount.
     @State private var isFindActivationPending = false
     /// A one-shot Refs-tab activation carrying the label/symbol to filter.
     /// Like Find activation, it lives in the workspace so opening the iOS
@@ -209,6 +213,16 @@ struct TypesetWorkspaceView: View {
     @State private var didAutoExportPDFOnDisappear = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .detailOnly
     @State private var isFileSidebarPresented = false
+    #if os(iOS)
+    /// Whether the file sidebar is up, as an inspector column in regular width
+    /// or a sheet in compact. Stored rather than derived from
+    /// `isFileSidebarPresented`: handed a computed binding, the inspector
+    /// re-syncs it on every update and layout never settles.
+    @State private var fileSidebarInspectorPresented = false
+    @State private var fileSidebarSheetPresented = false
+    /// False while a width change settles; see `fileSidebarHandoff()`.
+    @State private var isFileSidebarSettled = false
+    #endif
     @State private var loadedTypstDirectoryFileURL: URL?
     // Directory mode (a loose `.typ` opens its enclosing folder): we mirror
     // package changes back to the real folder on disk. The snapshots track what
@@ -272,13 +286,7 @@ struct TypesetWorkspaceView: View {
     private static let macOSEditorTopInset: CGFloat = 52
     #endif
     #if os(iOS)
-    private static let iosDistractionFreeRevealHeight: CGFloat = 112
-    private static let iosDistractionFreeHideHeight: CGFloat = 152
     private static let iosDistractionFreeHideDelay: UInt64 = 220_000_000
-    // Distraction-free hides the navigation bar, so the editor reaches the top of
-    // the window where the (windowed) iPad controls overlay it. Float the content
-    // down at least this far to clear them.
-    private static let iosDistractionFreeEditorTopInset: CGFloat = 50
     #endif
 
     private var hasErrorLogs: Bool {
@@ -327,7 +335,19 @@ struct TypesetWorkspaceView: View {
             detailContent
                 .toolbar { workspaceToolbarContent }
                 .toolbar(iosToolbarVisibility, for: .navigationBar)
-                .onContinuousHover { phase in
+                // The background respects the safe area, so its top edge is
+                // wherever the navigation chrome ends. Only a measurement taken
+                // with the bar showing says where that is.
+                .background {
+                    Color.clear
+                        .onGeometryChange(for: CGFloat.self) { proxy in
+                            proxy.frame(in: .global).minY
+                        } action: { chromeBottomEdge in
+                            guard !shouldHideIOSDistractionFreeChrome else { return }
+                            iosChromeBottomEdge = chromeBottomEdge
+                        }
+                }
+                .onContinuousHover(coordinateSpace: .global) { phase in
                     handleIOSDistractionFreeHover(phase)
                 }
                 .overlay(alignment: .top) {
@@ -379,18 +399,30 @@ struct TypesetWorkspaceView: View {
                 }
             }
             #if os(iOS)
-            // The right file sidebar slides over the preview / editor as
-            // an overlay rather than being a SwiftUI `.inspector` column,
-            // because `.inspector` resizes the leading content when it
-            // appears. The overlay sits above the content panes; the
-            // underlying source editor and PDF preview keep their full
-            // width.
-            .overlay(alignment: .trailing) {
-                if isFileSidebarPresented {
-                    iosFileSidebarOverlay
-                }
+            // The file sidebar is the system inspector in regular width, a
+            // trailing column beside the panes (they narrow to make room), and
+            // a sheet in compact width. The inspector would become a sheet by
+            // itself there, but on iOS 27 that sheet sometimes fails to
+            // present, and never comes back after a swipe dismisses it. Both
+            // are applied inside the NavigationStack so the navigation bar and
+            // its items keep spanning the window.
+            .inspector(isPresented: $fileSidebarInspectorPresented) {
+                iosFileSidebarInspector
             }
-            .animation(.snappy(duration: 0.28), value: isFileSidebarPresented)
+            .sheet(isPresented: $fileSidebarSheetPresented) {
+                iosFileSidebarInspector
+            }
+            .onChange(of: isFileSidebarPresented) {
+                syncFileSidebarPresentation()
+            }
+            .task(id: isCompactWidth) { await fileSidebarHandoff() }
+            .onChange(of: fileSidebarSheetPresented) { _, isPresented in
+                // The sheet swiped away. The column has no way to close but
+                // the Files button; what it writes back is its own doing
+                // while the window resizes, before the width class changes.
+                guard !isPresented, isFileSidebarSettled, isCompactWidth, isFileSidebarPresented else { return }
+                setFileSidebarPresented(false)
+            }
             #endif
             .fileExporter(
                 isPresented: $isExportPresented,
@@ -402,19 +434,14 @@ struct TypesetWorkspaceView: View {
             .sheet(item: $pdfShareItem) { item in
                 PDFShareSheet(url: item.url)
             }
-            #endif
+            #else
             .fileImporter(
                 isPresented: $isImporterPresented,
                 allowedContentTypes: [.item],
-                allowsMultipleSelection: true
-            ) { result in
-                switch result {
-                case .success(let urls):
-                    importExternalFiles(urls, toFolder: folderCreationParent, copyOriginals: true)
-                case .failure(let error):
-                    recordLog("Import failed", message: error.localizedDescription, level: .error, present: true)
-                }
-            }
+                allowsMultipleSelection: true,
+                onCompletion: handleImporterResult
+            )
+            #endif
             .onAppear {
                 loadTypstDirectoryIfNeeded()
                 restoreSidebarState()
@@ -820,11 +847,26 @@ struct TypesetWorkspaceView: View {
 
     #if os(iOS)
     private var shouldHideIOSDistractionFreeChrome: Bool {
+        // Until the chrome has been measured there's no band to reveal it
+        // from, so it stays up.
         isDistractionFreeWindowChrome && hasSeenIOSDistractionFreePointer && !isIOSDistractionFreePointerInRevealArea
+            && iosChromeBottomEdge > 0
     }
 
     private var iosToolbarVisibility: Visibility {
         shouldHideIOSDistractionFreeChrome ? .hidden : .visible
+    }
+
+    // Pointer positions are in window coordinates. The reveal band is the strip
+    // the chrome occupies when it's showing; the hide threshold is one chrome
+    // extent further down, the hysteresis that keeps the bar steady while the
+    // pointer lingers just below it.
+    private var iosDistractionFreeRevealEdge: CGFloat {
+        iosChromeBottomEdge
+    }
+
+    private var iosDistractionFreeHideEdge: CGFloat {
+        iosChromeBottomEdge * 2
     }
 
     @ViewBuilder
@@ -832,12 +874,12 @@ struct TypesetWorkspaceView: View {
         if shouldHideIOSDistractionFreeChrome {
             Color.clear
                 .contentShape(Rectangle())
-                .frame(height: Self.iosDistractionFreeRevealHeight)
+                .frame(height: iosDistractionFreeRevealEdge)
                 .ignoresSafeArea(.container, edges: .top)
                 .onTapGesture {
                     revealIOSDistractionFreeChrome()
                 }
-                .onContinuousHover { phase in
+                .onContinuousHover(coordinateSpace: .global) { phase in
                     handleIOSDistractionFreeHover(phase)
                 }
         }
@@ -849,10 +891,10 @@ struct TypesetWorkspaceView: View {
         case .active(let location):
             hasSeenIOSDistractionFreePointer = true
             iosDistractionFreeLastHoverY = location.y
-            if location.y <= Self.iosDistractionFreeRevealHeight {
+            if location.y <= iosDistractionFreeRevealEdge {
                 cancelIOSDistractionFreeHide()
                 setIOSDistractionFreeChromeRevealed(true)
-            } else if location.y >= Self.iosDistractionFreeHideHeight {
+            } else if location.y >= iosDistractionFreeHideEdge {
                 scheduleIOSDistractionFreeHide()
             }
         case .ended:
@@ -861,7 +903,7 @@ struct TypesetWorkspaceView: View {
             // Only hide after we have actually seen the pointer below the
             // hysteresis band; otherwise leave the toolbar stable.
             if let iosDistractionFreeLastHoverY,
-               iosDistractionFreeLastHoverY >= Self.iosDistractionFreeHideHeight {
+               iosDistractionFreeLastHoverY >= iosDistractionFreeHideEdge {
                 scheduleIOSDistractionFreeHide()
             }
         }
@@ -1023,28 +1065,65 @@ struct TypesetWorkspaceView: View {
     #endif
 
     #if os(iOS)
-    private var fileSidebarPresentationBinding: Binding<Bool> {
-        Binding {
-            isFileSidebarPresented
-        } set: { isPresented in
-            setFileSidebarPresented(isPresented)
+    /// Moves the file sidebar between column and sheet when the width class
+    /// changes, as when an iPhone folds or unfolds. Swapping one for the other
+    /// while the window is still resizing is a race: the retired one reports
+    /// its dismissal late and the new one can fail to come up, either of
+    /// which leaves the sidebar closed. So the old one comes down first, the
+    /// change settles, and only then does the new one go up.
+    private func fileSidebarHandoff() async {
+        if isFileSidebarSettled {
+            isFileSidebarSettled = false
+            fileSidebarInspectorPresented = false
+            fileSidebarSheetPresented = false
+            try? await Task.sleep(for: .milliseconds(700))
+            // A newer change restarted the handoff.
+            guard !Task.isCancelled else { return }
+        }
+        isFileSidebarSettled = true
+        syncFileSidebarPresentation()
+    }
+
+    private func syncFileSidebarPresentation() {
+        guard isFileSidebarSettled else { return }
+        let isShown = isFileSidebarPresented
+        if fileSidebarInspectorPresented != (isShown && !isCompactWidth) {
+            fileSidebarInspectorPresented = isShown && !isCompactWidth
+        }
+        if fileSidebarSheetPresented != (isShown && isCompactWidth) {
+            fileSidebarSheetPresented = isShown && isCompactWidth
         }
     }
 
-    /// Slides in from the trailing edge and floats above the content. The
-    /// underlying source editor and preview are not resized — the panel
-    /// just covers the right strip while it's visible.
-    @ViewBuilder
-    private var iosFileSidebarOverlay: some View {
-        HStack(spacing: 0) {
-            Divider()
-            fileSidebar(dismissAfterSelect: false)
-                .frame(width: 320)
-        }
-        .background(.thinMaterial)
-        .transition(.move(edge: .trailing))
+    /// The inspector's content. The column bounds only apply in regular width:
+    /// iOS has no small-control fallback for the tab picker, and the Files
+    /// toolbar's four touch-size buttons need about 224pt, so the column stops
+    /// short of the macOS sidebar's 140pt minimum. The detents only apply to
+    /// the compact sheet.
+    private var iosFileSidebarInspector: some View {
+        fileSidebar(dismissAfterSelect: false)
+            .inspectorColumnWidth(min: 240, ideal: 320, max: 480)
+            .presentationDetents([.medium, .large])
+            // Attached here rather than on the workspace: in compact width the
+            // inspector is a sheet, and a view underneath an active sheet can't
+            // present another one.
+            .fileImporter(
+                isPresented: $isImporterPresented,
+                allowedContentTypes: [.item],
+                allowsMultipleSelection: true,
+                onCompletion: handleImporterResult
+            )
     }
     #endif
+
+    private func handleImporterResult(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            importExternalFiles(urls, toFolder: folderCreationParent, copyOriginals: true)
+        case .failure(let error):
+            recordLog("Import failed", message: error.localizedDescription, level: .error, present: true)
+        }
+    }
 
     @ViewBuilder
     private var contentView: some View {
@@ -1266,9 +1345,10 @@ struct TypesetWorkspaceView: View {
         // free uses the same value, so the code never shifts as the toolbar hides.
         Self.macOSEditorTopInset
         #else
-        // The iOS editor applies this as a floor over the safe area, so the code
-        // clears the windowed-app controls that overlay the top in this mode.
-        isDistractionFreeWindowChrome ? Self.iosDistractionFreeEditorTopInset : nil
+        // The iOS editor takes its top inset from the corner-adapted safe area,
+        // which already clears the windowed-app controls once distraction-free
+        // hides the navigation bar, so no floor is needed.
+        nil
         #endif
     }
 
@@ -1352,7 +1432,11 @@ struct TypesetWorkspaceView: View {
 
     private func splitOrientation(for size: CGSize) -> SplitOrientation {
         #if os(iOS)
-        // iOS always shows code and preview side by side — never stacked.
+        // iOS always shows code and preview side by side — never stacked. The
+        // size class alone decides whether there's a split at all (see
+        // `resolvedView`), and the panes divide the width left inside the
+        // horizontal safe area, so a vertical bar or the inspector column
+        // narrows them rather than covering them.
         return .horizontal
         #else
         switch splitBehavior {
@@ -1830,7 +1914,9 @@ struct TypesetWorkspaceView: View {
         #if os(macOS)
         columnVisibility = isVisible ? .all : .detailOnly
         #else
-        isFileSidebarPresented = isVisible
+        // In compact width the file sidebar is a sheet; don't raise one over
+        // the document as it opens. The saved state stays for wider windows.
+        isFileSidebarPresented = isVisible && !isCompactWidth
         #endif
 
         // Restore which panes were visible. An empty/unknown stored value leaves

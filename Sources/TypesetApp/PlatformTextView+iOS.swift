@@ -1347,8 +1347,9 @@ struct PlatformTextView: UIViewRepresentable {
         private var diagnosticBadgeViews: [UIView] = []
         private var lastDecorationLayoutWidth: CGFloat = 0
 
-        /// A floor applied over the safe-area top inset, so distraction-free mode
-        /// pushes the code below the windowed-app controls overlaying the top.
+        /// A floor applied over the safe-area top inset. The workspace no longer
+        /// sets one: the corner-adapted safe area clears the windowed-app
+        /// controls on its own (see `applySafeAreaScrollInsets`).
         var fixedTopContentInset: CGFloat = 0 {
             didSet {
                 guard fixedTopContentInset != oldValue else { return }
@@ -1562,7 +1563,12 @@ struct PlatformTextView: UIViewRepresentable {
         }
 
         private func applySafeAreaScrollInsets() {
-            let desiredTop = max(safeAreaInsets.top, fixedTopContentInset)
+            // Vertical corner adaptation grows the top inset to clear system
+            // UI in the top corners — the windowed-app controls, once
+            // distraction-free hides the navigation bar that otherwise holds
+            // them — so the first line starts below it.
+            let cornerAdaptedTop = edgeInsets(for: .safeArea(cornerAdaptation: .vertical)).top
+            let desiredTop = max(cornerAdaptedTop, fixedTopContentInset)
             let desiredBottom = safeAreaInsets.bottom
 
             if abs(contentInset.top - desiredTop) > 0.5 ||

@@ -1216,9 +1216,10 @@ struct FileTreeRow: View {
 
 extension View {
     /// On macOS the NavigationSplitView sidebar column supplies the material, so
-    /// lists are left entirely to the system. iOS hosts the sidebar in a custom
-    /// trailing overlay that paints one surface of its own, so lists there must
-    /// not stack the grouped background on top of it.
+    /// lists are left entirely to the system. iOS hosts the sidebar in an
+    /// inspector (a column, or a sheet in compact width) that supplies one
+    /// surface for every tab, so lists there must not stack the grouped
+    /// background on top of it.
     @ViewBuilder
     func sidebarListStyle() -> some View {
         #if os(iOS)
