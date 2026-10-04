@@ -1222,30 +1222,31 @@ struct TypesetWorkspaceView: View {
     @ViewBuilder
     private var sourcePane: some View {
         StableSourcePane {
-            ZStack(alignment: .topTrailing) {
-                selectedFileView
-
-                if isFindReplacePresented, selectedFile?.isTextEditable == true {
-                    FindReplacePanel(
-                        findText: $findText,
-                        replaceText: $replaceText,
-                        isCaseSensitive: $findIsCaseSensitive,
-                        isWholeWord: $findIsWholeWord,
-                        usesRegularExpression: $findUsesRegularExpression,
-                        currentIndex: currentFindMatchDisplayIndex,
-                        matchCount: findMatchRanges.count,
-                        errorMessage: findPatternError,
-                        onFindChanged: selectFirstFindMatch,
-                        onPrevious: { selectFindMatch(direction: .previous) },
-                        onNext: { selectFindMatch(direction: .next) },
-                        onReplace: replaceCurrentFindMatch,
-                        onReplaceAll: replaceAllFindMatches,
-                        onClose: { isFindReplacePresented = false }
-                    )
-                    .padding(.top, 58)
-                    .padding(.trailing, 14)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                }
+            selectedFileView
+        }
+        // An overlay, not a ZStack sibling, so the panel can't size the pane
+        // and push the editor aside when the pane is narrower than it.
+        .overlay(alignment: .topTrailing) {
+            if isFindReplacePresented, selectedFile?.isTextEditable == true {
+                FindReplacePanel(
+                    findText: $findText,
+                    replaceText: $replaceText,
+                    isCaseSensitive: $findIsCaseSensitive,
+                    isWholeWord: $findIsWholeWord,
+                    usesRegularExpression: $findUsesRegularExpression,
+                    currentIndex: currentFindMatchDisplayIndex,
+                    matchCount: findMatchRanges.count,
+                    errorMessage: findPatternError,
+                    onFindChanged: selectFirstFindMatch,
+                    onPrevious: { selectFindMatch(direction: .previous) },
+                    onNext: { selectFindMatch(direction: .next) },
+                    onReplace: replaceCurrentFindMatch,
+                    onReplaceAll: replaceAllFindMatches,
+                    onClose: { isFindReplacePresented = false }
+                )
+                .padding(.top, findPanelTopInset + 6)
+                .padding(.horizontal, 14)
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
         .animation(.snappy(duration: 0.18), value: isFindReplacePresented)
@@ -1331,11 +1332,9 @@ struct TypesetWorkspaceView: View {
         }
     }
 
-    /// `nil` lets the editor auto-inset its content under the toolbar (normal
-    /// mode). In distraction-free mode we pin a fixed inset equal to the title-bar
-    /// height so the code fills the window without the first line being clipped
-    /// behind the top edge; the toolbar, when revealed, overlays the top rather
-    /// than pushing the content down.
+    /// A floor for the editor's top content inset, or `nil` to leave it to the
+    /// safe area. The source pane reaches the window's top edge, so this is what
+    /// keeps the first line out from under the chrome.
     private var fixedEditorTopContentInset: CGFloat? {
         #if os(macOS)
         // One fixed inset for both modes. The source pane ignores the top safe
@@ -1349,6 +1348,19 @@ struct TypesetWorkspaceView: View {
         // which already clears the windowed-app controls once distraction-free
         // hides the navigation bar, so no floor is needed.
         nil
+        #endif
+    }
+
+    /// Where the chrome ends, measured from the top of the source pane, which
+    /// reaches the window's top edge. The find panel sits below it in both
+    /// modes, so it neither slips under a revealed toolbar nor moves as
+    /// distraction-free hides it. On iOS that also keeps it below the reveal
+    /// band, so reaching for the panel doesn't bring the bar back.
+    private var findPanelTopInset: CGFloat {
+        #if os(macOS)
+        Self.macOSEditorTopInset
+        #else
+        iosChromeBottomEdge
         #endif
     }
 

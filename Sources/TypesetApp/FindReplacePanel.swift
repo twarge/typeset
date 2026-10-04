@@ -117,7 +117,7 @@ struct FindReplacePanel: View {
             }
         }
         .padding(10)
-        .frame(width: 390)
+        .frame(maxWidth: 390)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
