@@ -13,10 +13,15 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# The xcode-27 image defaults to Xcode 27.0. Build with 27.1, the Xcode the
+# app is developed on, so CI compiles against the same SDKs.
+env:
+  DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+
 jobs:
   test:
     name: Build and test
-    runs-on: macos-26
+    runs-on: xcode-27
     steps:
       # The build phases can check the submodule out themselves, but doing it
       # here keeps the network work out of the build.
