@@ -22,6 +22,7 @@ struct PlatformTextView: UIViewRepresentable {
     var commentToggleRequest: Int
     var snippetInsertion: EditorSnippetInsertion?
     var textReplacement: EditorTextReplacement?
+    var handledRequests: HandledEditorRequests
     var insertableImagePaths: Set<String>
     var insertableTypstPaths: Set<String>
     var imageInsertTemplate: String
@@ -181,6 +182,7 @@ struct PlatformTextView: UIViewRepresentable {
         Coordinator(
             text: $text,
             fontSize: $fontSize,
+            handledRequests: handledRequests,
             insertableImagePaths: insertableImagePaths,
             insertableTypstPaths: insertableTypstPaths,
             imageInsertTemplate: imageInsertTemplate,
@@ -253,9 +255,7 @@ struct PlatformTextView: UIViewRepresentable {
         private var gestureCurrentFontSize = SourceEditorFont.defaultSize
         private var appliedFontSize = 0.0
         private var lastFocusRequest = 0
-        private var lastCommentToggleRequest = 0
-        private var lastSnippetToken = 0
-        private var lastTextReplacementToken = 0
+        private let handledRequests: HandledEditorRequests
         private var nativeTextAwaitingBinding: String?
         private var scheduledRepaintTask: Task<Void, Never>?
         private var renderedDiagnostics: [TypstSourceDiagnostic] = []
@@ -273,6 +273,7 @@ struct PlatformTextView: UIViewRepresentable {
         init(
             text: Binding<String>,
             fontSize: Binding<Double>,
+            handledRequests: HandledEditorRequests,
             insertableImagePaths: Set<String>,
             insertableTypstPaths: Set<String>,
             imageInsertTemplate: String,
@@ -302,6 +303,7 @@ struct PlatformTextView: UIViewRepresentable {
         ) {
             _text = text
             _fontSize = fontSize
+            self.handledRequests = handledRequests
             self.insertableImagePaths = insertableImagePaths
             self.insertableTypstPaths = insertableTypstPaths
             self.imageInsertTemplate = imageInsertTemplate
@@ -565,8 +567,8 @@ struct PlatformTextView: UIViewRepresentable {
         }
 
         func toggleCommentIfNeeded(_ commentToggleRequest: Int, in textView: UITextView) {
-            guard commentToggleRequest != lastCommentToggleRequest else { return }
-            lastCommentToggleRequest = commentToggleRequest
+            guard commentToggleRequest != handledRequests.commentToggle else { return }
+            handledRequests.commentToggle = commentToggleRequest
             guard textView.isEditable else { return }
             guard let edit = SourceEditorCommentToggle.edit(
                 for: textView.text,
@@ -584,8 +586,8 @@ struct PlatformTextView: UIViewRepresentable {
         }
 
         func insertSnippetIfNeeded(_ request: EditorSnippetInsertion?, in textView: UITextView) {
-            guard let request, request.token != lastSnippetToken else { return }
-            lastSnippetToken = request.token
+            guard let request, request.token != handledRequests.snippetToken else { return }
+            handledRequests.snippetToken = request.token
             guard textView.isEditable else { return }
             let selectedRange = textView.selectedRange
             let selectedText = (textView.text as NSString).substring(with: selectedRange)
@@ -612,8 +614,8 @@ struct PlatformTextView: UIViewRepresentable {
         }
 
         func applyTextReplacementIfNeeded(_ request: EditorTextReplacement?, in textView: UITextView) {
-            guard let request, request.token != lastTextReplacementToken else { return }
-            lastTextReplacementToken = request.token
+            guard let request, request.token != handledRequests.textReplacementToken else { return }
+            handledRequests.textReplacementToken = request.token
             guard textView.isEditable else { return }
             let length = (textView.text as NSString).length
             let location = min(max(0, request.edit.replacementRange.location), length)

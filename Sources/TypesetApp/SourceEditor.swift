@@ -51,6 +51,17 @@ struct EditorTextReplacement: Equatable {
     var edit: SourceEditorTextEdit
 }
 
+/// The last comment-toggle, snippet and replacement requests an editor has
+/// carried out. The host owns it because the text view's coordinator is rebuilt
+/// with the editor (on every file switch or layout change); counters kept there
+/// restart at zero, so the new editor would replay the last request onto
+/// whatever file it just opened.
+final class HandledEditorRequests {
+    var commentToggle = 0
+    var snippetToken = 0
+    var textReplacementToken = 0
+}
+
 /// A one-shot request to restore the editor to a saved position: a vertical
 /// scroll `fraction` (0...1 of the scrollable range) and, optionally, the caret
 /// `selection`. The `token` distinguishes a fresh request from a repeat so the
@@ -75,6 +86,7 @@ struct SourceEditor: View {
     var commentToggleRequest = 0
     var snippetInsertion: EditorSnippetInsertion?
     var textReplacement: EditorTextReplacement?
+    var handledRequests: HandledEditorRequests
     var insertableImagePaths: Set<String> = []
     var insertableTypstPaths: Set<String> = []
     var imageInsertTemplate = SourceEditorDropSnippet.defaultImageTemplate
@@ -129,6 +141,7 @@ struct SourceEditor: View {
             commentToggleRequest: commentToggleRequest,
             snippetInsertion: snippetInsertion,
             textReplacement: textReplacement,
+            handledRequests: handledRequests,
             insertableImagePaths: insertableImagePaths,
             insertableTypstPaths: insertableTypstPaths,
             imageInsertTemplate: imageInsertTemplate,

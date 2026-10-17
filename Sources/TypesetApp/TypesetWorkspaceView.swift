@@ -201,6 +201,7 @@ struct TypesetWorkspaceView: View {
     @State private var snippetInsertion: EditorSnippetInsertion?
     @State private var textReplacementToken = 0
     @State private var textReplacement: EditorTextReplacement?
+    @State private var handledEditorRequests = HandledEditorRequests()
     @State private var pendingFileTreeEdit: FileTreeEditingTarget?
     @State private var isImporterPresented = false
     @State private var isSettingsPresented = false
@@ -1273,6 +1274,7 @@ struct TypesetWorkspaceView: View {
                     commentToggleRequest: commentToggleRequest,
                     snippetInsertion: snippetInsertion,
                     textReplacement: textReplacement,
+                    handledRequests: handledEditorRequests,
                     insertableImagePaths: insertableImagePaths,
                     insertableTypstPaths: insertableTypstPaths,
                     imageInsertTemplate: imageInsertTemplate,
