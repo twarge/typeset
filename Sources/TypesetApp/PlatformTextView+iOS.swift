@@ -1371,6 +1371,13 @@ struct PlatformTextView: UIViewRepresentable {
             true
         }
 
+        override func resignFirstResponder() -> Bool {
+            // PDFKit's view tries to take first responder as the preview
+            // swaps documents; keep the caret, and the keyboard, here.
+            if PreviewDocumentSwap.isInProgress { return false }
+            return super.resignFirstResponder()
+        }
+
         override func safeAreaInsetsDidChange() {
             super.safeAreaInsetsDidChange()
             applySafeAreaScrollInsets()

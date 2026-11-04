@@ -117,16 +117,6 @@ extension PDFPreviewView {
         /// recompile anchor.
         private var restoredViewport: PreviewViewport?
         private var hasAppliedViewportRestore = false
-        /// Delay applying a freshly-compiled PDF into the live `PDFView`
-        /// until the user has paused typing for this long. Compiles still
-        /// fire on every keystroke (so the preview is always one compile
-        /// behind the cursor); we just hold off on the visible swap, which
-        /// is what causes PDFKit to mutate first responder on iOS. Each
-        /// new compile arrival resets the timer, so during fast typing the
-        /// PDF only refreshes when the user takes a breath.
-        #if os(iOS)
-        private static let pdfApplyDebounce: TimeInterval = 0.3
-        #endif
 
         init(onSeek: @escaping (SourceRange) -> Void) {
             self.onSeek = onSeek
@@ -172,35 +162,12 @@ extension PDFPreviewView {
             pendingRevision = revision
             pendingSourceRects = preview.sourceRects
 
-            #if os(iOS)
-            // Hold the visible PDF swap until typing pauses. The compile
-            // already ran (this update is its result); we're only delaying
-            // the moment we hand the new document to PDFKit, because that
-            // hand-off is what disturbs first responder. Each arrival abandons
-            // any in-flight preparation and restarts the pause timer.
-            pendingApplyWorkItem?.cancel()
-            isSwapScheduled = false
-            isPreparationCycleActive = false
-            preparationToken += 1
-            let workItem = DispatchWorkItem { [weak self, weak container] in
-                guard let self, let container else { return }
-                self.pendingApplyWorkItem = nil
-                self.isPreparationCycleActive = true
-                self.prepareNextPendingPreview(
-                    in: container,
-                    renderWarmupDelay: renderWarmupDelay
-                )
-            }
-            pendingApplyWorkItem = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.pdfApplyDebounce, execute: workItem)
-            #else
             // Keep the preview moving while the user types: a result that is
             // already mid-warmup commits on schedule, and the commit chains
             // straight into preparing the newest pending result. Preparation
             // still starts on the next run-loop turn — never inside this
             // SwiftUI update pass.
             startPreparationCycleIfNeeded(in: container, renderWarmupDelay: renderWarmupDelay)
-            #endif
         }
 
         /// Begins a preparation cycle — parse, install off-screen, warm up,
@@ -273,8 +240,8 @@ extension PDFPreviewView {
             // (results arriving meanwhile wait in the pending slot), so this
             // warmup always covers a freshly assigned document and its timer
             // is the only one outstanding. The token still invalidates the
-            // commit if the whole preview is torn down (or, on iOS, a new
-            // arrival abandons the cycle) before the deadline fires.
+            // commit if the whole preview is torn down before the deadline
+            // fires.
             isSwapScheduled = true
             preparationToken += 1
             let currentToken = preparationToken
@@ -683,15 +650,33 @@ extension PDFPreviewView {
     }
 }
 #else
-/// `PDFView` on iOS becomes first responder when its `document` is assigned,
-/// which steals first responder from the editor's `UITextView` every time
-/// the preview recompiles (i.e., on nearly every keystroke). We don't need
-/// PDFView to be a responder — tap-to-seek is implemented via a gesture
-/// recognizer on the surrounding container, not on the PDFView itself —
-/// so we refuse the responder role at the root cause.
+/// The preview never needs `PDFView` itself as a responder — tap-to-seek is a
+/// gesture recognizer on the surrounding container — so it refuses the role.
+/// PDFKit's internal document view still claims it on every document swap;
+/// see `PreviewDocumentSwap`.
 @MainActor private final class FocusPreservingPDFView: PDFView {
     override var canBecomeFirstResponder: Bool { false }
     override func becomeFirstResponder() -> Bool { false }
+}
+
+/// The span in which the preview hands PDFKit a document or lays it out.
+/// Assigning a document makes PDFKit add a fresh internal `PDFDocumentView`,
+/// which UIKit promotes to first responder as it joins the window — beyond
+/// the reach of `FocusPreservingPDFView`'s refusal. That resigns the editor,
+/// and with a software keyboard up (a split view on iPad or an unfolded
+/// iPhone) the keyboard drops and comes back on every preview update. The
+/// editor declines to resign while a swap is in progress, so PDFKit's claim
+/// simply fails.
+@MainActor enum PreviewDocumentSwap {
+    private static var depth = 0
+
+    static var isInProgress: Bool { depth > 0 }
+
+    static func perform(_ body: () -> Void) {
+        depth += 1
+        defer { depth -= 1 }
+        body()
+    }
 }
 
 @MainActor private func pdfInternalScrollView(in view: UIView) -> UIScrollView? {
@@ -800,10 +785,12 @@ extension PDFPreviewView {
         // transparent page-break gaps. See the macOS container's note.
         pdfView.alpha = 0.02
         pdfView.isHidden = false
-        insertSubview(pdfView, belowSubview: activePDFView)
-        pdfView.frame = bounds
-        pdfView.document = document
-        layoutPDFView(pdfView)
+        PreviewDocumentSwap.perform {
+            insertSubview(pdfView, belowSubview: activePDFView)
+            pdfView.frame = bounds
+            pdfView.document = document
+            layoutPDFView(pdfView)
+        }
         Self.restoreFirstResponder(previousResponder, attemptsRemaining: 4)
     }
 
@@ -903,10 +890,12 @@ extension PDFPreviewView {
     }
 
     private func layoutPDFView(_ pdfView: PDFView) {
-        Self.configureScrollContainers(in: pdfView)
-        pdfView.layoutDocumentView()
-        pdfView.layoutIfNeeded()
-        Self.configureScrollContainers(in: pdfView)
+        PreviewDocumentSwap.perform {
+            Self.configureScrollContainers(in: pdfView)
+            pdfView.layoutDocumentView()
+            pdfView.layoutIfNeeded()
+            Self.configureScrollContainers(in: pdfView)
+        }
     }
 
     private static func configure(_ pdfView: PDFView) {
