@@ -661,10 +661,13 @@ struct FileSidebar: View {
         }
     }
 
+    // The list runs to the bottom of the sidebar (on iOS, of the inspector
+    // column or sheet), so the ring follows the rounded corners it meets there.
     private var rootDropHighlight: some View {
-        RoundedRectangle(cornerRadius: 8)
+        let ring = ConcentricRectangle(corners: .concentric(minimum: .fixed(8)))
+        return ring
             .stroke(.tint.opacity(isRootDropTargeted ? 0.55 : 0), lineWidth: 2)
-            .background(.tint.opacity(isRootDropTargeted ? 0.06 : 0), in: RoundedRectangle(cornerRadius: 8))
+            .background(.tint.opacity(isRootDropTargeted ? 0.06 : 0), in: ring)
             .padding(4)
             .animation(.snappy(duration: 0.18), value: isRootDropTargeted)
             .allowsHitTesting(false)

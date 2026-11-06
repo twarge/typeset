@@ -208,9 +208,13 @@ struct SourceEditor: View {
         )
         .font(.system(.body, design: .monospaced))
         .overlay {
-            RoundedRectangle(cornerRadius: 6)
+            // The editor can fill the window, so the drop ring follows the
+            // window's (on iPhone, the display's) rounded corners where it
+            // meets them rather than being cut off by them.
+            let ring = ConcentricRectangle(corners: .concentric(minimum: .fixed(6)))
+            ring
                 .stroke(.tint.opacity(isPackageDropTargeted ? 0.75 : 0), lineWidth: 2)
-                .background(.tint.opacity(isPackageDropTargeted ? 0.08 : 0), in: RoundedRectangle(cornerRadius: 6))
+                .background(.tint.opacity(isPackageDropTargeted ? 0.08 : 0), in: ring)
                 .animation(.snappy(duration: 0.18), value: isPackageDropTargeted)
                 .allowsHitTesting(false)
         }
