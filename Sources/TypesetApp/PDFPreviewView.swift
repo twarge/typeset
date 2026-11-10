@@ -269,10 +269,19 @@ extension PDFPreviewView {
         private func restore(_ anchor: PDFPreviewAnchor, in pdfView: PDFView, document: PDFDocument) {
             guard let page = document.page(at: min(anchor.pageIndex, max(0, document.pageCount - 1))) else { return }
 
-            pdfView.autoScales = false
-            let scale = min(max(anchor.scaleFactor, pdfView.minScaleFactor), pdfView.maxScaleFactor)
-            if scale.isFinite, scale > 0 {
-                pdfView.scaleFactor = scale
+            if anchor.autoScales {
+                // The visible view was fitting its width; keep the incoming
+                // one fitting too. Pinning it to today's scale factor would
+                // quietly turn "fit" into a fixed zoom — the page would stop
+                // refitting when the pane is resized, and that fixed zoom
+                // would be saved as if the user had chosen it.
+                pdfView.autoScales = true
+            } else {
+                pdfView.autoScales = false
+                let scale = min(max(anchor.scaleFactor, pdfView.minScaleFactor), pdfView.maxScaleFactor)
+                if scale.isFinite, scale > 0 {
+                    pdfView.scaleFactor = scale
+                }
             }
             pdfView.go(to: PDFDestination(page: page, at: anchor.point))
             anchor.scrollAnchor?.restore(in: pdfView)
@@ -408,6 +417,8 @@ extension PDFPreviewView {
     /// position doesn't clobber the saved one.
     var isApplyingViewport = false
     private weak var observedScrollClipView: NSView?
+    /// True while AppKit is inside this view's `layout()`.
+    private var isInLayoutPass = false
     private var isViewportReportPending = false
     private var lastReportedViewport: PreviewViewport?
 
@@ -596,18 +607,25 @@ extension PDFPreviewView {
     }
 
     override func layout() {
+        // Nothing is sized or laid out by hand here. The PDF views follow this
+        // view through their autoresizing masks, and AppKit lays each out after
+        // its frame changes. Setting their frames from this override resized
+        // PDFKit — which lays its document out on the spot — in the middle of
+        // the NSHostingView pass that called us, and forcing
+        // `layoutSubtreeIfNeeded()` from here re-enters that pass outright.
+        isInLayoutPass = true
+        defer { isInLayoutPass = false }
         super.layout()
-        // AppKit will lay out each PDFView after its frame changes. Forcing
-        // `layoutSubtreeIfNeeded()` from this override recursively enters the
-        // NSHostingView layout that called us.
-        for pdfView in pdfViews where pdfView.frame != bounds {
-            pdfView.frame = bounds
-        }
     }
 
     private func relayoutPDFViews() {
+        // Belt and braces for the autoresizing masks: the frames are put right
+        // here as well — from a run-loop turn of our own, never from `layout()`.
+        guard !isInLayoutPass else { return }
         for pdfView in pdfViews {
-            pdfView.frame = bounds
+            if pdfView.frame != bounds {
+                pdfView.frame = bounds
+            }
             guard pdfView.document != nil else { continue }
             layoutPDFView(pdfView)
         }
@@ -616,7 +634,15 @@ extension PDFPreviewView {
     private func layoutPDFView(_ pdfView: PDFView) {
         Self.configureScrollContainers(in: pdfView)
         pdfView.layoutDocumentView()
-        pdfView.layoutSubtreeIfNeeded()
+        // The callers all run from the main queue, which a run loop nested
+        // inside a layout pass also drains (PDFKit spins one while parsing).
+        // Forcing layout on a view that is mid-layout is the reentrancy AppKit
+        // warns about, so leave it to the pass already under way.
+        if isInLayoutPass {
+            pdfView.needsLayout = true
+        } else {
+            pdfView.layoutSubtreeIfNeeded()
+        }
         Self.configureScrollContainers(in: pdfView)
     }
 
@@ -946,6 +972,9 @@ extension PDFPreviewView {
     var pageIndex: Int
     var point: CGPoint
     var scaleFactor: CGFloat
+    /// Whether the view was fitting the page to its width rather than showing
+    /// a zoom the user set.
+    var autoScales: Bool
     var scrollAnchor: PDFScrollAnchor?
 
     init?(pdfView: PDFView) {
@@ -959,6 +988,7 @@ extension PDFPreviewView {
         self.pageIndex = pageIndex
         self.point = pdfView.convert(CGPoint(x: pdfView.bounds.midX, y: pdfView.bounds.midY), to: page)
         self.scaleFactor = pdfView.scaleFactor
+        self.autoScales = pdfView.autoScales
         self.scrollAnchor = PDFScrollAnchor(pdfView: pdfView)
     }
 }

@@ -4,6 +4,7 @@
 import PhotosUI
 import PDFKit
 import SwiftUI
+import TipKit
 import TypesetCore
 import UniformTypeIdentifiers
 
@@ -42,6 +43,7 @@ struct WorkspaceSettingsPane: View {
     // after each revoke so the list re-renders.
     @State private var grantedFolders: [String] = []
     #endif
+    @State private var isShowingPackages = false
     var onDismiss: () -> Void
 
     var body: some View {
@@ -117,6 +119,10 @@ struct WorkspaceSettingsPane: View {
                     .font(.subheadline.weight(.semibold))
 
                 Toggle("Include Sample Content", isOn: $newDocumentIncludesSampleContent)
+                    .onChange(of: newDocumentIncludesSampleContent) { _, _ in
+                        // Whoever has found the switch doesn't need pointing to it.
+                        SampleContentTip().invalidate(reason: .actionPerformed)
+                    }
 
                 Text("Start new documents with a demonstration of Typst features instead of a blank file.")
                     .font(.caption)
@@ -289,6 +295,11 @@ struct WorkspaceSettingsPane: View {
             folderAccessSection
             #endif
 
+            Button("Typst Packages…") { isShowingPackages = true }
+                .sheet(isPresented: $isShowingPackages) {
+                    PackagesSettingsView(onDismiss: { isShowingPackages = false })
+                }
+
             VStack(alignment: .leading, spacing: 6) {
                 Text("Typeset is made by Twarge LLC.")
                     .font(.footnote)
@@ -360,4 +371,28 @@ struct WorkspaceSettingsPane: View {
         .onAppear { grantedFolders = FolderAccessStore.grantedPaths() }
     }
     #endif
+}
+
+/// Points from a new document's sample content to the setting that turns it
+/// off. Shown on the Settings button, and only while the document still holds
+/// the untouched sample: someone who opened their own file, or has started
+/// writing, isn't wondering where the demonstration came from.
+struct SampleContentTip: Tip {
+    static let openSettingsActionID = "open-settings"
+
+    var title: Text {
+        Text("Prefer a Blank Page?")
+    }
+
+    var message: Text? {
+        Text("New documents start with a demonstration of Typst. Turn off Include Sample Content in Settings to start empty.")
+    }
+
+    var image: Image? {
+        Image(systemName: "doc.badge.gearshape")
+    }
+
+    var actions: [Action] {
+        Action(id: Self.openSettingsActionID, title: "Open Settings")
+    }
 }

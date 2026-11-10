@@ -131,6 +131,35 @@ struct SourceEditor: View {
     @State private var isPackageDropTargeted = false
     @State private var iosScrollOffset: CGFloat = 0
     @State private var languageOverlayAnchor = CGPoint(x: 12, y: 34)
+    /// The newest scroll offset and caret anchor the text view reported. Every
+    /// report lands here; it is copied into the `@State` above — which is what
+    /// re-evaluates this view and runs the representable's update pass — only
+    /// while something on screen is drawn from it (the gutter, a popover).
+    /// Scrolling and caret movement would otherwise cost a whole-editor update
+    /// per tick with nothing to show for it.
+    @State private var liveGeometry = LiveEditorGeometry()
+
+    /// Whether the language overlay is drawing anything positioned by the
+    /// caret anchor.
+    private var isLanguageOverlayShowing: Bool {
+        !codeActions.isEmpty || !referenceLocations.isEmpty || !completions.isEmpty
+            || signatureHelp != nil || hoverInfo != nil || cursorDiagnostic != nil
+    }
+
+    /// The live value when there is one. `state` is passed as a plain argument
+    /// — not behind `??`, which wouldn't evaluate it — so that `body` reads the
+    /// `@State` every time: that read is what keeps this view subscribed to
+    /// the moves it is told about, while the value drawn is never behind them.
+    private static func newest<Value>(_ live: Value?, tracking state: Value) -> Value {
+        live ?? state
+    }
+
+    /// Records an anchor that a command (help, definition, references…) just
+    /// computed for the popover it is about to show.
+    private func setLanguageOverlayAnchor(_ anchor: CGPoint) {
+        liveGeometry.overlayAnchor = anchor
+        languageOverlayAnchor = anchor
+    }
 
     var body: some View {
         let editor = PlatformTextView(
@@ -160,32 +189,35 @@ struct SourceEditor: View {
             onCompletionAccept: onCompletionAccept,
             onCompletionDismiss: onCompletionDismiss,
             onShowFunctionHelp: { range, anchor in
-                languageOverlayAnchor = anchor
+                setLanguageOverlayAnchor(anchor)
                 onShowFunctionHelp(range)
             },
             onShowSignatureHelp: { range, anchor in
-                languageOverlayAnchor = anchor
+                setLanguageOverlayAnchor(anchor)
                 onShowSignatureHelp(range)
             },
             onGoToDefinition: { range, anchor in
-                languageOverlayAnchor = anchor
+                setLanguageOverlayAnchor(anchor)
                 onGoToDefinition(range)
             },
             onFindReferences: { range, anchor in
-                languageOverlayAnchor = anchor
+                setLanguageOverlayAnchor(anchor)
                 onFindReferences(range)
             },
             onRenameSymbol: { range, anchor in
-                languageOverlayAnchor = anchor
+                setLanguageOverlayAnchor(anchor)
                 onRenameSymbol(range)
             },
             onShowCodeActions: { range, anchor in
-                languageOverlayAnchor = anchor
+                setLanguageOverlayAnchor(anchor)
                 onShowCodeActions(range)
             },
             onEditorInteraction: onEditorInteraction,
             onScrollOffsetChange: { offset in
                 guard kSourceEditorScrollOffsetTrackingEnabled else { return }
+                liveGeometry.scrollOffset = offset
+                // Only the line-number gutter is drawn from the offset.
+                guard showLineNumbers else { return }
                 DispatchQueue.main.async {
                     guard abs(iosScrollOffset - offset) > 0.5 else { return }
                     iosScrollOffset = offset
@@ -193,6 +225,10 @@ struct SourceEditor: View {
             },
             onLanguageOverlayAnchorChange: { anchor in
                 guard kSourceEditorOverlayAnchorTrackingEnabled else { return }
+                liveGeometry.overlayAnchor = anchor
+                // With no popover up there is nothing to move; the one that
+                // appears next reads the anchor kept above.
+                guard isLanguageOverlayShowing else { return }
                 // Defer so the @State mutation doesn't land inside a SwiftUI
                 // view update (the representable reports the anchor during
                 // updateNSView), which triggers an "undefined behavior" warning.
@@ -234,7 +270,7 @@ struct SourceEditor: View {
                     codeActions: codeActions,
                     selectedCompletionIndex: selectedCompletionIndex,
                     fontSize: fontSize,
-                    anchor: languageOverlayAnchor,
+                    anchor: Self.newest(liveGeometry.overlayAnchor, tracking: languageOverlayAnchor),
                     onCompletionSelected: onCompletionSelected,
                     onCompletionDismiss: onCompletionDismiss,
                     onReferenceSelected: onReferenceSelected,
@@ -250,12 +286,62 @@ struct SourceEditor: View {
         #else
         HStack(spacing: 0) {
             if showLineNumbers {
-                PlatformTextView.LineNumberGutter(text: text, scrollOffset: iosScrollOffset)
+                // Drawn from the live record so a gutter switched on
+                // mid-scroll starts at the right offset.
+                PlatformTextView.LineNumberGutter(
+                    text: text,
+                    scrollOffset: Self.newest(liveGeometry.scrollOffset, tracking: iosScrollOffset)
+                )
             }
             editor
         }
         #endif
     }
+}
+
+/// The smallest single replacement that turns one text into another, for
+/// applying a text the host changed (an accepted completion, Replace All, a
+/// reload) as an ordinary edit. Replacing the whole storage instead would leave
+/// the text view's undo stack describing ranges of a text that no longer
+/// exists.
+enum SourceEditorTextDiff {
+    struct Edit: Equatable {
+        /// UTF-16 range of the old text to replace.
+        var range: NSRange
+        var replacement: String
+    }
+
+    /// `nil` when the texts are equal.
+    static func minimalEdit(from old: String, to new: String) -> Edit? {
+        let oldUnits = Array(old.utf16)
+        let newUnits = Array(new.utf16)
+        let limit = min(oldUnits.count, newUnits.count)
+
+        var prefix = 0
+        while prefix < limit, oldUnits[prefix] == newUnits[prefix] { prefix += 1 }
+        // Never cut a surrogate pair in half: the halves would be replaced
+        // separately and the replacement could not be decoded.
+        if prefix > 0, UTF16.isLeadSurrogate(oldUnits[prefix - 1]) { prefix -= 1 }
+
+        var suffix = 0
+        while suffix < limit - prefix,
+              oldUnits[oldUnits.count - 1 - suffix] == newUnits[newUnits.count - 1 - suffix] {
+            suffix += 1
+        }
+        if suffix > 0, UTF16.isTrailSurrogate(oldUnits[oldUnits.count - suffix]) { suffix -= 1 }
+
+        let range = NSRange(location: prefix, length: oldUnits.count - prefix - suffix)
+        let replacement = String(decoding: newUnits[prefix..<(newUnits.count - suffix)], as: UTF16.self)
+        guard range.length > 0 || !replacement.isEmpty else { return nil }
+        return Edit(range: range, replacement: replacement)
+    }
+}
+
+/// See `SourceEditor.liveGeometry`. A reference type so writing to it does not
+/// invalidate the view.
+@MainActor final class LiveEditorGeometry {
+    var scrollOffset: CGFloat?
+    var overlayAnchor: CGPoint?
 }
 
 extension CGPoint {
@@ -633,7 +719,7 @@ private struct SourceEditorLanguageOverlay: View {
                     calloutPanel(arrowX: arrowX, pointsUp: placeBelow) {
                         completionPanel
                     }
-                } else if let signatureHelp {
+                } else if let signatureHelp, !signatureHelp.signatures.isEmpty {
                     calloutPanel(arrowX: arrowX, pointsUp: placeBelow) {
                         signaturePanel(signatureHelp, contentHeight: size.height - PopoverBubbleShape.arrowHeight)
                     }
@@ -680,7 +766,7 @@ private struct SourceEditorLanguageOverlay: View {
                 width: min(320, availableWidth),
                 height: min(CGFloat(min(completions.count, 8)) * 48 + 8, availableHeight)
             )
-        } else if signatureHelp != nil {
+        } else if let signatureHelp, !signatureHelp.signatures.isEmpty {
             return CGSize(width: min(560, availableWidth), height: min(360, availableHeight))
         } else if let hoverInfo, !hoverInfo.text.isEmpty {
             let isReference = hoverInfo.text.count > 240 || hoverInfo.text.contains("\n\n")
@@ -765,6 +851,14 @@ private struct SourceEditorLanguageOverlay: View {
                         .fill(index == selectedCompletionIndex ? Color.accentColor.opacity(0.16) : Color.clear)
                 )
                 .onTapGesture {
+                    onCompletionSelected(item)
+                }
+                // A tap gesture rather than a `Button` so a click never takes
+                // focus from the editor; say what the row is to assistive
+                // technology instead.
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(index == selectedCompletionIndex ? [.isButton, .isSelected] : .isButton)
+                .accessibilityAction {
                     onCompletionSelected(item)
                 }
             }
@@ -1224,6 +1318,8 @@ private struct SourceEditorLanguageOverlay: View {
         }
     }
 
+    /// Callers show this only for a non-empty `help.signatures` (the language
+    /// service can answer with none), which the index below relies on.
     private func signaturePanel(_ help: TypstSignatureHelp, contentHeight: CGFloat) -> some View {
         let signature = help.signatures[min(max(0, help.activeSignature), max(0, help.signatures.count - 1))]
         let parameter = signature.parameters.indices.contains(help.activeParameter) ? signature.parameters[help.activeParameter] : nil
@@ -1673,7 +1769,11 @@ enum SourceEditorSmartIndentation {
 
     private static func character(in text: NSString, at location: Int) -> Character? {
         guard location >= 0, location < text.length else { return nil }
-        return Character(text.substring(with: text.rangeOfComposedCharacterSequence(at: location)))
+        // `first`, never `Character(_:)`: NSString's composed sequences and
+        // Swift's grapheme clusters disagree for some scripts (a Sinhala or
+        // Malayalam conjunct is one sequence but two Characters), and
+        // `Character(_:)` traps on anything but exactly one.
+        return text.substring(with: text.rangeOfComposedCharacterSequence(at: location)).first
     }
 
     private static func indentUnit(in text: String, currentIndentation: String) -> String {
@@ -1711,8 +1811,13 @@ enum SourceEditorAutocorrection {
         var start = selectedRange.location
         while start > 0 {
             let characterRange = nsText.rangeOfComposedCharacterSequence(at: start - 1)
-            let character = Character(nsText.substring(with: characterRange))
-            guard character.isLetter || character == "'" || character == "’" else { break }
+            // A composed sequence can hold more than one Character (see
+            // `SourceEditorSmartIndentation.character(in:at:)`), so test them all
+            // rather than constructing one.
+            let sequence = nsText.substring(with: characterRange)
+            guard !sequence.isEmpty,
+                  sequence.allSatisfy({ $0.isLetter || $0 == "'" || $0 == "’" })
+            else { break }
             start = characterRange.location
         }
 
@@ -2199,7 +2304,9 @@ enum SourceEditorBracketPairing {
     private static func character(in text: NSString, at index: Int) -> Character? {
         guard index >= 0, index < text.length else { return nil }
         let range = text.rangeOfComposedCharacterSequence(at: index)
-        return Character(text.substring(with: range))
+        // `first`, not `Character(_:)`, which traps when the sequence is more
+        // than one Swift grapheme cluster.
+        return text.substring(with: range).first
     }
 
     private static func isWordCharacter(_ char: Character) -> Bool {

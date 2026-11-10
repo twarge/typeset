@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import SwiftUI
+import TipKit
 import TypesetCore
 import UniformTypeIdentifiers
 #if os(macOS)
@@ -27,6 +28,28 @@ struct TypesetApp: App {
             "editor.holdErrorPopupWhileEditing": true,
             "developer.lspDebugLogging": false
         ])
+        // Tips are shown once each and remembered across launches; a failure
+        // here only means none appear.
+        try? Tips.configure([.displayFrequency(.immediate)])
+        // The first compile otherwise pays for the system font scan (and the
+        // rest of the compiler's one-time setup) while the user waits on it.
+        TypstRuntime.warmUp()
+        Self.removeStaleTemporaryItems()
+    }
+
+    /// Drag exports, dropped files and iOS share exports are staged in the
+    /// temporary directory and must outlive the gesture or sheet that made
+    /// them, so nothing removes them at the time. Nothing from an earlier
+    /// launch is still in use, though.
+    private static func removeStaleTemporaryItems() {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+        Task.detached(priority: .utility) {
+            for name in ["TypesetDragExports", "TypesetDroppedImages", "TypesetDroppedFiles", "TypesetExports"] {
+                try? FileManager.default.removeItem(
+                    at: temporaryDirectory.appending(path: name, directoryHint: .isDirectory)
+                )
+            }
+        }
     }
 
     var body: some Scene {
@@ -117,6 +140,10 @@ struct TypesetCommandSet: Equatable {
     var showLineNumbers: Bool
     var setShowLineNumbers: (Bool) -> Void
     var showSettings: () -> Void
+    /// The document these commands act on. Several of them read it (where an
+    /// export goes, which bundle is compiled in place), and it is not state,
+    /// so it has to be part of the comparison below.
+    var documentURL: URL? = nil
 
     // The workspace rebuilds a fresh `TypesetCommandSet` on every body
     // evaluation and publishes it via `.focusedSceneValue`. Closures aren't
@@ -124,8 +151,12 @@ struct TypesetCommandSet: Equatable {
     // republish as a change, re-invalidates the publishing view, and spins an
     // infinite render loop (blank editor on iOS). The closures only ever act
     // on live `@State` storage, so two command sets are equivalent for focus
-    // purposes when their value-typed inputs match — compare only those.
+    // purposes when their value-typed inputs match — compare only those. The
+    // one thing the closures read that is NOT state is the view's `fileURL`:
+    // without it here, renaming or moving a document left the menus holding
+    // closures that still exported next to the old location.
     static func == (lhs: TypesetCommandSet, rhs: TypesetCommandSet) -> Bool {
+        lhs.documentURL == rhs.documentURL &&
         lhs.canExportPDFToDefaultLocation == rhs.canExportPDFToDefaultLocation &&
         lhs.canShrinkSelection == rhs.canShrinkSelection &&
         lhs.showLineNumbers == rhs.showLineNumbers
@@ -407,7 +438,10 @@ private enum TypesetAboutPanel {
             section("Tinymist License", file: "Tinymist-LICENSE"),
             section("Tinymist cmark-writer License", file: "Tinymist-cmark-writer-LICENSE"),
             section("Fira Code License", file: "FiraCode-LICENSE"),
-            section("Noto Sans CJK License", file: "NotoSansCJK-LICENSE")
+            section("Noto Sans CJK License", file: "NotoSansCJK-LICENSE"),
+            section("Typst Packages", file: "TypstPackages-NOTICE"),
+            section("GNU General Public License 3.0", file: "GPL-3.0"),
+            section("Eclipse Public License 2.0", file: "EPL-2.0")
         ]
         .filter { !$0.isEmpty }
         .joined(separator: "\n\n")

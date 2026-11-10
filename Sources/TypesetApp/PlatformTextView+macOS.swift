@@ -236,11 +236,21 @@ struct PlatformTextView: NSViewRepresentable {
         }
         textView.isEditable = isEditable
 
-        if let selectedRange, textView.selectedRange() != selectedRange {
-            textView.setSelectedRange(selectedRange)
-            // Navigation (preview seek, outline, diagnostics) anchors the
-            // target range so late layout can't drift it off-screen.
-            context.coordinator.anchorScroll(to: selectedRange)
+        if let requestedRange = selectedRange {
+            // The request can be for a text the native view hasn't caught up
+            // with (or has moved past); never hand AppKit a range outside it.
+            let length = (textView.string as NSString).length
+            let location = min(max(0, requestedRange.location), length)
+            let selectedRange = NSRange(
+                location: location,
+                length: min(max(0, requestedRange.length), length - location)
+            )
+            if textView.selectedRange() != selectedRange {
+                textView.setSelectedRange(selectedRange)
+                // Navigation (preview seek, outline, diagnostics) anchors the
+                // target range so late layout can't drift it off-screen.
+                context.coordinator.anchorScroll(to: selectedRange)
+            }
             DispatchQueue.main.async {
                 self.selectedRange = nil
             }
@@ -440,6 +450,13 @@ struct PlatformTextView: NSViewRepresentable {
         private var gestureStartFontSize = SourceEditorFont.defaultSize
         private var gestureCurrentFontSize = SourceEditorFont.defaultSize
         private var appliedFontSize = 0.0
+        /// True between a pinch's first and last events, while the text is
+        /// drawn at the gesture's size and the `fontSize` binding still holds
+        /// the size it started from.
+        private var isMagnifying = false
+        /// False until the document's text has first been put in the view.
+        /// That load is not an edit; every later change of the binding is.
+        private var hasLoadedInitialText = false
         private var lastFocusRequest = 0
         private let handledRequests: HandledEditorRequests
         private var nativeTextAwaitingBinding: String?
@@ -875,9 +892,23 @@ struct PlatformTextView: NSViewRepresentable {
         }
 
         func textView(_ textView: NSTextView, shouldChangeTextIn affectedRange: NSRange, replacementString: String?) -> Bool {
+            // A text the host changed is applied as an edit of its own (see
+            // `replaceTextUndoably`); it is not typing, and its prose ranges
+            // are already accounted for.
+            guard !isApplyingHighlighting else { return true }
             guard !isApplyingPairEdit,
                   textView.isEditable, !textView.hasMarkedText(),
                   let replacementString else { return true }
+            // Undo and redo replay recorded edits through this same delegate
+            // call. They must land exactly as recorded: pairing or indenting
+            // them would restore a different text than the one undone — an
+            // undone `)` deletion before another `)` became a caret move, an
+            // undone `(` deletion grew a closer.
+            if let undoManager = textView.undoManager,
+               undoManager.isUndoing || undoManager.isRedoing {
+                trackProseEdit(replacing: affectedRange, with: replacementString, in: textView.string)
+                return true
+            }
             let selectedRange = textView.selectedRange()
 
             if replacementString == "\n",
@@ -1045,9 +1076,17 @@ struct PlatformTextView: NSViewRepresentable {
                 } catch {
                     return
                 }
-                let tokens = await Task.detached(priority: .userInitiated) {
-                    TypstSyntaxHighlighter.tokens(in: snapshot, syntax: snapshotSyntax)
-                }.value
+                // A detached task doesn't inherit this one's cancellation, so
+                // pass it on: a superseded pass over a large file stops early
+                // instead of running to completion beside its replacement.
+                let tokenizing = Task.detached(priority: .userInitiated) {
+                    TypstSyntaxHighlighter.tokens(in: snapshot, syntax: snapshotSyntax, checkingCancellation: true)
+                }
+                let tokens = await withTaskCancellationHandler {
+                    await tokenizing.value
+                } onCancel: {
+                    tokenizing.cancel()
+                }
                 guard !Task.isCancelled,
                       let self,
                       let textView,
@@ -1121,6 +1160,11 @@ struct PlatformTextView: NSViewRepresentable {
                     self.fontSize = clampedSize
                 }
             }
+            // Mid-pinch the binding still holds the size the gesture started
+            // from (it is written once, when the gesture ends), and every
+            // reflow reaches this through an update pass. Applying the binding
+            // then would snap the text back to the old size between steps.
+            guard !isMagnifying else { return }
             guard abs(appliedFontSize - clampedSize) > 0.01 else { return }
             applyHighlighting(to: textView, text: textView.string)
         }
@@ -1130,6 +1174,7 @@ struct PlatformTextView: NSViewRepresentable {
 
             switch gesture.state {
             case .began:
+                isMagnifying = true
                 gestureStartFontSize = fontSize
                 gestureCurrentFontSize = fontSize
             case .changed:
@@ -1138,11 +1183,15 @@ struct PlatformTextView: NSViewRepresentable {
                 gestureCurrentFontSize = nextSize
                 applyFontOnly(to: textView, size: nextSize)
             default:
+                isMagnifying = false
                 let finalSize = gestureCurrentFontSize
                 if abs(finalSize - fontSize) > 0.01 {
                     fontSize = finalSize
                 }
                 gestureStartFontSize = finalSize
+                // The steps above changed only the font; bring the token
+                // styling and the squiggles up to date once, now it has settled.
+                scheduleRepaint(in: textView)
             }
         }
 
@@ -1180,13 +1229,16 @@ struct PlatformTextView: NSViewRepresentable {
                 }
                 autocorrectionProseRanges = proseRangesAreCurrent ? proseRanges : []
                 autocorrectionTextLength = (text as NSString).length
-                textView.undoManager?.disableUndoRegistration()
-                textView.textStorage?.setAttributedString(NSAttributedString(
-                    string: text,
-                    attributes: TypstSyntaxHighlighter.baseAttributes(font: font)
-                ))
-                textView.undoManager?.enableUndoRegistration()
+                if !hasLoadedInitialText || !replaceTextUndoably(in: textView, with: text, font: font) {
+                    textView.undoManager?.disableUndoRegistration()
+                    textView.textStorage?.setAttributedString(NSAttributedString(
+                        string: text,
+                        attributes: TypstSyntaxHighlighter.baseAttributes(font: font)
+                    ))
+                    textView.undoManager?.enableUndoRegistration()
+                }
             }
+            hasLoadedInitialText = true
 
             TypstSyntaxHighlighter.applyTemporaryTokens(to: textView, text: text, font: font, syntax: syntax)
             applyDiagnosticsAndSpelling(to: textView)
@@ -1197,14 +1249,47 @@ struct PlatformTextView: NSViewRepresentable {
             ))
         }
 
+        /// Puts a text the host changed — an accepted completion, a replace, a
+        /// reload — into the view as one ordinary edit, so it lands on the undo
+        /// stack and the actions already there keep describing the text they
+        /// were recorded against. Returns false, having changed nothing, when
+        /// the view won't take an edit (it is read-only, say).
+        private func replaceTextUndoably(in textView: NSTextView, with text: String, font: NSFont) -> Bool {
+            guard textView.isEditable,
+                  let textStorage = textView.textStorage,
+                  let edit = SourceEditorTextDiff.minimalEdit(from: textView.string, to: text)
+            else { return false }
+            // Its own undo step, not a continuation of whatever was being typed.
+            textView.breakUndoCoalescing()
+            // `isApplyingHighlighting` is set by the caller: the delegate lets
+            // this through untouched and doesn't report it back as typing.
+            guard textView.shouldChangeText(in: edit.range, replacementString: edit.replacement) else {
+                return false
+            }
+            textStorage.replaceCharacters(
+                in: edit.range,
+                with: NSAttributedString(
+                    string: edit.replacement,
+                    attributes: TypstSyntaxHighlighter.baseAttributes(font: font)
+                )
+            )
+            textView.didChangeText()
+            textView.breakUndoCoalescing()
+            return textView.string == text
+        }
+
         private func applyFontOnly(to textView: NSTextView, size: Double) {
             let font = SourceEditorFont.regular(size: size)
             appliedFontSize = Double(font.pointSize)
             textView.font = font
             textView.typingAttributes = TypstSyntaxHighlighter.baseAttributes(font: font)
 
+            // Font only, on purpose: this runs for every quarter-point step of
+            // a pinch, and the spelling pass walks all of the document's prose.
+            // The squiggles and token colors are temporary attributes keyed to
+            // characters, which a font change leaves in place; the gesture's
+            // end repaints them.
             TypstSyntaxHighlighter.applyTemporaryBaseFont(to: textView, font: font)
-            applyDiagnosticsAndSpelling(to: textView)
         }
 
         private func applyDiagnosticsAndSpelling(to textView: NSTextView) {
@@ -1793,11 +1878,16 @@ struct PlatformTextView: NSViewRepresentable {
             // image format Typst (and `SourceEditorDropSnippet.canCreateSnippet`)
             // already recognizes is supported automatically — no separate list.
             if let image = pastedImageFile(from: .general),
-               let url = writePastedImageToTempFile(data: image.data, fileExtension: image.fileExtension),
-               SourceEditorDropSnippet.canCreateSnippet(forFileName: url.lastPathComponent),
-               let snippet = onPasteExternalFile?(url) {
-                insertText(snippet, replacementRange: selectedRange())
-                return
+               let url = writePastedImageToTempFile(data: image.data, fileExtension: image.fileExtension) {
+                // The import below copies the bytes into the package before it
+                // returns, so the temporary file (and the directory made for
+                // it) has done its job either way.
+                defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+                if SourceEditorDropSnippet.canCreateSnippet(forFileName: url.lastPathComponent),
+                   let snippet = onPasteExternalFile?(url) {
+                    insertText(snippet, replacementRange: selectedRange())
+                    return
+                }
             }
 
             if let url = fileURL(from: .general),
@@ -1978,20 +2068,84 @@ struct PlatformTextView: NSViewRepresentable {
 final class LineNumberRulerView: NSRulerView {
         weak var textView: NSTextView?
         private let rulerWidth: CGFloat = 48
+        /// The number of the line containing a character offset, remembered
+        /// from the last draw so the next one counts newlines only across the
+        /// distance scrolled rather than from the top of the document.
+        private var lineNumberCache: (location: Int, lineNumber: Int)?
 
         init(textView: NSTextView) {
             self.textView = textView
             super.init(scrollView: textView.enclosingScrollView, orientation: .verticalRuler)
             clientView = textView
             ruleThickness = rulerWidth
+            if let textStorage = textView.textStorage {
+                NotificationCenter.default.addObserver(
+                    self,
+                    selector: #selector(lineNumberStorageDidEdit(_:)),
+                    name: NSTextStorage.didProcessEditingNotification,
+                    object: textStorage
+                )
+            }
         }
 
         required init(coder: NSCoder) {
             super.init(coder: coder)
         }
 
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+        }
+
+        @objc private func lineNumberStorageDidEdit(_ notification: Notification) {
+            guard let textStorage = notification.object as? NSTextStorage,
+                  textStorage.editedMask.contains(.editedCharacters) else { return }
+            lineNumberCache = nil
+            needsDisplay = true
+        }
+
         func invalidateLineNumbers() {
             needsDisplay = true
+        }
+
+        /// How many line feeds `text` has in `range`. A CRLF pair holds exactly
+        /// one, so Windows line endings count the same as Unix ones.
+        private static func lineFeedCount(in text: NSString, range: NSRange) -> Int {
+            var count = 0
+            var buffer = [unichar](repeating: 0, count: 4096)
+            var location = range.location
+            let end = NSMaxRange(range)
+            while location < end {
+                let length = min(buffer.count, end - location)
+                text.getCharacters(&buffer, range: NSRange(location: location, length: length))
+                for index in 0..<length where buffer[index] == 0x0A {
+                    count += 1
+                }
+                location += length
+            }
+            return count
+        }
+
+        /// The 1-based number of the line containing `location`.
+        private func lineNumber(at location: Int, in text: NSString) -> Int {
+            let location = min(max(0, location), text.length)
+            let lineNumber: Int
+            if let cache = lineNumberCache, cache.location <= text.length {
+                if cache.location <= location {
+                    lineNumber = cache.lineNumber + Self.lineFeedCount(
+                        in: text,
+                        range: NSRange(location: cache.location, length: location - cache.location)
+                    )
+                } else {
+                    lineNumber = cache.lineNumber - Self.lineFeedCount(
+                        in: text,
+                        range: NSRange(location: location, length: cache.location - location)
+                    )
+                }
+            } else {
+                lineNumber = 1 + Self.lineFeedCount(in: text, range: NSRange(location: 0, length: location))
+            }
+            lineNumberCache = (location, lineNumber)
+            return lineNumber
         }
 
         override func drawHashMarksAndLabels(in rect: NSRect) {
@@ -2012,17 +2166,52 @@ final class LineNumberRulerView: NSRulerView {
                 .foregroundColor: NSColor.secondaryLabelColor,
                 .paragraphStyle: paragraphStyle,
             ]
+            let originY = textView.textContainerOrigin.y - visibleRect.minY
 
+            func drawLabel(_ lineNumber: Int, beside lineRect: NSRect) {
+                let drawRect = NSRect(x: 4, y: lineRect.minY + originY, width: rulerWidth - 10, height: lineRect.height)
+                "\(lineNumber)".draw(in: drawRect, withAttributes: attributes)
+            }
+
+            // Count once for the first visible fragment, then carry the number
+            // down the visible range a fragment at a time.
+            var number = lineNumber(
+                at: layoutManager.characterIndexForGlyph(at: glyphRange.location),
+                in: text
+            )
             var glyphIndex = glyphRange.location
             while glyphIndex < NSMaxRange(glyphRange) {
-                var lineRange = NSRange()
-                let lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineRange)
-                let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
-                let lineNumber = text.substring(to: min(characterIndex, text.length)).filter { $0 == "\n" }.count + 1
-                let y = lineRect.minY + textView.textContainerOrigin.y - visibleRect.minY
-                let drawRect = NSRect(x: 4, y: y, width: rulerWidth - 10, height: lineRect.height)
-                "\(lineNumber)".draw(in: drawRect, withAttributes: attributes)
-                glyphIndex = NSMaxRange(lineRange)
+                var fragmentGlyphRange = NSRange()
+                let lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &fragmentGlyphRange)
+                let characterRange = layoutManager.characterRange(
+                    forGlyphRange: fragmentGlyphRange,
+                    actualGlyphRange: nil
+                )
+                // Number a line once, at its first fragment: the fragments a
+                // soft wrap adds below it belong to the same line.
+                let startsLine = characterRange.location == 0
+                    || (characterRange.location <= text.length
+                        && text.character(at: characterRange.location - 1) == 0x0A)
+                if startsLine {
+                    drawLabel(number, beside: lineRect)
+                }
+                if NSMaxRange(characterRange) <= text.length {
+                    number += Self.lineFeedCount(in: text, range: characterRange)
+                }
+                guard NSMaxRange(fragmentGlyphRange) > glyphIndex else { break }
+                glyphIndex = NSMaxRange(fragmentGlyphRange)
+            }
+
+            // The empty last line after a trailing newline (and the only line of
+            // an empty document) has no glyphs; TextKit lays it out separately.
+            let extraRect = layoutManager.extraLineFragmentRect
+            if extraRect.height > 0,
+               NSMaxRange(glyphRange) >= layoutManager.numberOfGlyphs,
+               extraRect.maxY >= visibleRect.minY - textView.textContainerOrigin.y,
+               extraRect.minY <= visibleRect.maxY - textView.textContainerOrigin.y {
+                // Having walked to the end of the text, `number` is already
+                // the one after the last newline.
+                drawLabel(number, beside: extraRect)
             }
         }
     }

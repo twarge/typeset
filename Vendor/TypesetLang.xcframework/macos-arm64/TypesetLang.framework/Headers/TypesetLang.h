@@ -37,6 +37,7 @@ char *typeset_typst_compile_svg(const char *root, const char *main_path, const c
 char *typeset_typst_compile_pdf(const char *root, const char *main_path, const char *package_path, const char *package_cache_path, const char *overlay_json);
 char *typeset_typst_compile_html(const char *root, const char *main_path, const char *package_path, const char *package_cache_path, const char *overlay_json);
 char *typeset_typst_set_bundled_font_directory(const char *directory);
+char *typeset_typst_warm_fonts(void);
 char *typeset_typst_version(void);
 void typeset_lang_string_free(char *string);
 

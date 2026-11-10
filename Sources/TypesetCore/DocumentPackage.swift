@@ -56,8 +56,12 @@ public struct SkippedFile: Hashable, Sendable {
 }
 
 public struct PackageFile: Identifiable, Hashable, Sendable {
-    public var path: String
-    public var data: Data
+    public var path: String {
+        didSet { isTextEditable = Self.isEditableText(path: path, data: data) }
+    }
+    public var data: Data {
+        didSet { isTextEditable = Self.isEditableText(path: path, data: data) }
+    }
 
     public var id: String { path }
     public var name: String { URL(fileURLWithPath: path).lastPathComponent }
@@ -70,14 +74,33 @@ public struct PackageFile: Identifiable, Hashable, Sendable {
         "typ", "txt", "md", "py", "csv", "tsv", "json", "toml", "yaml", "yml", "bib",
     ]
 
-    public var isTextEditable: Bool {
-        let fileExtension = (path as NSString).pathExtension.lowercased()
-        return Self.editableTextExtensions.contains(fileExtension)
-    }
+    /// Whether the editor may open this file as text: one of
+    /// `editableTextExtensions`, holding valid UTF-8.
+    ///
+    /// The second half is what keeps an edit from destroying a file. Text
+    /// goes into the editor decoded as UTF-8 and comes back out encoded as
+    /// UTF-8, and a decode of anything else — a Latin-1 `.bib`, a UTF-16
+    /// `.csv` out of Excel — replaces every byte it cannot read with U+FFFD.
+    /// Saving that would write the replacement characters over the original
+    /// bytes for good, so such a file is treated like any other asset: shown,
+    /// compiled against, never rewritten.
+    ///
+    /// Stored rather than computed because views ask it of every file on
+    /// every pass, and the answer takes a scan of the file's bytes.
+    public private(set) var isTextEditable: Bool
 
     public init(path: String, data: Data) {
         self.path = path
         self.data = data
+        isTextEditable = Self.isEditableText(path: path, data: data)
+    }
+
+    private static func isEditableText(path: String, data: Data) -> Bool {
+        let fileExtension = (path as NSString).pathExtension.lowercased()
+        guard editableTextExtensions.contains(fileExtension) else { return false }
+        // A byte-order mark is itself valid UTF-8, so files that carry one
+        // pass; UTF-16 and the single-byte encodings do not.
+        return String(data: data, encoding: .utf8) != nil
     }
 }
 
@@ -206,6 +229,12 @@ public struct DocumentPackage: Equatable, Sendable {
     /// waiting on a download; the app requests them (see
     /// `CloudFileMaterializer`) and re-reads the folder once they arrive.
     public private(set) var pendingDownloads: [String] = []
+
+    /// The root `.gitignore` a `.typeset` bundle was opened with, if it had
+    /// one. The file is the app's to maintain — it keeps the editor-state
+    /// file out of version control — but not the app's alone: whatever else
+    /// the user listed there is carried back out on save.
+    public private(set) var bundleGitignore: Data?
 
     /// The directory this package mirrors on disk — the folder it was loaded
     /// from, or the `.typeset` bundle the document system persists it to —
@@ -599,14 +628,20 @@ public struct DocumentPackage: Equatable, Sendable {
 
     public mutating func createFolder(named name: String, in parentPath: String? = nil) throws -> String {
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard Self.isValidPathComponent(cleanName) else {
+        guard Self.isValidFolderName(cleanName) else {
             throw TypesetPackageError.invalidFolderName(name)
         }
 
         let parent = Self.normalizedFolderPath(parentPath ?? "")
         let path = parent.isEmpty ? cleanName : "\(parent)/\(cleanName)"
-        guard !allFolderPaths.contains(path) else {
-            throw TypesetPackageError.folderAlreadyExists(path)
+        guard !Self.isReservedRootPath(path) else {
+            throw TypesetPackageError.invalidFolderName(name)
+        }
+        if let existing = folderOccupying(path) {
+            throw TypesetPackageError.folderAlreadyExists(existing)
+        }
+        if let existing = fileOccupying(path) {
+            throw TypesetPackageError.fileAlreadyExists(existing)
         }
 
         folders = Self.normalizedFolders(folders + [path])
@@ -620,6 +655,9 @@ public struct DocumentPackage: Equatable, Sendable {
         }
 
         let folder = Self.normalizedFolderPath(folderPath ?? "")
+        guard !Self.isReservedRootPath(folder.isEmpty ? cleanName : "\(folder)/\(cleanName)") else {
+            throw TypesetPackageError.invalidFileName(name)
+        }
         let path = uniqueFilePath(named: cleanName, in: folder)
         files.append(PackageFile(path: path, data: data))
         changedPaths.insert(path)
@@ -644,8 +682,14 @@ public struct DocumentPackage: Equatable, Sendable {
         let name = files[index].name
         let destinationPath = folder.isEmpty ? name : "\(folder)/\(name)"
         guard destinationPath != sourcePath else { return sourcePath }
-        guard !files.contains(where: { $0.path == destinationPath }) else {
-            throw TypesetPackageError.fileAlreadyExists(destinationPath)
+        guard !Self.isReservedRootPath(destinationPath) else {
+            throw TypesetPackageError.invalidFileName(name)
+        }
+        if let existing = fileOccupying(destinationPath, otherThan: sourcePath) {
+            throw TypesetPackageError.fileAlreadyExists(existing)
+        }
+        if let existing = folderOccupying(destinationPath) {
+            throw TypesetPackageError.folderAlreadyExists(existing)
         }
 
         updateCompileTargetAfterMoving(sourcePath: sourcePath, destinationPath: destinationPath)
@@ -687,11 +731,14 @@ public struct DocumentPackage: Equatable, Sendable {
         let name = URL(fileURLWithPath: folderPath).lastPathComponent
         let destinationPath = destinationFolder.isEmpty ? name : "\(destinationFolder)/\(name)"
         guard destinationPath != folderPath else { return folderPath }
-        guard !allFolderPaths.contains(destinationPath) else {
-            throw TypesetPackageError.folderAlreadyExists(destinationPath)
+        guard !Self.isReservedRootPath(destinationPath) else {
+            throw TypesetPackageError.invalidFolderName(name)
         }
-        guard !files.contains(where: { $0.path == destinationPath }) else {
-            throw TypesetPackageError.fileAlreadyExists(destinationPath)
+        if let existing = folderOccupying(destinationPath, otherThan: folderPath) {
+            throw TypesetPackageError.folderAlreadyExists(existing)
+        }
+        if let existing = fileOccupying(destinationPath) {
+            throw TypesetPackageError.fileAlreadyExists(existing)
         }
 
         recordFolderChange(at: folderPath, movedTo: destinationPath)
@@ -739,8 +786,16 @@ public struct DocumentPackage: Equatable, Sendable {
         let folder = Self.parentFolder(forFilePath: path)
         let newPath = folder.isEmpty ? cleanName : "\(folder)/\(cleanName)"
         guard newPath != path else { return path }
-        guard !files.contains(where: { $0.path == newPath }) else {
-            throw TypesetPackageError.fileAlreadyExists(newPath)
+        guard !Self.isReservedRootPath(newPath) else {
+            throw TypesetPackageError.invalidFileName(name)
+        }
+        // `otherThan: path` is what lets a file change only the case of its
+        // own name: on disk that name is taken, but by the file itself.
+        if let existing = fileOccupying(newPath, otherThan: path) {
+            throw TypesetPackageError.fileAlreadyExists(existing)
+        }
+        if let existing = folderOccupying(newPath) {
+            throw TypesetPackageError.folderAlreadyExists(existing)
         }
 
         updateCompileTargetAfterMoving(sourcePath: path, destinationPath: newPath)
@@ -769,18 +824,21 @@ public struct DocumentPackage: Equatable, Sendable {
             .filter { $0.hasPrefix(folderPath + "/") }
 
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard Self.isValidPathComponent(cleanName) else {
+        guard Self.isValidFolderName(cleanName) else {
             throw TypesetPackageError.invalidFolderName(name)
         }
 
         let parent = Self.parentFolder(forFolderPath: folderPath)
         let newPath = parent.isEmpty ? cleanName : "\(parent)/\(cleanName)"
         guard newPath != folderPath else { return folderPath }
-        guard !allFolderPaths.contains(newPath) else {
-            throw TypesetPackageError.folderAlreadyExists(newPath)
+        guard !Self.isReservedRootPath(newPath) else {
+            throw TypesetPackageError.invalidFolderName(name)
         }
-        guard !files.contains(where: { $0.path == newPath }) else {
-            throw TypesetPackageError.fileAlreadyExists(newPath)
+        if let existing = folderOccupying(newPath, otherThan: folderPath) {
+            throw TypesetPackageError.folderAlreadyExists(existing)
+        }
+        if let existing = fileOccupying(newPath) {
+            throw TypesetPackageError.fileAlreadyExists(existing)
         }
 
         recordFolderChange(at: folderPath, movedTo: newPath)
@@ -906,6 +964,65 @@ public struct DocumentPackage: Equatable, Sendable {
         !name.isEmpty && !name.contains("/") && name != "." && name != ".."
     }
 
+    /// A folder the app may create. Beyond being a path component, it has to
+    /// be one the folder loader would read back: a folder that loads as
+    /// absent would vanish from the document the next time it is opened.
+    private static func isValidFolderName(_ name: String) -> Bool {
+        isValidPathComponent(name) && !isSkippedDirectoryName(name)
+    }
+
+    /// Directories the folder loader leaves out, wherever they sit. A loose
+    /// `.typ` is opened together with the folder around it, and that folder
+    /// is often a repository or a project: reading `.git` or `node_modules`
+    /// into the package means holding thousands of files in memory that no
+    /// document refers to, and re-reading them on every change to the folder.
+    ///
+    /// A list of names rather than every dot-directory: a document can keep
+    /// its own sources and figures in a folder like `.assets`, and those have
+    /// to stay visible, editable and searchable.
+    public static func isSkippedDirectoryName(_ name: String) -> Bool {
+        skippedDirectoryNames.contains(name)
+    }
+
+    private static let skippedDirectoryNames: Set<String> = [
+        ".git", ".svn", ".hg", ".jj", ".build", ".venv", "node_modules", "__pycache__",
+    ]
+
+    /// Names at the package root that belong to the package format: the
+    /// editor-state file, the `.gitignore` that keeps it out of version
+    /// control, and the obsolete compile-target file. Loading never surfaces
+    /// them as package files and saving writes its own, so a user file under
+    /// one of these names would be a second entry for the same name on save,
+    /// and gone on the next open.
+    private static func isReservedRootPath(_ path: String) -> Bool {
+        guard !path.contains("/") else { return false }
+        let name = collisionKey(path)
+        return name == stateFileName || name == gitignoreFileName || name == legacyMetadataFileName
+    }
+
+    /// The form of a path in which two names that would be the same item on
+    /// disk are equal. The volumes documents live on (APFS as Apple ships
+    /// it, and every cloud provider's) fold case and Unicode normalization,
+    /// so `Fig.png` and `fig.png` are one file there — and a package holding
+    /// both would save one over the other.
+    private static func collisionKey(_ path: String) -> String {
+        path.precomposedStringWithCanonicalMapping.lowercased()
+    }
+
+    /// The file that already has `path` on disk, if any, leaving aside
+    /// `excluded` (the item being renamed or moved).
+    private func fileOccupying(_ path: String, otherThan excluded: String? = nil) -> String? {
+        let key = Self.collisionKey(path)
+        return files.first { $0.path != excluded && Self.collisionKey($0.path) == key }?.path
+    }
+
+    /// The folder that already has `path` on disk, if any, leaving aside
+    /// `excluded`.
+    private func folderOccupying(_ path: String, otherThan excluded: String? = nil) -> String? {
+        let key = Self.collisionKey(path)
+        return allFolderPaths.first { $0 != excluded && Self.collisionKey($0) == key }
+    }
+
     private static func parentFolder(forFilePath path: String) -> String {
         let parts = path.split(separator: "/").map(String.init)
         guard parts.count > 1 else { return "" }
@@ -927,28 +1044,153 @@ public struct DocumentPackage: Equatable, Sendable {
         return path
     }
 
+    /// Rewrites the paths in Typst sources that a move left pointing at the
+    /// wrong place. Called after the move, so `files` already carry their new
+    /// paths.
+    ///
+    /// A quoted string is rewritten only when it resolves — from the folder of
+    /// the file it is written in, or from the root when it starts with `/` —
+    /// to a file in this package, and the move changed where that leads. That
+    /// covers both ends of a move: other files' references to what moved, and
+    /// the moved file's own relative references to what stayed. A string that
+    /// merely spells a moved file's name, in a folder where that name means a
+    /// different file or nothing at all, is left alone, as is every file that
+    /// isn't Typst source: only Typst resolves paths this way, and the same
+    /// characters in a data file are data.
     private mutating func updateFileReferences(for moves: [(oldPath: String, newPath: String)]) {
+        let moves = moves.filter { $0.oldPath != $0.newPath }
         guard !moves.isEmpty else { return }
 
-        for index in files.indices where files[index].isTextEditable {
+        let newPaths = Dictionary(moves.map { ($0.oldPath, $0.newPath) }, uniquingKeysWith: { first, _ in first })
+        let oldPaths = Dictionary(moves.map { ($0.newPath, $0.oldPath) }, uniquingKeysWith: { first, _ in first })
+        let filesBeforeMove = Set(files.map { oldPaths[$0.path] ?? $0.path })
+
+        // `isTextEditable` rather than only `isTypstSource`: a source that is
+        // not valid UTF-8 cannot be rewritten without damaging it.
+        for index in files.indices where files[index].isTypstSource && files[index].isTextEditable {
+            let path = files[index].path
             let original = String(decoding: files[index].data, as: UTF8.self)
-            var updated = original
-            for (oldPath, newPath) in moves where oldPath != newPath {
-                updated = updated.replacingOccurrences(of: "\"\(oldPath)\"", with: "\"\(newPath)\"")
-                let oldParent = (oldPath as NSString).deletingLastPathComponent
-                let newParent = (newPath as NSString).deletingLastPathComponent
-                let oldName = (oldPath as NSString).lastPathComponent
-                let newName = (newPath as NSString).lastPathComponent
-                if oldParent == newParent && oldName != newName {
-                    updated = updated.replacingOccurrences(of: "\"\(oldName)\"", with: "\"\(newName)\"")
-                }
-            }
+            let updated = Self.rewritingReferences(
+                in: original,
+                writtenIn: Self.parentFolder(forFilePath: oldPaths[path] ?? path),
+                nowIn: Self.parentFolder(forFilePath: path),
+                newPaths: newPaths,
+                filesBeforeMove: filesBeforeMove
+            )
 
             if updated != original {
                 files[index].data = Data(updated.utf8)
-                changedPaths.insert(files[index].path)
+                changedPaths.insert(path)
             }
         }
+    }
+
+    private static func rewritingReferences(
+        in text: String,
+        writtenIn oldFolder: String,
+        nowIn newFolder: String,
+        newPaths: [String: String],
+        filesBeforeMove: Set<String>
+    ) -> String {
+        var output = ""
+        var copiedUpTo = text.startIndex
+        // The nearest quote before `index` on the same line that has not
+        // closed a rewritten reference. Every pair of neighbouring quotes is
+        // tried as a string, rather than pairing them off from the start of
+        // the line: prose is free to hold a stray `"`, and pairing from there
+        // would read every real string on the line inside out.
+        var openQuote: String.Index?
+
+        var index = text.startIndex
+        while index < text.endIndex {
+            let character = text[index]
+            if character.isNewline {
+                openQuote = nil
+            } else if character == "\"" {
+                if let quote = openQuote {
+                    let contentStart = text.index(after: quote)
+                    if let reference = updatedReference(
+                        String(text[contentStart..<index]),
+                        writtenIn: oldFolder,
+                        nowIn: newFolder,
+                        newPaths: newPaths,
+                        filesBeforeMove: filesBeforeMove
+                    ) {
+                        output += text[copiedUpTo..<contentStart]
+                        output += reference
+                        copiedUpTo = index
+                        openQuote = nil
+                    } else {
+                        openQuote = index
+                    }
+                } else {
+                    openQuote = index
+                }
+            }
+            index = text.index(after: index)
+        }
+
+        guard copiedUpTo > text.startIndex else { return text }
+        output += text[copiedUpTo...]
+        return output
+    }
+
+    /// What `reference` should read after the move, or `nil` to leave it be.
+    private static func updatedReference(
+        _ reference: String,
+        writtenIn oldFolder: String,
+        nowIn newFolder: String,
+        newPaths: [String: String],
+        filesBeforeMove: Set<String>
+    ) -> String? {
+        // Escapes would need unescaping to resolve; no path this app writes
+        // has one, so a string with a backslash is not treated as a path.
+        guard !reference.isEmpty, !reference.contains("\\") else { return nil }
+
+        let isRootRelative = reference.hasPrefix("/")
+        guard let target = resolvedPath(reference, from: isRootRelative ? "" : oldFolder),
+              filesBeforeMove.contains(target) else {
+            return nil
+        }
+        let newTarget = newPaths[target] ?? target
+
+        if isRootRelative {
+            return newTarget == target ? nil : "/" + newTarget
+        }
+        guard newTarget != target || newFolder != oldFolder else { return nil }
+        let updated = relativePath(to: newTarget, from: newFolder)
+        return updated == reference ? nil : updated
+    }
+
+    /// The package path `reference` names when written in `folder`, or `nil`
+    /// when it climbs out of the package.
+    private static func resolvedPath(_ reference: String, from folder: String) -> String? {
+        var parts = folder.split(separator: "/").map(String.init)
+        for part in reference.split(separator: "/", omittingEmptySubsequences: true) {
+            switch part {
+            case ".":
+                continue
+            case "..":
+                guard !parts.isEmpty else { return nil }
+                parts.removeLast()
+            default:
+                parts.append(String(part))
+            }
+        }
+        return parts.joined(separator: "/")
+    }
+
+    private static func relativePath(to path: String, from folder: String) -> String {
+        let target = path.split(separator: "/").map(String.init)
+        let base = folder.split(separator: "/").map(String.init)
+        var shared = 0
+        // The last component of `target` is the file itself, never a shared
+        // folder.
+        while shared < base.count, shared < target.count - 1, base[shared] == target[shared] {
+            shared += 1
+        }
+        let climb = Array(repeating: "..", count: base.count - shared)
+        return (climb + target[shared...]).joined(separator: "/")
     }
 
     /// Records a folder and its subfolders as deliberately deleted (or moved
@@ -998,9 +1240,10 @@ public struct DocumentPackage: Equatable, Sendable {
             folder.isEmpty ? candidate : "\(folder)/\(candidate)"
         }
 
-        let existingPaths = Set(files.map(\.path))
+        // Folders count too, and case does not (see `collisionKey`).
+        let existingPaths = Set((files.map(\.path) + allFolderPaths).map(Self.collisionKey))
         let originalPath = path(for: name)
-        guard existingPaths.contains(originalPath) else { return originalPath }
+        guard existingPaths.contains(Self.collisionKey(originalPath)) else { return originalPath }
 
         let nsName = name as NSString
         let base = nsName.deletingPathExtension
@@ -1010,7 +1253,7 @@ public struct DocumentPackage: Equatable, Sendable {
         while true {
             let candidateName = ext.isEmpty ? "\(base) \(index)" : "\(base) \(index).\(ext)"
             let candidatePath = path(for: candidateName)
-            if !existingPaths.contains(candidatePath) {
+            if !existingPaths.contains(Self.collisionKey(candidatePath)) {
                 return candidatePath
             }
             index += 1
@@ -1175,6 +1418,7 @@ public extension DocumentPackage {
             state: entries.state ?? DocumentPackageState()
         )
         persistedState = entries.state
+        bundleGitignore = entries.gitignore
         recordLoadedBaseline()
     }
 
@@ -1208,11 +1452,58 @@ public extension DocumentPackage {
         state.preferredFilename = Self.stateFileName
         root.addFileWrapper(state)
 
-        let gitignore = FileWrapper(regularFileWithContents: Data("\(Self.stateFileName)\n".utf8))
+        let gitignore = FileWrapper(regularFileWithContents: Self.gitignoreContents(keeping: bundleGitignore))
         gitignore.preferredFilename = Self.gitignoreFileName
         root.addFileWrapper(gitignore)
 
+        Self.carryOverSymbolicLinks(from: previous, to: root)
+
         return root
+    }
+
+    /// The root `.gitignore` to save: the user's own, with the state file
+    /// added if they hadn't listed it, or just the state file when the bundle
+    /// had none.
+    private static func gitignoreContents(keeping existing: Data?) -> Data {
+        let stateLine = Data("\(stateFileName)\n".utf8)
+        guard let existing, !existing.isEmpty else { return stateLine }
+        // Not text we can read line by line: leave it exactly as found
+        // rather than guess at where a line could be added.
+        guard let text = String(data: existing, encoding: .utf8) else { return existing }
+
+        let ignoresState = text.split(whereSeparator: \.isNewline).contains { line in
+            let pattern = line.trimmingCharacters(in: .whitespaces)
+            return pattern == stateFileName || pattern == "/\(stateFileName)"
+        }
+        if ignoresState { return existing }
+
+        var contents = existing
+        if text.last?.isNewline != true {
+            contents.append(Data("\n".utf8))
+        }
+        contents.append(stateLine)
+        return contents
+    }
+
+    /// Re-adds the symbolic links of the wrapper the document was read from.
+    /// A link is not a package file — the loader skips it rather than read
+    /// through it — so a wrapper built from the package alone has none, and
+    /// saving it would delete links the user put in the bundle. A link is
+    /// carried over only where its folder still exists and nothing in the
+    /// package has since taken its name; one inside a folder that was moved
+    /// or renamed this session is not followed there.
+    private static func carryOverSymbolicLinks(from previous: FileWrapper?, to directory: FileWrapper) {
+        guard let previous, previous.isDirectory, let previousChildren = previous.fileWrappers else { return }
+        for (name, child) in previousChildren {
+            let current = directory.fileWrappers?[name]
+            if child.isSymbolicLink {
+                if current == nil {
+                    directory.addFileWrapper(child)
+                }
+            } else if child.isDirectory, let current, current.isDirectory {
+                carryOverSymbolicLinks(from: child, to: current)
+            }
+        }
     }
 
     /// Finds the regular-file wrapper at `parts` inside `previous`, or `nil`
@@ -1232,8 +1523,8 @@ public extension DocumentPackage {
         return leaf
     }
 
-    private static func flatten(wrappers: [String: FileWrapper], prefix: String) throws -> (files: [PackageFile], folders: [String], state: DocumentPackageState?) {
-        try wrappers.reduce(into: (files: [PackageFile](), folders: [String](), state: Optional<DocumentPackageState>.none)) { result, entry in
+    private static func flatten(wrappers: [String: FileWrapper], prefix: String) throws -> (files: [PackageFile], folders: [String], state: DocumentPackageState?, gitignore: Data?) {
+        try wrappers.reduce(into: (files: [PackageFile](), folders: [String](), state: Optional<DocumentPackageState>.none, gitignore: Optional<Data>.none)) { result, entry in
             let name = entry.key
             let wrapper = entry.value
             let path = prefix.isEmpty ? name : "\(prefix)/\(name)"
@@ -1247,6 +1538,12 @@ public extension DocumentPackage {
                 return
             }
             if prefix.isEmpty, name == Self.gitignoreFileName {
+                // Not a package file, but kept: see `bundleGitignore`.
+                // `regularFileContents` raises on anything but a regular
+                // file, and a `.gitignore` can be a symbolic link.
+                if wrapper.isRegularFile {
+                    result.gitignore = wrapper.regularFileContents
+                }
                 return
             }
 
@@ -1268,7 +1565,8 @@ public extension DocumentPackage {
                 result.files.append(PackageFile(path: path, data: contents))
             }
             // Anything else (symlinks, unreadable specials) is skipped rather
-            // than imported as an empty file.
+            // than imported as an empty file. Symlinks are put back on save
+            // (see `carryOverSymbolicLinks`).
         }
     }
 
@@ -1514,6 +1812,11 @@ public extension DocumentPackage {
         }
 
         if resourceValues.isDirectory == true {
+            // Left on disk and out of the package; nothing here tracks them,
+            // so a save can neither rewrite nor remove them.
+            if isSkippedDirectoryName(name) {
+                return
+            }
             folders.append(relativePath)
             let children = try FileManager.default.contentsOfDirectory(
                 at: url,
@@ -1532,6 +1835,10 @@ public extension DocumentPackage {
                 )
             }
         } else if resourceValues.isRegularFile == true {
+            // Finder's per-folder view settings: never part of a document.
+            if name == ".DS_Store" {
+                return
+            }
             switch readRegularFile(at: url) {
             case .data(let data):
                 files.append(PackageFile(path: relativePath, data: data))
@@ -1549,19 +1856,7 @@ public extension DocumentPackage {
         }
     }
 
-    /// Reads a folder file's bytes, materializing a cloud placeholder first.
-    ///
-    /// Items in a File Provider volume (iCloud Drive, Box, Dropbox, OneDrive…)
-    /// report `.notDownloaded` until their content is on this device. A plain
-    /// read of such an item does not fetch it — on third-party providers it
-    /// fails outright — and `startDownloadingUbiquitousItem` only reaches
-    /// iCloud. A read under `NSFileCoordinator` is what every provider honors:
-    /// it asks the provider for the content and blocks until it arrives. If
-    /// even that fails, the provider has a stale entry for content it can no
-    /// longer produce, and the caller leaves the file out.
-    ///
-    /// Mapping keeps large assets backed by the file on disk instead of
-    /// resident in memory; safe because writers here replace atomically.
+    /// What became of an attempt to read a folder file; see `readRegularFile`.
     private enum RegularFileRead {
         case data(Data)
         case notDownloaded
@@ -1578,8 +1873,9 @@ public extension DocumentPackage {
     /// under `NSFileCoordinator`, which asks the provider for the content; if
     /// that fails too, the file is unreadable and left out.
     ///
-    /// Mapping keeps large assets backed by the file on disk instead of
-    /// resident in memory; safe because writers here replace atomically.
+    /// Large assets are mapped, which keeps them backed by the file on disk
+    /// instead of resident in memory. Everything else is read: see
+    /// `readingOptions(forFileAt:)`.
     private static func readRegularFile(at url: URL) -> RegularFileRead {
         // Resource values are cached on the URL instance, so look them up on
         // a fresh one to see the provider's current answer.
@@ -1588,7 +1884,7 @@ public extension DocumentPackage {
         if cloudValues?.ubiquitousItemDownloadingStatus == .notDownloaded {
             return .notDownloaded
         }
-        if let data = try? Data(contentsOf: url, options: [.mappedIfSafe]) {
+        if let data = try? Data(contentsOf: url, options: readingOptions(forFileAt: url)) {
             return .data(data)
         }
 
@@ -1600,7 +1896,7 @@ public extension DocumentPackage {
             error: &coordinationError
         ) { coordinatedURL in
             do {
-                outcome = .data(try Data(contentsOf: coordinatedURL, options: [.mappedIfSafe]))
+                outcome = .data(try Data(contentsOf: coordinatedURL, options: readingOptions(forFileAt: coordinatedURL)))
             } catch {
                 outcome = .unreadable(error.localizedDescription)
             }
@@ -1609,6 +1905,31 @@ public extension DocumentPackage {
             return .unreadable(coordinationError.localizedDescription)
         }
         return outcome
+    }
+
+    /// Files up to this size are read into memory rather than mapped.
+    private static let mappedReadThreshold = 64 << 10
+
+    /// How to read a folder file: mapped only when it is large.
+    ///
+    /// A mapping is sound only while the file is replaced, never rewritten:
+    /// touching a mapped page of a file that has since been truncated is a
+    /// crash (SIGBUS), not an error. This app replaces atomically, but the
+    /// folder is shared with everything else the user runs — an editor saving
+    /// a source in place, a script regenerating a plot or a data file with a
+    /// plain `open(…, "w")` — and those truncate. What such tools rewrite is
+    /// small, so small files are read outright and cannot be pulled out from
+    /// under the package. Mapping stays for the files where it matters: a
+    /// folder's large images, fonts and data sets would otherwise all sit in
+    /// memory at once, which on iOS is the difference between opening the
+    /// document and being killed. A large file rewritten in place while the
+    /// document is open remains exposed; that is the trade.
+    private static func readingOptions(forFileAt url: URL) -> Data.ReadingOptions {
+        let size = (try? URL(fileURLWithPath: url.path).resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+        let fileExtension = url.pathExtension.lowercased()
+        if PackageFile.editableTextExtensions.contains(fileExtension) { return [] }
+        guard let size, size > mappedReadThreshold else { return [] }
+        return [.mappedIfSafe]
     }
 
     private static func relativePackagePath(for url: URL, rootURL: URL) -> String {

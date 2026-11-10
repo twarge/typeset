@@ -1134,3 +1134,259 @@ private func makeMirroredReportFolder() throws -> (root: URL, package: DocumentP
     #expect(plan.folders.isEmpty)
     #expect(Set(plan.retained) == ["drafts/from-script.txt", "drafts"])
 }
+
+@Test func textFilesThatAreNotUTF8AreNotEditable() throws {
+    // "@book{café}" in Latin-1, and "a,b" as Excel exports it (UTF-16 LE with
+    // a byte-order mark). Decoding either as UTF-8 swaps bytes for U+FFFD, and
+    // an edit would save that damage back over the original.
+    let latin1 = Data([0x40, 0x62, 0x6F, 0x6F, 0x6B, 0x7B, 0x63, 0x61, 0x66, 0xE9, 0x7D])
+    let utf16 = Data([0xFF, 0xFE, 0x61, 0x00, 0x2C, 0x00, 0x62, 0x00])
+    let utf8WithBOM = Data([0xEF, 0xBB, 0xBF]) + Data("a,b".utf8)
+    var package = try DocumentPackage(files: [
+        PackageFile(path: "main.typ", data: Data("= Main".utf8)),
+        PackageFile(path: "refs.bib", data: latin1),
+        PackageFile(path: "table.csv", data: utf16),
+        PackageFile(path: "bom.csv", data: utf8WithBOM),
+    ])
+
+    #expect(package.files.first { $0.path == "refs.bib" }?.isTextEditable == false)
+    #expect(package.files.first { $0.path == "table.csv" }?.isTextEditable == false)
+    #expect(package.files.first { $0.path == "bom.csv" }?.isTextEditable == true)
+
+    #expect(throws: TypesetPackageError.unsupportedFile("refs.bib")) {
+        try package.updateText("@book{cafe}", for: "refs.bib")
+    }
+    #expect(package.files.first { $0.path == "refs.bib" }?.data == latin1)
+
+    // Editability follows the bytes: replaced with UTF-8, the file opens.
+    try package.updateFileData(Data("@book{café}".utf8), for: "refs.bib")
+    #expect(package.files.first { $0.path == "refs.bib" }?.isTextEditable == true)
+}
+
+@Test func referenceUpdatesLeaveUndecodableSourcesUntouched() throws {
+    let undecodable = Data("#include \"old.typ\" ".utf8) + Data([0xE9])
+    var package = try DocumentPackage(files: [
+        PackageFile(path: "main.typ", data: Data("#include \"old.typ\"".utf8)),
+        PackageFile(path: "notes.typ", data: undecodable),
+        PackageFile(path: "old.typ", data: Data("= Old".utf8)),
+    ])
+
+    _ = try package.renameFile(at: "old.typ", to: "new.typ", updatingReferences: true)
+
+    #expect(package.text(for: "main.typ") == "#include \"new.typ\"")
+    #expect(package.files.first { $0.path == "notes.typ" }?.data == undecodable)
+    #expect(!package.changedPaths.contains("notes.typ"))
+}
+
+@Test func referenceUpdatesFollowWhereAPathLeads() throws {
+    var package = try DocumentPackage(files: [
+        PackageFile(path: "main.typ", data: Data("#include \"chapters/intro.typ\"\n#include \"/chapters/intro.typ\"".utf8)),
+        PackageFile(path: "chapters/intro.typ", data: Data("= Intro".utf8)),
+        PackageFile(path: "chapters/index.typ", data: Data("It's 5\" wide: #include \"../chapters/intro.typ\"".utf8)),
+        // The same name in another folder is another file.
+        PackageFile(path: "appendix/main.typ", data: Data("#include \"intro.typ\"".utf8)),
+        PackageFile(path: "appendix/intro.typ", data: Data("= Appendix intro".utf8)),
+        // Only Typst resolves paths; in a data file the same text is data.
+        PackageFile(path: "data.json", data: Data("{\"file\": \"chapters/intro.typ\"}".utf8)),
+    ])
+
+    _ = try package.renameFile(at: "chapters/intro.typ", to: "overview.typ", updatingReferences: true)
+
+    #expect(package.text(for: "main.typ") == "#include \"chapters/overview.typ\"\n#include \"/chapters/overview.typ\"")
+    #expect(package.text(for: "chapters/index.typ") == "It's 5\" wide: #include \"overview.typ\"")
+    #expect(package.text(for: "appendix/main.typ") == "#include \"intro.typ\"")
+    #expect(package.text(for: "data.json") == "{\"file\": \"chapters/intro.typ\"}")
+    #expect(!package.changedPaths.contains("appendix/main.typ"))
+}
+
+@Test func movingAFileRewritesItsOwnRelativeReferences() throws {
+    var package = try DocumentPackage(files: [
+        PackageFile(path: "main.typ", data: Data("#include \"chapters/one.typ\"".utf8)),
+        PackageFile(path: "chapters/one.typ", data: Data("#image(\"figure.png\")\n#image(\"/logo.png\")".utf8)),
+        PackageFile(path: "chapters/figure.png", data: Data([1])),
+        PackageFile(path: "logo.png", data: Data([2])),
+    ])
+
+    _ = try package.moveFile(at: "chapters/one.typ", toFolder: nil, updatingReferences: true)
+
+    #expect(package.text(for: "main.typ") == "#include \"one.typ\"")
+    // The relative path is re-aimed from the new folder; the root-relative
+    // one never depended on where the file sat.
+    #expect(package.text(for: "one.typ") == "#image(\"chapters/figure.png\")\n#image(\"/logo.png\")")
+}
+
+@Test func movingAFolderKeepsReferencesBetweenItsOwnFiles() throws {
+    var package = try DocumentPackage(files: [
+        PackageFile(path: "main.typ", data: Data("= Main".utf8)),
+        PackageFile(path: "chapters/one.typ", data: Data("#image(\"assets/figure.png\")\n#include \"../shared.typ\"".utf8)),
+        PackageFile(path: "chapters/assets/figure.png", data: Data([1])),
+        PackageFile(path: "shared.typ", data: Data("= Shared".utf8)),
+        PackageFile(path: "sections/two.typ", data: Data("= Two".utf8)),
+    ])
+
+    _ = try package.moveFolder(at: "chapters", toFolder: "sections", updatingReferences: true)
+
+    #expect(package.text(for: "sections/chapters/one.typ") == "#image(\"assets/figure.png\")\n#include \"../../shared.typ\"")
+}
+
+@Test func bundleGitignoreKeepsWhatTheUserWrote() throws {
+    func saved(gitignore: String?) throws -> String {
+        var wrappers = ["main.typ": FileWrapper(regularFileWithContents: Data("= Main".utf8))]
+        if let gitignore {
+            wrappers[".gitignore"] = FileWrapper(regularFileWithContents: Data(gitignore.utf8))
+        }
+        let package = try DocumentPackage(fileWrapper: FileWrapper(directoryWithFileWrappers: wrappers))
+        // Never a package file, however it is kept.
+        #expect(package.files.map(\.path) == ["main.typ"])
+        let contents = try #require(package.fileWrapper().fileWrappers?[".gitignore"]?.regularFileContents)
+        return String(decoding: contents, as: UTF8.self)
+    }
+
+    #expect(try saved(gitignore: nil) == ".typesetstate\n")
+    #expect(try saved(gitignore: "*.pdf\nbuild/") == "*.pdf\nbuild/\n.typesetstate\n")
+    #expect(try saved(gitignore: "*.pdf\n") == "*.pdf\n.typesetstate\n")
+    // Already listed: written back byte for byte.
+    #expect(try saved(gitignore: "*.pdf\r\n.typesetstate\r\nbuild/") == "*.pdf\r\n.typesetstate\r\nbuild/")
+}
+
+@Test func packageRefusesNamesTheFormatReserves() throws {
+    var package = try DocumentPackage(files: [
+        PackageFile(path: "main.typ", data: Data("= Main".utf8)),
+        PackageFile(path: "notes/a.txt", data: Data("a".utf8)),
+    ])
+
+    #expect(throws: TypesetPackageError.invalidFileName(".typesetstate")) {
+        _ = try package.addFile(named: ".typesetstate", data: Data())
+    }
+    #expect(throws: TypesetPackageError.invalidFileName(".GitIgnore")) {
+        _ = try package.renameFile(at: "main.typ", to: ".GitIgnore")
+    }
+    #expect(throws: TypesetPackageError.invalidFolderName(".typeset")) {
+        _ = try package.createFolder(named: ".typeset")
+    }
+    // Reserved at the root only: deeper down they are ordinary files.
+    let nested = try package.addFile(named: ".gitignore", data: Data(), in: "notes")
+    #expect(nested == "notes/.gitignore")
+    #expect(package.files.map(\.path).sorted() == ["main.typ", "notes/.gitignore", "notes/a.txt"])
+}
+
+@Test func savingKeepsTheBundlesSymbolicLinks() throws {
+    let bundle = FileManager.default.temporaryDirectory
+        .appending(path: "TypesetTests-\(UUID().uuidString).typeset", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: bundle.appending(path: "assets"), withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: bundle) }
+
+    try Data("= Main".utf8).write(to: bundle.appending(path: "main.typ"))
+    try Data([1]).write(to: bundle.appending(path: "assets/figure.png"))
+    try FileManager.default.createSymbolicLink(atPath: bundle.appending(path: "shared").path, withDestinationPath: "../shared")
+    try FileManager.default.createSymbolicLink(atPath: bundle.appending(path: "assets/logo.png").path, withDestinationPath: "figure.png")
+
+    let onDisk = try FileWrapper(url: bundle, options: [.immediate])
+    var package = try DocumentPackage(fileWrapper: onDisk)
+    // Links are not read through into the package...
+    #expect(package.files.map(\.path) == ["assets/figure.png", "main.typ"])
+    try package.updateText("= Edited", for: "main.typ")
+
+    // ...but a save does not take them out of the bundle either.
+    let saved = package.fileWrapper(reusingUnchangedFilesFrom: onDisk)
+    #expect(saved.fileWrappers?["shared"]?.isSymbolicLink == true)
+    #expect(saved.fileWrappers?["assets"]?.fileWrappers?["logo.png"]?.isSymbolicLink == true)
+    #expect(saved.fileWrappers?["main.typ"]?.regularFileContents == Data("= Edited".utf8))
+}
+
+@Test func packageTreatsNamesThatShareADiskEntryAsCollisions() throws {
+    var package = try DocumentPackage(files: [
+        PackageFile(path: "main.typ", data: Data("= Main".utf8)),
+        PackageFile(path: "a.typ", data: Data("= A".utf8)),
+        PackageFile(path: "Fig.png", data: Data([1])),
+        PackageFile(path: "other.png", data: Data([2])),
+        PackageFile(path: "notes/todo.txt", data: Data("todo".utf8)),
+    ])
+
+    // A file cannot take a folder's name, nor a folder a file's.
+    #expect(throws: TypesetPackageError.folderAlreadyExists("notes")) {
+        _ = try package.renameFile(at: "a.typ", to: "notes")
+    }
+    #expect(throws: TypesetPackageError.fileAlreadyExists("a.typ")) {
+        _ = try package.createFolder(named: "a.typ")
+    }
+
+    // On the volumes documents live on, case does not tell two names apart.
+    #expect(throws: TypesetPackageError.fileAlreadyExists("Fig.png")) {
+        _ = try package.renameFile(at: "other.png", to: "FIG.png")
+    }
+    #expect(throws: TypesetPackageError.folderAlreadyExists("notes")) {
+        _ = try package.createFolder(named: "Notes")
+    }
+    let addedFile = try package.addFile(named: "fig.png", data: Data([3]))
+    #expect(addedFile == "fig 2.png")
+    let addedBesideFolder = try package.addFile(named: "notes", data: Data([4]))
+    #expect(addedBesideFolder == "notes 2")
+
+    // A file may still change the case of its own name.
+    let renamedFile = try package.renameFile(at: "Fig.png", to: "fig.png")
+    #expect(renamedFile == "fig.png")
+    let renamedFolder = try package.renameFolder(at: "notes", to: "Notes")
+    #expect(renamedFolder == "Notes")
+    #expect(package.files.map(\.path).contains("Notes/todo.txt"))
+}
+
+@Test func directoryLoadLeavesOutHiddenAndDependencyTrees() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: "TypesetTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+    for folder in [".git/objects", "node_modules/left-pad", "scripts/__pycache__", "assets"] {
+        try FileManager.default.createDirectory(at: root.appending(path: folder), withIntermediateDirectories: true)
+    }
+
+    let mainURL = root.appending(path: "main.typ")
+    try Data("= Hello".utf8).write(to: mainURL)
+    try Data("ref: refs/heads/main".utf8).write(to: root.appending(path: ".git/HEAD"))
+    try Data([1]).write(to: root.appending(path: ".git/objects/pack"))
+    try Data("{}".utf8).write(to: root.appending(path: "node_modules/left-pad/package.json"))
+    try Data([2]).write(to: root.appending(path: "scripts/__pycache__/plot.pyc"))
+    try Data("print(1)".utf8).write(to: root.appending(path: "scripts/plot.py"))
+    try Data([3]).write(to: root.appending(path: "assets/.DS_Store"))
+    try Data([4]).write(to: root.appending(path: "assets/figure.png"))
+    // A hidden file is still a file the document may read.
+    try Data("root = true".utf8).write(to: root.appending(path: ".editorconfig"))
+
+    let package = try DocumentPackage(directoryURL: root, openedFileURL: mainURL)
+
+    #expect(package.files.map(\.path).sorted() == [".editorconfig", "assets/figure.png", "main.typ", "scripts/plot.py"])
+    #expect(package.allFolderPaths == ["assets", "scripts"])
+    #expect(package.skippedFiles.isEmpty)
+}
+
+@Test func packageRefusesFoldersTheLoaderWouldLeaveOut() throws {
+    var package = try DocumentPackage(files: [
+        PackageFile(path: "main.typ", data: Data("= Main".utf8)),
+        PackageFile(path: "notes/a.txt", data: Data("a".utf8)),
+    ])
+
+    #expect(throws: TypesetPackageError.invalidFolderName(".git")) {
+        _ = try package.createFolder(named: ".git")
+    }
+    #expect(throws: TypesetPackageError.invalidFolderName("node_modules")) {
+        _ = try package.renameFolder(at: "notes", to: "node_modules")
+    }
+}
+
+@Test func incrementalWorkspaceSurvivesAPathChangingKind() throws {
+    let workspace = IncrementalPackageWorkspace()
+    let main = PackageFile(path: "main.typ", data: Data("= Main".utf8))
+
+    // A file named `data`, then a folder of that name, then a file again.
+    let root = try workspace.sync(package: DocumentPackage(files: [
+        main, PackageFile(path: "data", data: Data("flat".utf8)),
+    ]))
+    _ = try workspace.sync(package: DocumentPackage(files: [
+        main, PackageFile(path: "data/values.csv", data: Data("1,2".utf8)),
+    ]))
+    #expect(try Data(contentsOf: root.appending(path: "data/values.csv")) == Data("1,2".utf8))
+
+    _ = try workspace.sync(package: DocumentPackage(files: [
+        main, PackageFile(path: "data", data: Data("flat again".utf8)),
+    ]))
+    #expect(try Data(contentsOf: root.appending(path: "data")) == Data("flat again".utf8))
+}

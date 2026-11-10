@@ -48,9 +48,18 @@ enum FolderAccessStore {
         panel.message = message
         guard panel.runModal() == .OK, let granted = panel.url else { return false }
 
-        saveBookmark(for: granted)
+        let wasActive = activeScopePaths.contains(granted.standardizedFileURL.path)
         activateScope(for: granted)
-        return isAccessible(folder, requiresWrite: requiresWrite)
+        guard isAccessible(folder, requiresWrite: requiresWrite) else {
+            // The panel lets the user pick any folder. One that doesn't cover
+            // the folder asked for is no answer to the question, so it is not
+            // kept: persisting it would add a standing grant — restored on
+            // every launch, listed in Settings — that nothing requested.
+            if !wasActive { deactivateScope(for: granted) }
+            return false
+        }
+        saveBookmark(for: granted)
+        return true
     }
 
     /// The folders the user has granted access to, as standardized paths,
@@ -102,6 +111,11 @@ enum FolderAccessStore {
         if url.startAccessingSecurityScopedResource() {
             activeScopePaths.insert(path)
         }
+    }
+
+    private static func deactivateScope(for url: URL) {
+        guard activeScopePaths.remove(url.standardizedFileURL.path) != nil else { return }
+        url.stopAccessingSecurityScopedResource()
     }
 
     private static func saveBookmark(for url: URL) {

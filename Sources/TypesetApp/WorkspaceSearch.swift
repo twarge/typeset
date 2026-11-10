@@ -17,9 +17,12 @@ import QuickLook
 
 // MARK: - Find in Files
 
+// The search model is `nonisolated` and `Sendable` (the app target defaults to
+// the main actor) so the scan itself can run off it; see `WorkspaceSearchView`.
+
 /// One occurrence of the search query in a file, with the surrounding line text
 /// split around the match for inline highlighting.
-struct FileSearchMatch: Identifiable, Equatable {
+nonisolated struct FileSearchMatch: Identifiable, Equatable, Sendable {
     let id: Int            // the match's UTF-16 location (stable within a file)
     let range: NSRange     // the match's range within the file's text
     let lineNumber: Int    // 1-based
@@ -30,7 +33,7 @@ struct FileSearchMatch: Identifiable, Equatable {
 }
 
 /// All matches within a single file.
-struct FileSearchResult: Identifiable, Equatable {
+nonisolated struct FileSearchResult: Identifiable, Equatable, Sendable {
     let id: String         // file path
     let path: String
     let name: String
@@ -41,18 +44,29 @@ struct FileSearchResult: Identifiable, Equatable {
     let isTruncated: Bool
 }
 
-struct WorkspaceSearchConfiguration: Equatable {
+nonisolated struct WorkspaceSearchConfiguration: Equatable, Sendable {
     var options: TextSearchOptions
     var includedFiles: String
     var excludedFiles: String
 }
 
-struct FileSearchOutcome: Equatable {
+nonisolated struct FileSearchOutcome: Equatable, Sendable {
     var results: [FileSearchResult]
     var errorMessage: String?
 }
 
-enum FileTextSearch {
+/// Everything a search's results depend on. Two equal requests have equal
+/// results, which is what lets the view tell whether the results it is
+/// showing still describe the files.
+nonisolated struct FileSearchRequest: Equatable, Sendable {
+    /// The text-editable files only: nothing else is searched, so a changed
+    /// image shouldn't start a new search.
+    var files: [PackageFile]
+    var configuration: WorkspaceSearchConfiguration
+    var replacement: String
+}
+
+nonisolated enum FileTextSearch {
     /// Bounds work per file so an enormous accidental match set (e.g. searching a
     /// single space) can't stall the UI.
     static let maxMatchesPerFile = 1000
@@ -79,6 +93,9 @@ enum FileTextSearch {
         )
         var output: [FileSearchResult] = []
         for file in files where file.isTextEditable && fileFilter.includes(path: file.path) {
+            // A superseded search stops at the next file rather than running
+            // to the end for results nobody will see.
+            if Task.isCancelled { break }
             let nsText = String(decoding: file.data, as: UTF8.self) as NSString
             guard nsText.length > 0 else { continue }
             var matches: [FileSearchMatch] = []
@@ -173,11 +190,15 @@ struct WorkspaceSearchView: View {
     var onReplaceAll: (String, WorkspaceSearchConfiguration) -> Void
 
     @FocusState private var isQueryFocused: Bool
+    /// The latest finished search, and the request it answered. The scan used
+    /// to run inside `body`, which re-evaluates on every editor keystroke
+    /// (`files` changes with each one): every text file rescanned on the main
+    /// thread per keystroke, and a regular expression given to catastrophic
+    /// backtracking froze the window with nothing to cancel it.
+    @State private var outcome = FileSearchOutcome(results: [], errorMessage: nil)
+    @State private var outcomeRequest: FileSearchRequest?
 
     var body: some View {
-        // Compute the search exactly once per body evaluation and thread it
-        // through; recomputing inside several computed properties ran the whole
-        // multi-file scan 4-5x per keystroke.
         let configuration = WorkspaceSearchConfiguration(
             options: TextSearchOptions(
                 query: query,
@@ -188,11 +209,15 @@ struct WorkspaceSearchView: View {
             includedFiles: includedFiles,
             excludedFiles: excludedFiles
         )
-        let outcome = FileTextSearch.results(
-            in: files,
+        let request = FileSearchRequest(
+            files: files.filter(\.isTextEditable),
             configuration: configuration,
             replacement: replacement
         )
+        // Until the search for the current files and options lands, the list
+        // still shows the previous one's matches: fine to read, but their
+        // ranges may no longer point at the same text.
+        let isCurrent = outcomeRequest == request
         let totalMatches = outcome.results.reduce(0) { $0 + $1.matches.count }
         return VStack(spacing: 0) {
             controls(
@@ -201,10 +226,46 @@ struct WorkspaceSearchView: View {
                 canReplace: outcome.errorMessage == nil
             )
             Divider()
-            content(outcome: outcome, totalMatches: totalMatches, configuration: configuration)
+            content(
+                outcome: outcome,
+                isCurrent: isCurrent,
+                totalMatches: totalMatches,
+                configuration: configuration
+            )
         }
         .onAppear { consumeActivationIfNeeded() }
         .onChange(of: activation) { _, _ in consumeActivationIfNeeded() }
+        .task(id: request) { await search(request) }
+    }
+
+    /// Runs `request` after a short pause — typing in the field or the editor
+    /// restarts this task, so only the request that survives the pause is
+    /// searched — and off the main actor. Superseding it cancels the scan.
+    private func search(_ request: FileSearchRequest) async {
+        guard outcomeRequest != request else { return }
+        guard !request.configuration.options.query.isEmpty else {
+            outcome = FileSearchOutcome(results: [], errorMessage: nil)
+            outcomeRequest = request
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(150))
+        guard !Task.isCancelled else { return }
+
+        let scan = Task.detached(priority: .userInitiated) {
+            FileTextSearch.results(
+                in: request.files,
+                configuration: request.configuration,
+                replacement: request.replacement
+            )
+        }
+        let result = await withTaskCancellationHandler {
+            await scan.value
+        } onCancel: {
+            scan.cancel()
+        }
+        guard !Task.isCancelled else { return }
+        outcome = result
+        outcomeRequest = request
     }
 
     /// Focuses the field only when the user explicitly invoked Find (⌘⇧F), then
@@ -379,11 +440,15 @@ struct WorkspaceSearchView: View {
     @ViewBuilder
     private func content(
         outcome: FileSearchOutcome,
+        isCurrent: Bool,
         totalMatches: Int,
         configuration: WorkspaceSearchConfiguration
     ) -> some View {
         if query.isEmpty {
             emptyState(title: "Find in Files", message: "Search the text of every file in this document.", systemImage: "magnifyingglass")
+        } else if !isCurrent, outcome.results.isEmpty {
+            // Nothing to show yet, and "No Matches" would be a guess.
+            emptyState(title: "Searching…", message: "Looking through the text of every file in this document.", systemImage: "magnifyingglass")
         } else if let errorMessage = outcome.errorMessage {
             emptyState(title: "Invalid Pattern", message: errorMessage, systemImage: "exclamationmark.triangle")
         } else if outcome.results.isEmpty {
@@ -396,7 +461,7 @@ struct WorkspaceSearchView: View {
                 ForEach(outcome.results) { result in
                     Section(result.path) {
                         ForEach(result.matches) { match in
-                            matchRow(result: result, match: match, configuration: configuration)
+                            matchRow(result: result, match: match, isCurrent: isCurrent, configuration: configuration)
                         }
                     }
                 }
@@ -416,6 +481,7 @@ struct WorkspaceSearchView: View {
     private func matchRow(
         result: FileSearchResult,
         match: FileSearchMatch,
+        isCurrent: Bool,
         configuration: WorkspaceSearchConfiguration
     ) -> some View {
         Button {
@@ -458,6 +524,8 @@ struct WorkspaceSearchView: View {
                 onCommitQuery(query)
                 onReplaceMatch(result.path, match.range, replacement, configuration)
             }
+            // A range from before the latest edit could replace the wrong text.
+            .disabled(!isCurrent)
         }
     }
 
