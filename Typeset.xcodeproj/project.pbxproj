@@ -49,8 +49,17 @@
 		100000000000000000000034 /* Resources/DocumentIcons/TypstSourceIcon-320.png in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000133 /* Resources/DocumentIcons/TypstSourceIcon-320.png */; };
 		100000000000000000000035 /* Resources/DocumentIcons/TypstSourceIcon-1024.png in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000134 /* Resources/DocumentIcons/TypstSourceIcon-1024.png */; };
 		100000000000000000000036 /* Resources/Fonts/NotoCJK in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000135 /* Resources/Fonts/NotoCJK */; };
+		100000000000000000000038 /* Resources/PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000137 /* Resources/PrivacyInfo.xcprivacy */; };
+		100000000000000000000039 /* Resources/PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000137 /* Resources/PrivacyInfo.xcprivacy */; };
 		100000000000000000000037 /* Resources/Acknowledgements/NotoSansCJK-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000136 /* Resources/Acknowledgements/NotoSansCJK-LICENSE.txt */; };
 		100000000000000000000010 /* TypstBundledFonts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000111 /* TypstBundledFonts.swift */; };
+		200000000000000000000011 /* TypstPackageLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000001 /* TypstPackageLibrary.swift */; };
+		200000000000000000000012 /* TypstPackageLibraryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000002 /* TypstPackageLibraryTests.swift */; };
+		200000000000000000000013 /* PackagesSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* PackagesSettingsView.swift */; };
+		200000000000000000000014 /* Resources/TypstPackages in Resources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000004 /* Resources/TypstPackages */; };
+		200000000000000000000015 /* Resources/Acknowledgements/TypstPackages-NOTICE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000005 /* Resources/Acknowledgements/TypstPackages-NOTICE.txt */; };
+		200000000000000000000016 /* Resources/Acknowledgements/GPL-3.0.txt in Resources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000006 /* Resources/Acknowledgements/GPL-3.0.txt */; };
+		200000000000000000000017 /* Resources/Acknowledgements/EPL-2.0.txt in Resources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000007 /* Resources/Acknowledgements/EPL-2.0.txt */; };
 		1000000000000000000000D1 /* DirectoryWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001D1 /* DirectoryWatcher.swift */; };
 		1000000000000000000000DA /* FolderAccessStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001DA /* FolderAccessStore.swift */; };
 		100000000000000000000D01 /* WorkspaceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C01 /* WorkspaceModels.swift */; };
@@ -154,6 +163,13 @@
 		10000000000000000000010E /* Vendor/TypesetLang.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Vendor/TypesetLang.xcframework; sourceTree = SOURCE_ROOT; };
 		10000000000000000000010F /* PDFPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFPreviewView.swift; sourceTree = "<group>"; };
 		100000000000000000000111 /* TypstBundledFonts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstBundledFonts.swift; sourceTree = "<group>"; };
+		200000000000000000000001 /* TypstPackageLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstPackageLibrary.swift; sourceTree = "<group>"; };
+		200000000000000000000002 /* TypstPackageLibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstPackageLibraryTests.swift; sourceTree = "<group>"; };
+		200000000000000000000003 /* PackagesSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackagesSettingsView.swift; sourceTree = "<group>"; };
+		200000000000000000000004 /* Resources/TypstPackages */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/TypstPackages; sourceTree = SOURCE_ROOT; };
+		200000000000000000000005 /* Resources/Acknowledgements/TypstPackages-NOTICE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Resources/Acknowledgements/TypstPackages-NOTICE.txt"; sourceTree = SOURCE_ROOT; };
+		200000000000000000000006 /* Resources/Acknowledgements/GPL-3.0.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Resources/Acknowledgements/GPL-3.0.txt"; sourceTree = SOURCE_ROOT; };
+		200000000000000000000007 /* Resources/Acknowledgements/EPL-2.0.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Resources/Acknowledgements/EPL-2.0.txt"; sourceTree = SOURCE_ROOT; };
 		100000000000000000000110 /* TextSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSearch.swift; sourceTree = "<group>"; };
 		100000000000000000000120 /* Resources/Fonts/FiraCode/FiraCode-Light.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Resources/Fonts/FiraCode/FiraCode-Light.ttf"; sourceTree = SOURCE_ROOT; };
 		100000000000000000000121 /* Resources/Fonts/FiraCode/FiraCode-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Resources/Fonts/FiraCode/FiraCode-Regular.ttf"; sourceTree = SOURCE_ROOT; };
@@ -177,6 +193,7 @@
 		100000000000000000000133 /* Resources/DocumentIcons/TypstSourceIcon-320.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/DocumentIcons/TypstSourceIcon-320.png"; sourceTree = SOURCE_ROOT; };
 		100000000000000000000134 /* Resources/DocumentIcons/TypstSourceIcon-1024.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/DocumentIcons/TypstSourceIcon-1024.png"; sourceTree = SOURCE_ROOT; };
 		100000000000000000000135 /* Resources/Fonts/NotoCJK */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/Fonts/NotoCJK; sourceTree = SOURCE_ROOT; };
+		100000000000000000000137 /* Resources/PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = Resources/PrivacyInfo.xcprivacy; sourceTree = SOURCE_ROOT; };
 		100000000000000000000136 /* Resources/Acknowledgements/NotoSansCJK-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Resources/Acknowledgements/NotoSansCJK-LICENSE.txt"; sourceTree = SOURCE_ROOT; };
 		1000000000000000000001D1 /* DirectoryWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectoryWatcher.swift; sourceTree = "<group>"; };
 		1000000000000000000001DA /* FolderAccessStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderAccessStore.swift; sourceTree = "<group>"; };
@@ -271,6 +288,7 @@
 				10000000000000000000010D /* LanguageWorkspaceStore.swift */,
 				100000000000000000000110 /* TextSearch.swift */,
 				100000000000000000000111 /* TypstBundledFonts.swift */,
+				200000000000000000000001 /* TypstPackageLibrary.swift */,
 			);
 			path = TypesetCore;
 			sourceTree = "<group>";
@@ -292,6 +310,7 @@
 				100000000000000000000C04 /* WorkspacePreviews.swift */,
 				100000000000000000000C05 /* DiagnosticLog.swift */,
 				100000000000000000000C06 /* WorkspaceSearch.swift */,
+				200000000000000000000003 /* PackagesSettingsView.swift */,
 				100000000000000000000C07 /* FileSidebar.swift */,
 				100000000000000000000C08 /* FileTreeDragDrop.swift */,
 				100000000000000000000C09 /* FileTreeModel.swift */,
@@ -318,6 +337,7 @@
 				1000000000000000000001E0 /* TextSearchTests.swift */,
 				1000000000000000000001E1 /* TypstLanguageServiceTests.swift */,
 				1000000000000000000001E2 /* TypstBundledFontsTests.swift */,
+				200000000000000000000002 /* TypstPackageLibraryTests.swift */,
 			);
 			path = TypesetCoreTests;
 			sourceTree = "<group>";
@@ -346,6 +366,7 @@
 			isa = PBXGroup;
 			children = (
 				10000000000000000000012C /* Resources/Assets.xcassets */,
+				100000000000000000000137 /* Resources/PrivacyInfo.xcprivacy */,
 				10000000000000000000012D /* Resources/DocumentIcons/TypesetPackageIcon.icns */,
 				10000000000000000000012E /* Resources/DocumentIcons/TypstSourceIcon.icns */,
 				10000000000000000000012F /* Resources/DocumentIcons/TypesetPackageIcon-64.png */,
@@ -368,6 +389,10 @@
 				100000000000000000000124 /* Resources/Fonts/FiraCode/FiraCode-SemiBold.ttf */,
 				100000000000000000000125 /* Resources/Fonts/FiraCode/FiraCode-Bold.ttf */,
 				100000000000000000000135 /* Resources/Fonts/NotoCJK */,
+				200000000000000000000004 /* Resources/TypstPackages */,
+				200000000000000000000005 /* Resources/Acknowledgements/TypstPackages-NOTICE.txt */,
+				200000000000000000000006 /* Resources/Acknowledgements/GPL-3.0.txt */,
+				200000000000000000000007 /* Resources/Acknowledgements/EPL-2.0.txt */,
 			);
 			name = Resources;
 			sourceTree = "<group>";
@@ -405,7 +430,6 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 100000000000000000000A02 /* Build configuration list for PBXNativeTarget "Typeset" */;
 			buildPhases = (
-				200000000000000000000704 /* Build Bundled Typst */,
 				100000000000000000000702 /* Sources */,
 				100000000000000000000502 /* Frameworks */,
 				100000000000000000000504 /* Resources */,
@@ -510,6 +534,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				100000000000000000000036 /* Resources/Fonts/NotoCJK in Resources */,
+				200000000000000000000014 /* Resources/TypstPackages in Resources */,
+				100000000000000000000039 /* Resources/PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -518,6 +544,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				10000000000000000000002D /* Resources/Assets.xcassets in Resources */,
+				100000000000000000000038 /* Resources/PrivacyInfo.xcprivacy in Resources */,
 				10000000000000000000002E /* Resources/DocumentIcons/TypesetPackageIcon.icns in Resources */,
 				10000000000000000000002F /* Resources/DocumentIcons/TypstSourceIcon.icns in Resources */,
 				100000000000000000000030 /* Resources/DocumentIcons/TypesetPackageIcon-64.png in Resources */,
@@ -533,6 +560,9 @@
 				10000000000000000000002B /* Resources/Acknowledgements/Tinymist-cmark-writer-LICENSE.txt in Resources */,
 				10000000000000000000002A /* Resources/Acknowledgements/FiraCode-LICENSE.txt in Resources */,
 				100000000000000000000037 /* Resources/Acknowledgements/NotoSansCJK-LICENSE.txt in Resources */,
+				200000000000000000000015 /* Resources/Acknowledgements/TypstPackages-NOTICE.txt in Resources */,
+				200000000000000000000016 /* Resources/Acknowledgements/GPL-3.0.txt in Resources */,
+				200000000000000000000017 /* Resources/Acknowledgements/EPL-2.0.txt in Resources */,
 				100000000000000000000020 /* Resources/Fonts/FiraCode/FiraCode-Light.ttf in Resources */,
 				100000000000000000000021 /* Resources/Fonts/FiraCode/FiraCode-Regular.ttf in Resources */,
 				100000000000000000000022 /* Resources/Fonts/FiraCode/FiraCode-Retina.ttf in Resources */,
@@ -569,30 +599,6 @@
 			shellPath = /bin/bash;
 			shellScript = "set -euo pipefail\n\n/bin/bash \"$SRCROOT/Scripts/build-typeset-lang-xcframework.sh\"\n";
 		};
-		200000000000000000000704 /* Build Bundled Typst */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"$(SRCROOT)/Scripts/build-bundled-typst.sh",
-				"$(SRCROOT)/Vendor/typst/Cargo.toml",
-				"$(SRCROOT)/Vendor/typst/Cargo.lock",
-			);
-			name = "Build Bundled Typst";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-				"$(DWARF_DSYM_FOLDER_PATH)/typst.dSYM",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/typst",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/bash;
-			shellScript = "/bin/bash \"$SRCROOT/Scripts/build-bundled-typst.sh\"\n";
-		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -608,6 +614,7 @@
 				10000000000000000000000D /* LanguageWorkspaceStore.swift in Sources */,
 				10000000000000000000000F /* TextSearch.swift in Sources */,
 				100000000000000000000010 /* TypstBundledFonts.swift in Sources */,
+				200000000000000000000011 /* TypstPackageLibrary.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -629,6 +636,7 @@
 				100000000000000000000D04 /* WorkspacePreviews.swift in Sources */,
 				100000000000000000000D05 /* DiagnosticLog.swift in Sources */,
 				100000000000000000000D06 /* WorkspaceSearch.swift in Sources */,
+				200000000000000000000013 /* PackagesSettingsView.swift in Sources */,
 				100000000000000000000D07 /* FileSidebar.swift in Sources */,
 				100000000000000000000D08 /* FileTreeDragDrop.swift in Sources */,
 				100000000000000000000D09 /* FileTreeModel.swift in Sources */,
@@ -647,6 +655,7 @@
 				100000000000000000000E1 /* TextSearchTests.swift in Sources */,
 				100000000000000000000E2 /* TypstLanguageServiceTests.swift in Sources */,
 				100000000000000000000E3 /* TypstBundledFontsTests.swift in Sources */,
+				200000000000000000000012 /* TypstPackageLibraryTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -746,7 +755,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -809,7 +818,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = auto;
@@ -950,9 +959,11 @@
 		100000000000000000000B06 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				"ARCHS[sdk=macosx*]" = arm64;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				DEAD_CODE_STRIPPING = YES;
+				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -971,9 +982,11 @@
 		100000000000000000000B07 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				"ARCHS[sdk=macosx*]" = arm64;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				DEAD_CODE_STRIPPING = YES;
+				"EXCLUDED_ARCHS[sdk=macosx*]" = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

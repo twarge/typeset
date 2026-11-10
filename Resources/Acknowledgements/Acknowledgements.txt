@@ -35,4 +35,11 @@ https://github.com/notofonts/noto-cjk
 Bundled release: Sans 2.004
 License: SIL Open Font License 1.1
 
+Typst Universe packages
+Nineteen package versions, included unmodified so the sample document renders
+offline. Each keeps its own license (MIT, MIT-0, Apache 2.0 and, for CeTZ, GNU
+LGPL 3.0 or later); you can read, export and replace every one of them under
+Settings > Typst Packages. See "Typst Packages" below for the list and sources.
+https://github.com/typst/packages
+
 The full license texts and notices follow.

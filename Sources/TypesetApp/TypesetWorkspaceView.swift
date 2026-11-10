@@ -1,9 +1,13 @@
 // Copyright (c) 2026 Twarge LLC.
 // SPDX-License-Identifier: Apache-2.0
 
+import CryptoKit
+import Darwin
+import OSLog
 import PhotosUI
 import PDFKit
 import SwiftUI
+import TipKit
 import TypesetCore
 import UniformTypeIdentifiers
 
@@ -14,6 +18,10 @@ import QuickLookUI
 import UIKit
 import QuickLook
 #endif
+
+/// Export-on-close has no window left to report into. Paths are the user's
+/// own folder names, so they stay private in the unified log.
+nonisolated private let exportLogger = Logger(subsystem: "com.twarge.typeset", category: "Export")
 
 func typesetLSPDebug(_ message: @autoclosure () -> String) {
     #if DEBUG
@@ -90,6 +98,13 @@ private struct RenameSymbolSheet: View {
     }
 }
 
+/// The per-document services, created on first use (see `services`).
+private final class WorkspaceServices {
+    private(set) lazy var renderer = TypstRenderer()
+    private(set) lazy var languageService: any TypstLanguageService = TypstLanguageServiceFactory.make()
+    private(set) lazy var languageWorkspaceStore = LanguageWorkspaceStore()
+}
+
 struct TypesetWorkspaceView: View {
     @Binding var document: TypesetDocument
     var fileURL: URL?
@@ -98,6 +113,7 @@ struct TypesetWorkspaceView: View {
     @Environment(\.undoManager) private var documentUndoManager
     #else
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
     #endif
 
     @State private var selectedPath: String = ""
@@ -144,6 +160,18 @@ struct TypesetWorkspaceView: View {
     // whose token no longer matches has its result discarded.
     @State private var previewCompileToken = 0
     @State private var logEntries: [DiagnosticLogEntry] = []
+    /// One-off messages that no compile produced — a failed save, a refused
+    /// folder grant, a failed import. They used to share `logEntries`, where
+    /// the next compile (a keystroke later) wiped them. Kept until the log is
+    /// closed, which is the user having seen them.
+    @State private var noticeEntries: [DiagnosticLogEntry] = []
+    /// Notices that have already opened the log by themselves, so one that
+    /// repeats (a save failing on every sync) doesn't keep reopening it.
+    @State private var presentedNoticeKeys: Set<String> = []
+    /// Identifies the newest export. Separate from `diagnosticRunID`: sharing
+    /// it let a preview compile that started mid-export silently discard the
+    /// export, and an export drop a compile's diagnostics.
+    @State private var exportRunID = UUID()
     /// Cloud sync status for the folder's files — downloads in flight, their
     /// outcome, files left out — shown above the compile log and kept across
     /// compiles, unlike `logEntries`, which each run replaces.
@@ -243,7 +271,22 @@ struct TypesetWorkspaceView: View {
     @State private var directoryWatcher: DirectoryWatcher?
     #endif
     @State private var externalReconcileTask: Task<Void, Never>?
+    /// True while a folder re-read for the reconcile is running off the main
+    /// actor. Requests that arrive meanwhile wait for it (`...RequestedDuringRead`)
+    /// rather than starting a second read.
+    @State private var isExternalReconcileReading = false
+    @State private var externalReconcileRequestedDuringRead = false
+    /// Bumped whenever this view writes the folder or re-baselines the
+    /// snapshot. A re-read that began under an older value saw a disk state
+    /// the snapshot no longer describes, so it is discarded and redone rather
+    /// than mistaken for an external change.
+    @State private var diskMirrorGeneration = 0
     @State private var pendingConflict: DiskConflict?
+    /// The conflict a button already answered. The alert's dismissal runs its
+    /// binding setter as well as the button's action, in an order SwiftUI does
+    /// not promise; this is what keeps a dismissal that follows "Revert to
+    /// Disk" from being read as "Keep My Version".
+    @State private var answeredConflictID: UUID?
     /// Hash of the opened document's bytes the last time the editor and disk
     /// agreed (load, save echo, or a resolved conflict). The opened file is
     /// otherwise left to SwiftUI, which shows no live "changed on disk" prompt,
@@ -280,9 +323,20 @@ struct TypesetWorkspaceView: View {
     @AppStorage("workspace.windowChrome") private var windowChromeRaw = WindowChromePreference.heavy.rawValue
     @AppStorage("workspace.distractionFreeWindowChrome") private var legacyDistractionFreeWindowChrome = false
 
-    private let renderer = TypstRenderer()
-    private let languageService = TypstLanguageServiceFactory.make()
-    private let languageWorkspaceStore = LanguageWorkspaceStore()
+    // SwiftUI re-creates this struct freely (the DocumentGroup closure re-runs
+    // as the document changes), and plain stored services were re-created with
+    // it: each copy got a new language session that had never been told the
+    // workspace root or its files, and a renderer with an empty mirror. State
+    // keeps the first box for the life of the document; the services inside
+    // are lazy, so the boxes SwiftUI builds and throws away cost nothing.
+    @State private var services = WorkspaceServices()
+    private var renderer: TypstRenderer { services.renderer }
+    private var languageService: any TypstLanguageService { services.languageService }
+    private var languageWorkspaceStore: LanguageWorkspaceStore { services.languageWorkspaceStore }
+    /// The language-workspace mirror of a document that has no file yet. One
+    /// per window: every untitled document's compile target is "main.typ", so
+    /// anything derived from the package would make them share a mirror.
+    @State private var untitledLanguageDocumentID = "untitled-\(UUID().uuidString)"
     #if os(macOS)
     // Title-bar + toolbar height. The editor pane reaches the top of the window
     // (it ignores the top safe area), so this pins how far down the code starts:
@@ -295,7 +349,7 @@ struct TypesetWorkspaceView: View {
     #endif
 
     private var hasErrorLogs: Bool {
-        logEntries.contains { $0.isError }
+        logEntries.contains { $0.isError } || noticeEntries.contains { $0.isError }
     }
 
     var body: some View {
@@ -377,6 +431,16 @@ struct TypesetWorkspaceView: View {
             // while distraction-free has auto-hidden, and leave it `.automatic`
             // (the system default) otherwise.
             .toolbarBackgroundVisibility(macOSChromeHidden ? .hidden : .automatic, for: .windowToolbar)
+            // The Mac's Settings live in the app menu, so there is no toolbar
+            // button for the tip to point at (as it does on iOS); it sits in
+            // the corner of the window instead.
+            .overlay(alignment: .bottomTrailing) {
+                if isUntouchedSampleDocument {
+                    TipView(sampleContentTip, action: handleSampleContentTipAction)
+                        .frame(maxWidth: 360)
+                        .padding(16)
+                }
+            }
             #endif
             .sheet(isPresented: $isSettingsPresented) {
                 WorkspaceSettingsPane(
@@ -496,6 +560,14 @@ struct TypesetWorkspaceView: View {
             .onChange(of: selectedView) { _, newValue in
                 persistViewMode(newValue)
             }
+            .onChange(of: isLogPresented) { _, isPresented in
+                // Closing the log is the user having read its notices.
+                if !isPresented {
+                    noticeEntries.removeAll()
+                    // So the same failure opens the log again next time.
+                    presentedNoticeKeys.removeAll()
+                }
+            }
             .onChange(of: spellCheckingIgnoresCommands) { _, _ in
                 Task {
                     await refreshLanguageServiceAnnotations()
@@ -519,6 +591,27 @@ struct TypesetWorkspaceView: View {
                 #endif
                 exportPDFOnCloseIfNeeded()
             }
+            // Quitting doesn't make the view disappear, and the document
+            // system saves only the opened file: folder writes still waiting
+            // out their debounce would never land.
+            #if os(macOS)
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                syncDirectoryToDisk()
+            }
+            #else
+            // iOS gives no termination notice worth relying on; leaving the
+            // foreground is the last dependable moment.
+            .onChange(of: scenePhase) { _, phase in
+                guard phase != .active else { return }
+                syncDirectoryToDisk()
+            }
+            #endif
+            // A package was replaced, reverted or deleted in Settings: what
+            // is on screen was compiled against the old one.
+            .onReceive(NotificationCenter.default.publisher(for: .typstPackagesDidChange)) { _ in
+                syncLanguageServiceWorkspace()
+                refreshPreview()
+            }
             #if os(macOS)
             .background(DocumentProxyConfigurator(fileURL: fileURL))
             #endif
@@ -530,15 +623,29 @@ struct TypesetWorkspaceView: View {
                         // Dismissed without choosing (Escape / window close):
                         // default to keeping the user's edits rather than leaving
                         // a divergence that a later reload would silently discard.
+                        // A button dismisses the alert too, and whether its
+                        // action or this setter runs first is SwiftUI's
+                        // business. So wait a turn, then act only if no button
+                        // answered: otherwise "Revert to Disk" could arrive to
+                        // find its conflict already resolved the other way.
                         if !presented, let conflict = pendingConflict {
-                            resolveConflictKeepingMine(conflict)
+                            Task { @MainActor in
+                                guard answeredConflictID != conflict.id else { return }
+                                resolveConflictKeepingMine(conflict)
+                            }
                         }
                     }
                 ),
                 presenting: pendingConflict
             ) { conflict in
-                Button("Keep My Version") { resolveConflictKeepingMine(conflict) }
-                Button("Revert to Disk", role: .destructive) { resolveConflictRevertingToDisk(conflict) }
+                Button("Keep My Version") {
+                    answeredConflictID = conflict.id
+                    resolveConflictKeepingMine(conflict)
+                }
+                Button("Revert to Disk", role: .destructive) {
+                    answeredConflictID = conflict.id
+                    resolveConflictRevertingToDisk(conflict)
+                }
             } message: { _ in
                 Text("This file has unsaved changes here and was also modified by another program. Keep your version, or replace it with the version on disk?")
             }
@@ -558,7 +665,7 @@ struct TypesetWorkspaceView: View {
             contentPane
 
             DiagnosticLogSlideOver(
-                entries: syncEntries + logEntries,
+                entries: syncEntries + noticeEntries + logEntries,
                 isPresented: isLogPresented,
                 onSelectDiagnostic: seekToDiagnostic
             )
@@ -745,7 +852,25 @@ struct TypesetWorkspaceView: View {
             Label("Settings", systemImage: "gearshape")
         }
         .help("Settings")
+        .popoverTip(isUntouchedSampleDocument ? sampleContentTip : nil, action: handleSampleContentTipAction)
     }
+
+    private func handleSampleContentTipAction(_ action: Tips.Action) {
+        guard action.id == SampleContentTip.openSettingsActionID else { return }
+        sampleContentTip.invalidate(reason: .actionPerformed)
+        isSettingsPresented = true
+    }
+
+    private var sampleContentTip: SampleContentTip { SampleContentTip() }
+
+    /// Whether the document is still exactly the sample a new document starts
+    /// with (see `SampleContentTip`).
+    private var isUntouchedSampleDocument: Bool {
+        document.package.files.count == 1
+            && document.package.files.first?.data == Self.sampleDocumentData
+    }
+
+    private static let sampleDocumentData = DocumentPackage.defaultFiles().first?.data
 
     private var autoPreviewBinding: Binding<Bool> {
         Binding {
@@ -1039,7 +1164,8 @@ struct TypesetWorkspaceView: View {
             insertPythonScript: insertPythonScript,
             showLineNumbers: showLineNumbers,
             setShowLineNumbers: { showLineNumbers = $0 },
-            showSettings: { isSettingsPresented = true }
+            showSettings: { isSettingsPresented = true },
+            documentURL: fileURL
         )
     }
 
@@ -1267,7 +1393,7 @@ struct TypesetWorkspaceView: View {
         if let selectedFile {
             if selectedFile.isTextEditable {
                 SourceEditor(
-                    text: $sourceText,
+                    text: sourceTextBinding(forEditorAt: selectedPath),
                     selectedRange: $selectedRange,
                     isEditable: true,
                     focusRequest: sourceEditorFocusRequest,
@@ -1298,8 +1424,8 @@ struct TypesetWorkspaceView: View {
                     // a data file or a generator script.
                     spellCheckingEnabled: spellCheckingEnabled && selectedFile.isTypstSource,
                     syntax: SourceSyntax.forPath(selectedFile.path),
-                    onTextChange: { text, range in
-                        updateSource(text, selectionRange: range)
+                    onTextChange: { [editorPath = selectedPath] text, range in
+                        updateSource(text, selectionRange: range, fromEditorAt: editorPath)
                     },
                     onSelectionChange: updateEditorSelection,
                     onCompletionSelected: insertCompletion,
@@ -1961,7 +2087,46 @@ struct TypesetWorkspaceView: View {
         updateSidebarVisibility(isPresented)
     }
 
-    private func updateSource(_ text: String, selectionRange: NSRange? = nil) {
+    /// The editor's text binding, tied to the file that editor was built for.
+    /// Editors report typing one main-queue turn late, and each file gets its
+    /// own editor, so a change the outgoing editor queued (an autocorrection
+    /// committed as it resigns, say) can arrive after the selection has moved
+    /// on. Written straight into `sourceText` it would put the old file's text
+    /// in the new file's editor — and from there into the new file.
+    private func sourceTextBinding(forEditorAt editorPath: String) -> Binding<String> {
+        Binding(
+            get: { sourceText },
+            set: { newValue in
+                guard editorPath == selectedPath else { return }
+                sourceText = newValue
+            }
+        )
+    }
+
+    /// A text change from an editor that is no longer the selected file's
+    /// (see `sourceTextBinding`): it still belongs to the file it was typed
+    /// in, so it goes there, and nowhere near the current editor's state.
+    private func applyLateEditorChange(_ text: String, toFileAt path: String) {
+        guard document.package.files.contains(where: { $0.path == path && $0.isTextEditable }) else { return }
+        let encodedText = Data(text.utf8)
+        do {
+            try withoutDocumentUndo {
+                try document.package.updateFileData(encodedText, for: path)
+            }
+            syncLanguageServiceFile(path: path, text: text, data: encodedText, selectionRange: nil)
+            refreshPreview()
+        } catch {
+            recordLog("Source update failed", message: error.localizedDescription, level: .error, present: true)
+        }
+    }
+
+    /// `editorPath` is the file the reporting editor was built for; `nil` for
+    /// changes this view makes itself, which are always about the selected file.
+    private func updateSource(_ text: String, selectionRange: NSRange? = nil, fromEditorAt editorPath: String? = nil) {
+        if let editorPath, editorPath != selectedPath {
+            applyLateEditorChange(text, toFileAt: editorPath)
+            return
+        }
         guard selectedFile?.isTextEditable == true else { return }
         selectionExpansionHistory = []
         pendingSyntaxSelection = nil
@@ -3513,7 +3678,7 @@ struct TypesetWorkspaceView: View {
     }
 
     private func exportPDF() {
-        let runID = beginDiagnosticRun()
+        let runID = beginExportRun()
         let package = packageSnapshotForExport()
         let renderer = self.renderer
         Task {
@@ -3526,30 +3691,30 @@ struct TypesetWorkspaceView: View {
                 let outputURL = directory.appending(path: defaultPDFExportFilename())
                 try await renderer.exportPDF(package: package, to: outputURL)
                 await MainActor.run {
-                    guard diagnosticRunID == runID else { return }
+                    guard exportRunID == runID else { return }
                     pdfShareItem = PDFShareItem(url: outputURL)
-                    logEntries.removeAll()
                 }
                 #else
                 let outputURL = FileManager.default.temporaryDirectory
                     .appending(path: "Typeset-\(UUID().uuidString).pdf")
+                // Only a staging file: the save panel is handed the bytes.
+                defer { try? FileManager.default.removeItem(at: outputURL) }
                 try await renderer.exportPDF(package: package, to: outputURL)
                 let data = try Data(contentsOf: outputURL)
                 await MainActor.run {
-                    guard diagnosticRunID == runID else { return }
+                    guard exportRunID == runID else { return }
                     exportDocument = PDFExportDocument(data: data)
                     exportDefaultFilename = defaultPDFExportFilename()
                     isExportPresented = true
-                    logEntries.removeAll()
                 }
                 #endif
             } catch {
                 await MainActor.run {
+                    guard exportRunID == runID else { return }
                     recordLog(
                         "PDF export failed",
                         message: error.localizedDescription,
                         level: .error,
-                        runID: runID,
                         present: true
                     )
                 }
@@ -3609,7 +3774,7 @@ struct TypesetWorkspaceView: View {
         // stored grant already covers the destination folder.
         let exportFolder = outputURL.deletingLastPathComponent()
         guard FolderAccessStore.hasAccess(to: exportFolder, requiresWrite: true) else {
-            print("Typeset PDF export on close skipped: no folder permission for \(exportFolder.path)")
+            exportLogger.info("PDF export on close skipped: no folder permission for \(exportFolder.path, privacy: .private)")
             return
         }
         #endif
@@ -3629,13 +3794,13 @@ struct TypesetWorkspaceView: View {
 
                 try await renderer.exportPDF(package: package, to: outputURL)
             } catch {
-                print("Typeset PDF export on close failed: \(error.localizedDescription)")
+                exportLogger.error("PDF export on close failed: \(error.localizedDescription, privacy: .private)")
             }
         }
     }
 
     private func exportPDFDirectly(to outputURL: URL, presentErrors: Bool) {
-        let runID = beginDiagnosticRun()
+        let runID = beginExportRun()
         let package = packageSnapshotForExport()
         let renderer = self.renderer
         Task {
@@ -3650,22 +3815,20 @@ struct TypesetWorkspaceView: View {
 
                 try await renderer.exportPDF(package: package, to: outputURL)
                 await MainActor.run {
-                    guard diagnosticRunID == runID else { return }
+                    guard exportRunID == runID else { return }
                     recordLog(
                         "PDF exported",
                         message: outputURL.path,
-                        level: .info,
-                        runID: runID
+                        level: .info
                     )
                 }
             } catch {
                 await MainActor.run {
-                    guard diagnosticRunID == runID else { return }
+                    guard exportRunID == runID else { return }
                     recordLog(
                         "PDF export failed",
                         message: error.localizedDescription,
                         level: .error,
-                        runID: runID,
                         present: presentErrors
                     )
                 }
@@ -3797,7 +3960,7 @@ struct TypesetWorkspaceView: View {
                         }
                     }
 
-                    let data = try Data(contentsOf: url)
+                    let data = try await Self.readImportedFile(at: url)
                     _ = try document.package.addFile(
                         named: url.lastPathComponent,
                         data: data,
@@ -3884,6 +4047,25 @@ struct TypesetWorkspaceView: View {
         guard let image = UIImage(data: data), let jpeg = image.jpegData(compressionQuality: 0.9) else { return nil }
         return (jpeg, "jpg")
         #endif
+    }
+
+    /// Reads a file being imported off the main actor and under file
+    /// coordination: it can be large, or a cloud file that has to download
+    /// first, and either would otherwise stall the window for the duration.
+    nonisolated private static func readImportedFile(at url: URL) async throws -> Data {
+        try await Task.detached(priority: .userInitiated) {
+            var coordinationError: NSError?
+            var result: Result<Data, Error> = .failure(CocoaError(.fileReadUnknown))
+            NSFileCoordinator(filePresenter: nil).coordinate(
+                readingItemAt: url,
+                options: [],
+                error: &coordinationError
+            ) { readableURL in
+                result = Result { try Data(contentsOf: readableURL) }
+            }
+            if let coordinationError { throw coordinationError }
+            return try result.get()
+        }.value
     }
 
     @MainActor
@@ -4149,20 +4331,50 @@ struct TypesetWorkspaceView: View {
         return runID
     }
 
-    private var languageServiceDocumentID: String {
-        if let fileURL {
-            return String(abs(fileURL.standardizedFileURL.path.hashValue))
-        }
-        return String(abs(document.package.compileTargetPath.hashValue))
+    private func beginExportRun() -> UUID {
+        let runID = UUID()
+        exportRunID = runID
+        return runID
     }
 
+    /// Names this document's language-workspace mirror. A digest of the path
+    /// rather than `hashValue`, which is seeded per launch: every launch gave
+    /// every document a new mirror directory and left the old one behind.
+    private var languageServiceDocumentID: String {
+        guard let fileURL else { return untitledLanguageDocumentID }
+        let digest = SHA256.hash(data: Data(fileURL.standardizedFileURL.path.utf8))
+        return digest.prefix(16).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// With a `runID` this is a compile's result: it replaces the compile log,
+    /// unless a newer compile has started. Without one it is a notice, which
+    /// compiles leave alone (see `noticeEntries`); `present` then opens the
+    /// log, once per distinct message.
     private func recordLog(_ title: String, message: String, level: DiagnosticLogEntry.Level, runID: UUID? = nil, present: Bool = false) {
-        if let runID, diagnosticRunID != runID {
+        let entry = DiagnosticLogEntry(title: title, message: message, level: level)
+        if let runID {
+            guard diagnosticRunID == runID else { return }
+            logEntries = [entry]
             return
         }
-        logEntries = [DiagnosticLogEntry(title: title, message: message, level: level)]
+        // The same message again replaces its earlier copy; different ones
+        // (two files failing to import) stand side by side.
+        noticeEntries.removeAll { $0.title == title && $0.message == message }
+        noticeEntries.append(entry)
+        if noticeEntries.count > Self.noticeEntryLimit {
+            noticeEntries.removeFirst(noticeEntries.count - Self.noticeEntryLimit)
+        }
+        if present, !isLogPresented, presentedNoticeKeys.insert("\(title)\n\(message)").inserted {
+            presentLogs()
+        }
     }
 
+    private static let noticeEntryLimit = 50
+
+    /// `present` is deliberately not acted on here: these arrive with every
+    /// compile of a document that has an error in it, and opening the log
+    /// over the editor while the user types would be worse than the toolbar's
+    /// error badge.
     private func recordDiagnostics(_ diagnostics: [TypstSourceDiagnostic], runID: UUID? = nil, present: Bool = false) {
         if let runID, diagnosticRunID != runID {
             return
@@ -4236,6 +4448,7 @@ struct TypesetWorkspaceView: View {
         )
         diskFolderSnapshot = Set(document.package.allFolderPaths)
         writeThroughCreatedPaths = []
+        diskMirrorGeneration += 1
         // The freshly loaded package matches disk, so the opened file's bytes are
         // the agreed baseline for its external-change detection.
         managedFileDiskHash = managed.flatMap { path in
@@ -4269,8 +4482,22 @@ struct TypesetWorkspaceView: View {
         // lone .typ: it says nothing about the folder, so mirroring it would
         // remove every sibling. It is re-adopted instead; keep the snapshot.
         guard document.package.onDiskRootURL != nil else { return }
+        // Whether this pass touched the folder at all; see the end.
+        var didTouchDisk = false
         let fileManager = FileManager.default
         let currentFolders = Set(document.package.allFolderPaths)
+
+        // 0. A rename that only changes case. On a case-insensitive volume
+        // (the macOS default) the old and new spellings name ONE item, so the
+        // usual "write the new path, trash the old" would trash the file just
+        // written. Rename it in place and treat the old spelling as done.
+        var baseline = diskFileSnapshot
+        let respelled = renameCaseOnlyChangesOnDisk(root: root, currentFolders: currentFolders)
+        for (old, new) in respelled {
+            didTouchDisk = true
+            if let hash = baseline.removeValue(forKey: old) { baseline[new] = hash }
+            if writeThroughCreatedPaths.remove(old) != nil { writeThroughCreatedPaths.insert(new) }
+        }
 
         // 1. Create newly added folders, shallowest first.
         for folder in currentFolders.subtracting(diskFolderSnapshot)
@@ -4278,7 +4505,10 @@ struct TypesetWorkspaceView: View {
             let url = root.appending(path: folder)
             let existed = fileManager.fileExists(atPath: url.path)
             try? fileManager.createDirectory(at: url, withIntermediateDirectories: true)
-            if !existed { writeThroughCreatedPaths.insert(folder) }
+            if !existed {
+                writeThroughCreatedPaths.insert(folder)
+                didTouchDisk = true
+            }
         }
 
         // 2. Write new and changed files.
@@ -4293,11 +4523,13 @@ struct TypesetWorkspaceView: View {
             if file.path == managed { continue }
             let hash = file.data.hashValue
             if file.path == conflictPath {
-                nextSnapshot[file.path] = diskFileSnapshot[file.path] ?? hash
+                nextSnapshot[file.path] = baseline[file.path] ?? hash
                 continue
             }
-            nextSnapshot[file.path] = hash
-            guard diskFileSnapshot[file.path] != hash else { continue }
+            guard baseline[file.path] != hash else {
+                nextSnapshot[file.path] = hash
+                continue
+            }
             // Never write emptiness over a file that had content when it was
             // loaded and was not deliberately edited — that combination is the
             // signature of an incomplete read, not of user intent.
@@ -4309,7 +4541,7 @@ struct TypesetWorkspaceView: View {
                     message: "\(file.path) is unexpectedly empty in memory; its on-disk content was left untouched.",
                     level: .warning
                 )
-                nextSnapshot[file.path] = diskFileSnapshot[file.path] ?? hash
+                nextSnapshot[file.path] = baseline[file.path] ?? hash
                 continue
             }
             let url = root.appending(path: file.path)
@@ -4317,11 +4549,20 @@ struct TypesetWorkspaceView: View {
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            let isNewOnDisk = diskFileSnapshot[file.path] == nil && !fileManager.fileExists(atPath: url.path)
+            let isNewOnDisk = baseline[file.path] == nil && !fileManager.fileExists(atPath: url.path)
+            didTouchDisk = true
             do {
                 try file.data.write(to: url, options: .atomic)
+                // Only a write that landed becomes the baseline.
+                nextSnapshot[file.path] = hash
                 if isNewOnDisk { writeThroughCreatedPaths.insert(file.path) }
             } catch {
+                // Disk still holds what it held, so the baseline must too: the
+                // next sync then sees the file as unwritten and tries again,
+                // and a folder re-read finds disk == baseline rather than an
+                // "external change" to load over the user's edits. A file with
+                // no baseline stays out, as any not-yet-written file does.
+                if let previous = baseline[file.path] { nextSnapshot[file.path] = previous }
                 recordLog("Save failed", message: "\(file.path): \(error.localizedDescription)", level: .error, present: true)
             }
         }
@@ -4330,16 +4571,30 @@ struct TypesetWorkspaceView: View {
         // session took out of the package. Being gone from the package is not
         // enough: an undo can restore a package that predates files another
         // program has added since, and those must survive it.
-        let removals = document.package.mirrorRemovalPlan(
+        var removals = document.package.mirrorRemovalPlan(
             mirroredFiles: Set(diskFileSnapshot.keys),
             mirroredFolders: diskFolderSnapshot,
             createdByMirror: writeThroughCreatedPaths
         )
+        // An old spelling is not a second item to take away (see step 0).
+        removals.files.removeAll { respelled[$0] != nil }
+        removals.folders.removeAll { respelled[$0] != nil }
+        removals.retained.removeAll { respelled[$0] != nil }
         for removed in removals.files + removals.folders {
+            didTouchDisk = true
             removeManagedItemGently(at: root.appending(path: removed))
             writeThroughCreatedPaths.remove(removed)
         }
 
+        // A folder re-read that started before this pass describes a disk, or
+        // is about to be compared with a baseline, that no longer holds; it
+        // must not be applied (see `diskMirrorGeneration`). A pass that
+        // changed neither — nearly all of them: typing in the opened file
+        // schedules one per pause, and that file isn't ours to write — leaves
+        // a running re-read valid.
+        if didTouchDisk || nextSnapshot != diskFileSnapshot || currentFolders != diskFolderSnapshot {
+            diskMirrorGeneration += 1
+        }
         diskFileSnapshot = nextSnapshot
         diskFolderSnapshot = currentFolders
 
@@ -4357,13 +4612,76 @@ struct TypesetWorkspaceView: View {
         }
     }
 
+    /// The snapshot paths the package now spells with different case where both
+    /// spellings name one item on disk — a case-only rename on a
+    /// case-insensitive volume — keyed old to new, after renaming each on disk.
+    /// Folders go first, shallowest first, so a renamed folder's files are
+    /// already under the new spelling when their turn comes. On a
+    /// case-sensitive volume the two spellings are different items (or the new
+    /// one doesn't exist yet), nothing matches, and the ordinary write and
+    /// removal apply.
+    private func renameCaseOnlyChangesOnDisk(root: URL, currentFolders: Set<String>) -> [String: String] {
+        let currentFiles = Set(document.package.files.map(\.path))
+        var respelled: [String: String] = [:]
+
+        func adopt(missing: [String], current: Set<String>) {
+            guard !missing.isEmpty else { return }
+            let currentByFoldedPath = Dictionary(
+                current.map { ($0.lowercased(), $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            for old in missing {
+                guard let new = currentByFoldedPath[old.lowercased()], new != old else { continue }
+                let oldURL = root.appending(path: old)
+                let newURL = root.appending(path: new)
+                guard Self.isSameItemOnDisk(oldURL, newURL) else { continue }
+                // rename(2), not FileManager: it is the call documented to
+                // respell an entry whose source and destination are one file.
+                // A failure leaves the old spelling on disk, which still must
+                // not be trashed — it IS the file.
+                _ = Darwin.rename(oldURL.path, newURL.path)
+                respelled[old] = new
+            }
+        }
+
+        adopt(
+            missing: diskFolderSnapshot.subtracting(currentFolders).sorted { $0.count < $1.count },
+            current: currentFolders
+        )
+        adopt(
+            missing: Set(diskFileSnapshot.keys).subtracting(currentFiles).sorted(),
+            current: currentFiles
+        )
+        return respelled
+    }
+
+    private static func isSameItemOnDisk(_ first: URL, _ second: URL) -> Bool {
+        guard let firstID = try? first.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier,
+              let secondID = try? second.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier
+        else { return false }
+        return firstID.isEqual(secondID)
+    }
+
     /// Removes an item the write-through previously managed, preferring the
     /// Trash so an unexpected removal stays recoverable. On a volume with no
     /// Trash the item is left in place — an orphaned file can be cleaned up,
     /// a deleted one is gone.
     private func removeManagedItemGently(at url: URL) {
         let fileManager = FileManager.default
-        guard fileManager.fileExists(atPath: url.path) else { return }
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return }
+        // The loader leaves directories such as `.git` out of the package, so
+        // a folder the package no longer has can still hold one on disk.
+        // Trashing the folder would take it along; its tracked files are
+        // already gone, so leave what remains where it is.
+        if isDirectory.boolValue, Self.holdsUntrackedDirectory(url) {
+            recordLog(
+                "Folder left in place",
+                message: "\(url.lastPathComponent) still holds a folder Typeset does not manage, so it was not moved to the Trash.",
+                level: .warning
+            )
+            return
+        }
         do {
             try fileManager.trashItem(at: url, resultingItemURL: nil)
         } catch {
@@ -4373,6 +4691,20 @@ struct TypesetWorkspaceView: View {
                 level: .warning
             )
         }
+    }
+
+    private static func holdsUntrackedDirectory(_ url: URL) -> Bool {
+        guard let enumerator = FileManager.default.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isDirectoryKey]
+        ) else { return false }
+        for case let child as URL in enumerator {
+            if DocumentPackage.isSkippedDirectoryName(child.lastPathComponent),
+               (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                return true
+            }
+        }
+        return false
     }
 
     // MARK: - External folder monitoring (#1 reflect changes, #3 conflict prompt)
@@ -4447,6 +4779,12 @@ struct TypesetWorkspaceView: View {
         #endif
         // Don't reconcile while a conflict prompt is up; we re-run after it resolves.
         guard pendingConflict == nil else { return }
+        // One read at a time; whatever prompted this request is picked up by
+        // a fresh pass once the running one has been applied.
+        guard !isExternalReconcileReading else {
+            externalReconcileRequestedDuringRead = true
+            return
+        }
         // A replaced document that could not be re-adopted yet: retry that
         // rather than merging the folder into a package that isn't one.
         if readoptFolderIfDocumentWasReplaced(previous: nil) { return }
@@ -4456,12 +4794,59 @@ struct TypesetWorkspaceView: View {
         // load: acknowledging it to the NSDocument can't hide a later write.
         let managedDiskDate = managedFileModificationDate(at: openedURL)
 
-        // Re-read disk through the same loader so file filtering can't drift. A
-        // transient failure (root vanished, mid atomic-rename) just bails; a later
-        // event retries.
-        guard var fresh = try? DocumentPackage(directoryURL: root, openedFileURL: openedURL) else {
-            return
+        // Re-read disk through the same loader so file filtering can't drift.
+        // The loader reads every file in the folder under file coordination,
+        // and this runs after every write of ours as well as every outside
+        // one, so it stays off the main actor: on it, a large folder hitched
+        // the editor at each typing pause.
+        let generation = diskMirrorGeneration
+        isExternalReconcileReading = true
+        Task { @MainActor in
+            let fresh = await Task.detached(priority: .userInitiated) {
+                try? DocumentPackage(directoryURL: root, openedFileURL: openedURL)
+            }.value
+            isExternalReconcileReading = false
+            let requestedDuringRead = externalReconcileRequestedDuringRead
+            externalReconcileRequestedDuringRead = false
+
+            // The folder was written, or the snapshot re-baselined, while the
+            // read ran: what it saw may predate that, and applying it would
+            // take our own write for an external change. Read again instead.
+            guard generation == diskMirrorGeneration else {
+                scheduleExternalReconcile()
+                return
+            }
+            // A transient failure (root vanished, mid atomic-rename) just
+            // bails; a later event retries.
+            if let fresh {
+                applyExternalReconcile(fresh, root: root, openedURL: openedURL, managedDiskDate: managedDiskDate)
+            }
+            if requestedDuringRead { scheduleExternalReconcile() }
         }
+    }
+
+    /// The main-actor half of `reconcileExternalChanges`: merges a folder
+    /// re-read into the package and editor. Everything else it consults —
+    /// editor text, package, snapshot — is read here, at apply time, so edits
+    /// made while the read ran are part of the comparison.
+    private func applyExternalReconcile(
+        _ loaded: DocumentPackage,
+        root: URL,
+        openedURL: URL,
+        managedDiskDate: Date?
+    ) {
+        // The world may have moved on during the read: the watcher torn down,
+        // a prompt raised, another document's folder now current, or the
+        // document system swapping in its own lone-file package.
+        #if os(macOS)
+        guard directoryWatcher != nil else { return }
+        #endif
+        guard pendingConflict == nil,
+              directoryModeRootURL == root,
+              loadedTypstDirectoryFileURL == openedURL else { return }
+        if readoptFolderIfDocumentWasReplaced(previous: nil) { return }
+
+        var fresh = loaded
         reportSkippedFiles(fresh.skippedFiles)
         startCloudDownloads(for: fresh)
 
@@ -4474,8 +4859,15 @@ struct TypesetWorkspaceView: View {
         // live "changed on disk" prompt, so monitor it here too. Capture its
         // on-disk bytes now, before the in-app copy below overwrites them in
         // `fresh`, and compare against the editor and the agreed baseline.
+        // Read again here rather than taken from `fresh`: that was read off
+        // the main actor a moment ago, and the document may have autosaved the
+        // editor's text since. Comparing those older bytes with the editor's
+        // current text would take the user's own save for an external change.
         let managedDiskText: String? = managed.flatMap { path in
-            fresh.files.contains(where: { $0.path == path }) ? fresh.text(for: path) : nil
+            if let data = try? Data(contentsOf: openedURL) {
+                return String(decoding: data, as: UTF8.self)
+            }
+            return fresh.files.contains(where: { $0.path == path }) ? fresh.text(for: path) : nil
         }
         let managedEditorText: String? = managed.map { path in
             path == selectedPath ? sourceText : document.package.text(for: path)
@@ -4523,8 +4915,20 @@ struct TypesetWorkspaceView: View {
         // `pendingWrites` and kept OUT of the disk baseline, so the next
         // write-through writes them.
         var pendingWrites: Set<String> = []
+        // The same goes for a file that WAS on disk, has been edited here
+        // since (its bytes differ from the baseline), and has now been removed
+        // by another program before the write-through got to it: the edit is
+        // the only copy left, so it is kept and written back.
+        //
+        // "Edited here" means the package recorded the change, not merely that
+        // the bytes differ: a file that is unexpectedly empty in memory (an
+        // incomplete read; see the write-through) differs too, and must not
+        // be promoted into something to write.
+        let editedHere = document.package.changedPaths
         for file in document.package.files
-        where file.path != managed && diskHashes[file.path] == nil && diskFileSnapshot[file.path] == nil {
+        where file.path != managed && diskHashes[file.path] == nil
+            && (diskFileSnapshot[file.path] == nil
+                || (diskFileSnapshot[file.path] != file.data.hashValue && editedHere.contains(file.path))) {
             let parts = file.path.split(separator: "/").map(String.init)
             let folder = parts.count > 1 ? parts.dropLast().joined(separator: "/") : nil
             if let folder { ensureFolderExists(folder, in: &fresh) }
@@ -4535,6 +4939,47 @@ struct TypesetWorkspaceView: View {
         }
 
         let openPath = selectedPath
+
+        // Files that are not open can hold edits the write-through has not
+        // written yet — Replace All across files, a symbol rename, a move that
+        // updated references — and it waits 400 ms where this pass waits 250.
+        // `fresh` has their old disk bytes, so adopting it as is would revert
+        // them. Keep the in-memory bytes; the baseline stays at what disk
+        // holds, so the write-through still sees them as unwritten.
+        //
+        // If another program changed the same file in that window there are
+        // two versions and nothing to choose between them, so it goes through
+        // the same prompt as the open file (one at a time). A second such file
+        // in one pass, or one that isn't text, keeps the version edited here,
+        // which is what the write-through would have done had the folder event
+        // arrived a moment later.
+        var siblingConflict: DiskConflict?
+        var siblingConflictHash: Int?
+        var keptWithoutPrompt: [String] = []
+        for file in document.package.files
+        where file.path != managed && file.path != openPath && editedHere.contains(file.path) {
+            guard let baselineHash = diskFileSnapshot[file.path],
+                  let diskHash = diskHashes[file.path] else { continue }
+            let inMemoryHash = file.data.hashValue
+            guard inMemoryHash != baselineHash, inMemoryHash != diskHash else { continue }
+            if diskHash != baselineHash, siblingConflict == nil, file.isTextEditable {
+                siblingConflict = DiskConflict(path: file.path, diskText: fresh.text(for: file.path))
+                siblingConflictHash = inMemoryHash
+            } else if diskHash != baselineHash {
+                keptWithoutPrompt.append(file.path)
+            }
+            try? fresh.updateFileData(file.data, for: file.path)
+        }
+        // Not silently: the other program's version of these is about to be
+        // overwritten by the write-through.
+        if !keptWithoutPrompt.isEmpty {
+            recordLog(
+                "Kept the versions edited here",
+                message: "Also changed on disk by another program: \(keptWithoutPrompt.sorted().joined(separator: ", ")).",
+                level: .warning
+            )
+        }
+
         let openInPackage = fresh.files.contains { $0.path == openPath }
         let openReallyOnDisk = diskHashes[openPath] != nil
         let editorHash = Data(sourceText.utf8).hashValue
@@ -4618,9 +5063,15 @@ struct TypesetWorkspaceView: View {
         // divergent and prompt.
         diskFileSnapshot = diskHashes
         diskFolderSnapshot = diskFolders
+        diskMirrorGeneration += 1
         if conflict {
             diskFileSnapshot[openPath] = Data(sourceText.utf8).hashValue
             pendingConflict = DiskConflict(path: openPath, diskText: openDiskText)
+        } else if let siblingConflict, let siblingConflictHash {
+            // Baselined at the in-memory bytes, like the open file above, and
+            // frozen by the write-through while the prompt is up.
+            diskFileSnapshot[siblingConflict.path] = siblingConflictHash
+            pendingConflict = siblingConflict
         }
 
         // The opened document, with the same policy as siblings: silently reload
@@ -4779,6 +5230,7 @@ struct TypesetWorkspaceView: View {
         // Idempotent: a button tap and the alert's dismiss-binding can both fire.
         guard pendingConflict?.id == conflict.id else { return }
         pendingConflict = nil
+        diskMirrorGeneration += 1
         // The opened document is SwiftUI-managed: don't write it ourselves (that
         // desyncs SwiftUI's change tracking). The editor keeps the user's text
         // and the document saves it over the external version.
@@ -4791,10 +5243,14 @@ struct TypesetWorkspaceView: View {
         let data = Data(document.package.text(for: conflict.path).utf8)
         do {
             try data.write(to: root.appending(path: conflict.path), options: .atomic)
+            diskFileSnapshot[conflict.path] = data.hashValue
         } catch {
+            // Disk still has the other program's version. Baseline THAT, so
+            // the user's text reads as unwritten — retried by the next sync,
+            // kept by the next re-read — instead of as already saved.
+            diskFileSnapshot[conflict.path] = Data(conflict.diskText.utf8).hashValue
             recordLog("Save failed", message: "\(conflict.path): \(error.localizedDescription)", level: .error, present: true)
         }
-        diskFileSnapshot[conflict.path] = data.hashValue
         // Drain any other changes batched while the prompt was up.
         scheduleExternalReconcile()
     }
@@ -4802,6 +5258,7 @@ struct TypesetWorkspaceView: View {
     private func resolveConflictRevertingToDisk(_ conflict: DiskConflict) {
         guard pendingConflict?.id == conflict.id else { return }
         pendingConflict = nil
+        diskMirrorGeneration += 1
         // The opened document is tracked apart from `diskFileSnapshot`; adopt the
         // disk bytes and advance its own baseline instead.
         if conflict.path == documentManagedPath {

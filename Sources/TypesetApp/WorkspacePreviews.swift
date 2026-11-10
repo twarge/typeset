@@ -217,6 +217,9 @@ struct QuickLookFilePreview: View {
         .task(id: previewIdentity) {
             preparePreviewFile()
         }
+        .onDisappear {
+            removePreviewFile()
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -224,7 +227,17 @@ struct QuickLookFilePreview: View {
         "\(file.path)-\(file.data.count)-\(file.data.hashValue)"
     }
 
+    /// Deletes the temporary copy Quick Look was reading, directory and all.
+    /// Each copy gets a directory of its own (so the file can keep its real
+    /// name), and nothing else ever cleans those up.
+    private func removePreviewFile() {
+        guard let previewURL else { return }
+        try? FileManager.default.removeItem(at: previewURL.deletingLastPathComponent())
+        self.previewURL = nil
+    }
+
     private func preparePreviewFile() {
+        removePreviewFile()
         do {
             let directory = FileManager.default.temporaryDirectory
                 .appending(path: "TypesetAssetPreviews", directoryHint: .isDirectory)
@@ -318,16 +331,20 @@ struct PackageImagePreview: View {
     var file: PackageFile
     var backgroundColor = Color.clear
 
+    /// Parsing a PDF or decoding an image is far too much to repeat on every
+    /// evaluation of `body`, which unrelated state changes trigger freely; the
+    /// result is kept until the file's bytes change.
+    @State private var decoder = PackageImageDecoder()
+
     var body: some View {
         Group {
-            if file.isPDF {
-                if PDFDocument(data: file.data) != nil {
-                    PackagePDFView(data: file.data)
-                        .background(backgroundColor)
-                } else {
-                    ContentUnavailableView(file.name, systemImage: "doc.richtext", description: Text("The PDF could not be displayed."))
-                }
-            } else if let image = PlatformImage(data: file.data) {
+            switch decoder.content(for: file) {
+            case .pdf:
+                PackagePDFView(data: file.data)
+                    .background(backgroundColor)
+            case .unreadablePDF:
+                ContentUnavailableView(file.name, systemImage: "doc.richtext", description: Text("The PDF could not be displayed."))
+            case .image(let image):
                 GeometryReader { proxy in
                     PlatformImageView(image: image)
                         .resizable()
@@ -335,11 +352,40 @@ struct PackageImagePreview: View {
                         .frame(width: proxy.size.width, height: proxy.size.height)
                 }
                 .background(backgroundColor)
-            } else {
+            case .unreadableImage:
                 ContentUnavailableView(file.name, systemImage: "photo", description: Text("The image could not be displayed."))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// See `PackageImagePreview.decoder`. A reference type so filling it in from
+/// `body` is not a state change.
+@MainActor private final class PackageImageDecoder {
+    enum Content {
+        case pdf
+        case unreadablePDF
+        case image(PlatformImage)
+        case unreadableImage
+    }
+
+    private var decoded: (isPDF: Bool, data: Data, content: Content)?
+
+    func content(for file: PackageFile) -> Content {
+        if let decoded, decoded.isPDF == file.isPDF, decoded.data == file.data {
+            return decoded.content
+        }
+        let content: Content
+        if file.isPDF {
+            content = PDFDocument(data: file.data) != nil ? .pdf : .unreadablePDF
+        } else if let image = PlatformImage(data: file.data) {
+            content = .image(image)
+        } else {
+            content = .unreadableImage
+        }
+        decoded = (file.isPDF, file.data, content)
+        return content
     }
 }
 
@@ -357,13 +403,23 @@ struct PlatformQuickLookPreview: NSViewRepresentable {
         let view = QLPreviewView(frame: .zero, style: .normal)!
         view.autostarts = true
         view.previewItem = url as NSURL
+        context.coordinator.url = url
         return view
     }
 
     func updateNSView(_ view: QLPreviewView, context: Context) {
+        // Only for a new file: this runs on every update pass, and refreshing
+        // restarts the preview (a movie from its beginning, a document from
+        // its first page).
+        guard context.coordinator.url != url else { return }
+        context.coordinator.url = url
         view.previewItem = url as NSURL
         view.refreshPreviewItem()
     }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator { var url: URL? }
 }
 
 /// Renders PDF data with PDFKit's scrollable, zoomable `PDFView`. The document
@@ -410,6 +466,9 @@ struct PlatformQuickLookPreview: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: QLPreviewController, context: Context) {
+        // Only for a new file: this runs on every update pass, and reloading
+        // restarts the preview.
+        guard context.coordinator.url != url else { return }
         context.coordinator.url = url
         controller.reloadData()
     }

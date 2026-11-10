@@ -163,9 +163,19 @@ struct PlatformTextView: UIViewRepresentable {
         }
         textView.isEditable = isEditable
 
-        if let selectedRange, textView.selectedRange != selectedRange {
-            textView.selectedRange = selectedRange
-            textView.scrollRangeToVisible(selectedRange)
+        if let requestedRange = selectedRange {
+            // The request can be for a text the native view hasn't caught up
+            // with (or has moved past); never hand UIKit a range outside it.
+            let length = (textView.text as NSString).length
+            let location = min(max(0, requestedRange.location), length)
+            let selectedRange = NSRange(
+                location: location,
+                length: min(max(0, requestedRange.length), length - location)
+            )
+            if textView.selectedRange != selectedRange {
+                textView.selectedRange = selectedRange
+                textView.scrollRangeToVisible(selectedRange)
+            }
             DispatchQueue.main.async {
                 self.selectedRange = nil
             }
@@ -254,6 +264,9 @@ struct PlatformTextView: UIViewRepresentable {
         private var gestureStartFontSize = SourceEditorFont.defaultSize
         private var gestureCurrentFontSize = SourceEditorFont.defaultSize
         private var appliedFontSize = 0.0
+        /// False until the document's text has first been put in the view.
+        /// That load is not an edit; every later change of the binding is.
+        private var hasLoadedInitialText = false
         private var lastFocusRequest = 0
         private let handledRequests: HandledEditorRequests
         private var nativeTextAwaitingBinding: String?
@@ -335,10 +348,21 @@ struct PlatformTextView: UIViewRepresentable {
         }
 
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText replacement: String) -> Bool {
+            // A text the host changed is applied as an edit of its own (see
+            // `replaceTextUndoably`); it is neither typing nor the user's.
+            guard !isApplyingHighlighting else { return true }
             onEditorInteraction()
             guard !isApplyingPairEdit, !isApplyingAutocorrectionEdit,
                   textView.isEditable, textView.markedTextRange == nil else { return true }
             let text = textView.text ?? ""
+            // Undo and redo must land exactly as recorded; pairing, indenting
+            // or autocorrecting them would restore a different text than the
+            // one undone.
+            if let undoManager = textView.undoManager,
+               undoManager.isUndoing || undoManager.isRedoing {
+                trackProseEdit(replacing: range, with: replacement, in: text)
+                return true
+            }
             let selectedRange = textView.selectedRange
 
             if replacement == "\n",
@@ -737,12 +761,23 @@ struct PlatformTextView: UIViewRepresentable {
                 updateLanguageOverlayAnchor(in: textView)
             }
             if !isRestoringScroll {
-                let maxScroll = max(0, scrollView.contentSize.height - scrollView.bounds.height)
-                let fraction = maxScroll > 0
-                    ? Double(min(1, max(0, scrollView.contentOffset.y / maxScroll)))
+                let extent = Self.verticalScrollExtent(of: scrollView)
+                let fraction = extent.length > 0
+                    ? Double(min(1, max(0, (scrollView.contentOffset.y - extent.top) / extent.length)))
                     : 0
                 onScrollFractionChange?(fraction)
             }
+        }
+
+        /// The content offsets the view can rest at, top to bottom. The editor
+        /// manages its own top inset (see `PackageTextView.init`), so the top of
+        /// the document sits at `-contentInset.top`, not zero: an offset of zero
+        /// leaves the first lines under the toolbar.
+        private static func verticalScrollExtent(of scrollView: UIScrollView) -> (top: CGFloat, length: CGFloat) {
+            let inset = scrollView.adjustedContentInset
+            let top = -inset.top
+            let bottom = scrollView.contentSize.height - scrollView.bounds.height + inset.bottom
+            return (top, max(0, bottom - top))
         }
 
         func restoreScrollIfNeeded(_ request: SourceEditorScrollRestore?, in textView: UITextView) {
@@ -779,8 +814,9 @@ struct PlatformTextView: UIViewRepresentable {
                     let len = min(selection.length, max(0, length - location))
                     textView.selectedRange = NSRange(location: location, length: len)
                 }
-                let maxScroll = max(0, textView.contentSize.height - textView.bounds.height)
-                let target = min(maxScroll, max(0, maxScroll * CGFloat(fraction)))
+                let extent = Self.verticalScrollExtent(of: textView)
+                let maxScroll = extent.length
+                let target = extent.top + min(maxScroll, max(0, maxScroll * CGFloat(fraction)))
                 textView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
                 if attemptsRemaining > 0, abs(maxScroll - previousMaxScroll) > 0.5 {
                     self.applyRestoreScroll(
@@ -816,12 +852,16 @@ struct PlatformTextView: UIViewRepresentable {
                 let range = NSRange(location: location, length: len)
                 textView.selectedRange = range
                 textView.scrollRangeToVisible(range)
-                let maxScroll = max(0, textView.contentSize.height - textView.bounds.height)
-                // Center the match using the caret rect when layout is ready.
+                let extent = Self.verticalScrollExtent(of: textView)
+                let maxScroll = extent.length
+                // Center the match using the caret rect when layout is ready —
+                // in the part of the view the insets leave uncovered.
                 if let start = textView.position(from: textView.beginningOfDocument, offset: range.location) {
                     let caret = textView.caretRect(for: start)
                     if caret.midY.isFinite {
-                        let target = min(maxScroll, max(0, caret.midY - textView.bounds.height / 2))
+                        let inset = textView.adjustedContentInset
+                        let centered = caret.midY - (textView.bounds.height + inset.top - inset.bottom) / 2
+                        let target = min(extent.top + maxScroll, max(extent.top, centered))
                         textView.setContentOffset(CGPoint(x: textView.contentOffset.x, y: target), animated: false)
                     }
                 }
@@ -913,9 +953,17 @@ struct PlatformTextView: UIViewRepresentable {
                 } catch {
                     return
                 }
-                let tokens = await Task.detached(priority: .userInitiated) {
-                    TypstSyntaxHighlighter.tokens(in: snapshot, syntax: snapshotSyntax)
-                }.value
+                // A detached task doesn't inherit this one's cancellation, so
+                // pass it on: a superseded pass over a large file stops early
+                // instead of running to completion beside its replacement.
+                let tokenizing = Task.detached(priority: .userInitiated) {
+                    TypstSyntaxHighlighter.tokens(in: snapshot, syntax: snapshotSyntax, checkingCancellation: true)
+                }
+                let tokens = await withTaskCancellationHandler {
+                    await tokenizing.value
+                } onCancel: {
+                    tokenizing.cancel()
+                }
                 guard !Task.isCancelled,
                       let self,
                       let textView,
@@ -974,11 +1022,14 @@ struct PlatformTextView: UIViewRepresentable {
                 }
                 autocorrectionProseRanges = proseRangesAreCurrent ? proseRanges : []
                 autocorrectionTextLength = (text as NSString).length
-                textView.attributedText = NSAttributedString(
-                    string: text,
-                    attributes: TypstSyntaxHighlighter.baseAttributes(font: font)
-                )
+                if !hasLoadedInitialText || !replaceTextUndoably(in: textView, with: text) {
+                    textView.attributedText = NSAttributedString(
+                        string: text,
+                        attributes: TypstSyntaxHighlighter.baseAttributes(font: font)
+                    )
+                }
             }
+            hasLoadedInitialText = true
 
             TypstSyntaxHighlighter.applyTokenStyling(to: textView, text: text, font: font, syntax: syntax)
             applyDiagnosticsAndSpelling(to: textView)
@@ -987,6 +1038,24 @@ struct PlatformTextView: UIViewRepresentable {
                 location: min(selectedRange.location, textLength),
                 length: min(selectedRange.length, max(0, textLength - min(selectedRange.location, textLength)))
             )
+        }
+
+        /// Puts a text the host changed — an accepted completion, a replace, a
+        /// reload — into the view as one ordinary edit. Assigning
+        /// `attributedText` instead throws away the undo history and lays the
+        /// whole document out again. Returns false, having changed nothing,
+        /// when the edit can't be expressed in the view's own positions.
+        private func replaceTextUndoably(in textView: UITextView, with text: String) -> Bool {
+            guard textView.isEditable,
+                  let edit = SourceEditorTextDiff.minimalEdit(from: textView.text ?? "", to: text),
+                  let start = textView.position(from: textView.beginningOfDocument, offset: edit.range.location),
+                  let end = textView.position(from: start, offset: edit.range.length),
+                  let textRange = textView.textRange(from: start, to: end)
+            else { return false }
+            // `isApplyingHighlighting` is set by the caller, so the delegate
+            // neither re-pairs this nor reports it back as typing.
+            textView.replace(textRange, withText: edit.replacement)
+            return textView.text == text
         }
 
         private func applyFontOnly(to textView: UITextView, size: Double) {
@@ -1019,12 +1088,15 @@ struct PlatformTextView: UIViewRepresentable {
             }
 
             if spellCheckingEnabled {
+                // Read once: `text` bridges the whole storage to a fresh
+                // String on every access, and this loop runs per misspelling.
+                let text = textView.text ?? ""
                 for proseRange in proseRanges where NSMaxRange(proseRange.range) <= textView.textStorage.length {
                     let rangeEnd = NSMaxRange(proseRange.range)
                     var searchLocation = proseRange.range.location
                     while searchLocation < rangeEnd {
                         let misspelled = spellChecker.rangeOfMisspelledWord(
-                            in: textView.text,
+                            in: text,
                             range: proseRange.range,
                             startingAt: searchLocation,
                             wrap: false,
@@ -1060,42 +1132,26 @@ struct PlatformTextView: UIViewRepresentable {
         }
 
         func textDroppableView(_ textDroppableView: UIView & UITextDroppable, proposalForDrop drop: UITextDropRequest) -> UITextDropProposal {
+            // Only plain text gets this far (see `canInsertPackagePath`), and
+            // the text view inserts that itself. It is an ordinary text drag —
+            // often the user's own selection — so the package drop ring, which
+            // says "a reference will be inserted here", stays off; it belongs
+            // to the drop interaction below.
             guard canInsertPackagePath(from: drop) else {
-                isPackageDropTargeted.wrappedValue = false
                 return UITextDropProposal(operation: .cancel)
             }
 
             if let textView = textDroppableView as? UITextView {
                 updateInsertionPoint(at: drop.dropPosition, in: textView)
             }
-            isPackageDropTargeted.wrappedValue = true
             let proposal = UITextDropProposal(operation: .copy)
             proposal.dropAction = .insert
             return proposal
         }
 
-        func textDroppableView(_ textDroppableView: UIView & UITextDroppable, willPerformDrop drop: UITextDropRequest) {
-            guard let textView = textDroppableView as? UITextView else {
-                return
-            }
-
-            for item in drop.dropSession.items {
-                loadPackageDrop(from: item.itemProvider) { [weak self, weak textView] dropItem in
-                    guard let dropItem else {
-                        return
-                    }
-
-                    Task { @MainActor in
-                        guard let self, let textView else { return }
-                        guard let snippet = self.snippet(for: dropItem) else {
-                            return
-                        }
-                        self.insertSnippet(snippet, at: drop.dropPosition, in: textView)
-                        self.isPackageDropTargeted.wrappedValue = false
-                    }
-                }
-            }
-        }
+        // No `willPerformDrop`: the proposal above has the text view insert the
+        // dragged text, so also turning that text into a snippet here (it used
+        // to, when the text happened to name a package file) inserted both.
 
         private func canInsertPackagePath(from drop: UITextDropRequest) -> Bool {
             // The dedicated UIDropInteraction handles image / file / package
@@ -1113,12 +1169,15 @@ struct PlatformTextView: UIViewRepresentable {
         private enum LoadedDropItem: Sendable {
             case packagePath(String)
             case externalFile(URL)
+            /// Dropped image data this class wrote to a temporary file of its
+            /// own, to be deleted once it has been imported.
+            case temporaryFile(URL)
 
             var path: String {
                 switch self {
                 case .packagePath(let path):
                     return path
-                case .externalFile(let url):
+                case .externalFile(let url), .temporaryFile(let url):
                     return url.path
                 }
             }
@@ -1173,7 +1232,7 @@ struct PlatformTextView: UIViewRepresentable {
                         completion(nil)
                         return
                     }
-                    completion(.externalFile(url))
+                    completion(.temporaryFile(url))
                 }
                 return
             }
@@ -1236,10 +1295,28 @@ struct PlatformTextView: UIViewRepresentable {
         }
 
         func dropInteraction(_ interaction: UIDropInteraction, sessionDidUpdate session: UIDropSession) -> UIDropProposal {
-            UIDropProposal(operation: canImportSession(session) ? .copy : .cancel)
+            let canImport = canImportSession(session)
+            setPackageDropTargeted(canImport)
+            return UIDropProposal(operation: canImport ? .copy : .cancel)
+        }
+
+        // The ring has to come down however the drag leaves — out of the
+        // editor, cancelled, or dropped — or it stays lit over the text.
+        func dropInteraction(_ interaction: UIDropInteraction, sessionDidExit session: UIDropSession) {
+            setPackageDropTargeted(false)
+        }
+
+        func dropInteraction(_ interaction: UIDropInteraction, sessionDidEnd session: UIDropSession) {
+            setPackageDropTargeted(false)
+        }
+
+        private func setPackageDropTargeted(_ isTargeted: Bool) {
+            guard isPackageDropTargeted.wrappedValue != isTargeted else { return }
+            isPackageDropTargeted.wrappedValue = isTargeted
         }
 
         func dropInteraction(_ interaction: UIDropInteraction, performDrop session: UIDropSession) {
+            setPackageDropTargeted(false)
             guard let textView = interaction.view as? UITextView else { return }
             let dropPoint = session.location(in: textView)
             for item in session.items {
@@ -1300,6 +1377,11 @@ struct PlatformTextView: UIViewRepresentable {
             case .packagePath(let path):
                 return snippet(for: path)
             case .externalFile(let url):
+                return snippetForExternalFile(url)
+            case .temporaryFile(let url):
+                // The import copies the bytes into the package before it
+                // returns; the file and the directory made for it are done.
+                defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
                 return snippetForExternalFile(url)
             }
         }
@@ -1584,13 +1666,22 @@ struct PlatformTextView: UIViewRepresentable {
 
         override var keyCommands: [UIKeyCommand]? {
             guard isCompletionPresented else { return super.keyCommands }
-            return [
+            let commands = [
                 UIKeyCommand(input: UIKeyCommand.inputDownArrow, modifierFlags: [], action: #selector(moveCompletionDown)),
                 UIKeyCommand(input: UIKeyCommand.inputUpArrow, modifierFlags: [], action: #selector(moveCompletionUp)),
                 UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(acceptCompletion)),
                 UIKeyCommand(input: "\t", modifierFlags: [], action: #selector(acceptCompletion)),
                 UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(dismissCompletion)),
-            ] + (super.keyCommands ?? [])
+            ]
+            // Since iOS 15 a focused text view's own handling of these keys
+            // (move the caret, insert a newline or a tab) beats a key command
+            // unless the command asks for priority — without it the list could
+            // not be driven from a hardware keyboard at all. They exist only
+            // while the list is up (the guard above), so typing is unaffected.
+            for command in commands {
+                command.wantsPriorityOverSystemBehavior = true
+            }
+            return commands + (super.keyCommands ?? [])
         }
 
         @objc private func moveCompletionDown() {
@@ -1607,6 +1698,19 @@ struct PlatformTextView: UIViewRepresentable {
 
         @objc private func dismissCompletion() {
             _ = onCompletionKey?(.dismiss)
+        }
+
+        /// A plain-text `UITextView` only offers Paste when the pasteboard
+        /// holds text, which hides it for a copied image — the one thing
+        /// `paste(_:)` below goes out of its way to import. `hasImages` and
+        /// `hasURLs` answer without reading the contents, so asking doesn't
+        /// raise the system's paste notice.
+        override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+            if action == #selector(paste(_:)), isEditable,
+               UIPasteboard.general.hasImages || UIPasteboard.general.hasURLs {
+                return true
+            }
+            return super.canPerformAction(action, withSender: sender)
         }
 
         override func paste(_ sender: Any?) {
@@ -1633,7 +1737,12 @@ struct PlatformTextView: UIViewRepresentable {
         var scrollOffset: CGFloat
 
         private var lineCount: Int {
-            max(1, text.filter { $0 == "\n" }.count + 1)
+            // Count line feeds as UTF-16 units: a CRLF pair is one Character
+            // that isn't "\n", so counting Characters numbered every line of
+            // a Windows-style file 1.
+            text.utf16.reduce(into: 1) { count, unit in
+                if unit == 0x0A { count += 1 }
+            }
         }
 
         var body: some View {

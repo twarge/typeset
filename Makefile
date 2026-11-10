@@ -1,8 +1,8 @@
 # Builds are identical to pressing Build in Xcode: plain xcodebuild against
 # the shared scheme, default derived data, automatic signing — no overrides.
-# The Xcode project builds its own dependencies (the TypesetLang.xcframework
-# from the Rust FFI crate, and the bundled Typst CLI), so a fresh clone
-# builds from scratch with a bare `make`.
+# The Xcode project builds its own dependency (the TypesetLang.xcframework
+# from the Rust FFI crate), so a fresh clone builds from scratch with a bare
+# `make`.
 
 SCHEME := Typeset
 CONFIGURATION := Debug

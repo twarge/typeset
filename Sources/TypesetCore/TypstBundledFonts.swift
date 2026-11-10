@@ -41,6 +41,16 @@ public enum TypstBundledFonts {
         #endif
     }
 
+    /// `install()`, exactly once per process. Every path into the embedded
+    /// compiler calls this first — a render, a language-service request, the
+    /// launch warm-up — because the first of them to need fonts builds the
+    /// shared font store, and it never looks for this directory again.
+    static func installOnce() {
+        _ = installed
+    }
+
+    private static let installed: Void = install()
+
     private static let directoryName = "NotoCJK"
 }
 

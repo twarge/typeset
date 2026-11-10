@@ -16,7 +16,7 @@ Typeset's source code is licensed under the Apache License 2.0. See [LICENSE](LI
 - A source editor that opens the selected file and writes text edits back into the document package.
 - A WebKit preview view with source-position metadata embedded in the generated HTML.
 - Click-to-seek from preview back to the source editor.
-- PDF export through the Typst command-line tool.
+- PDF export through the embedded Typst compiler.
 - The compiler as a system verb: a `Compile Typst` App Intent for Shortcuts
   (source text in, a PDF file out — on iOS too), and a macOS Service,
   `Compile Typst to PDF`, that other apps can call with Typst text on a
@@ -26,20 +26,11 @@ Typeset's source code is licensed under the Apache License 2.0. See [LICENSE](LI
 
 ## Typst Integration
 
-The macOS Xcode target builds the Typst CLI from the submodule and bundles it into the app at `Contents/Resources/typst`. PDF export uses that bundled binary first.
+Typst is compiled into the app. `Vendor/typeset-lang-ffi` is a small Rust crate that wraps the compiler and language tooling from the `Vendor/typst` submodule behind a C interface; the Xcode project builds it into `Vendor/TypesetLang.xcframework`, which `TypesetCore` links on both macOS and iOS. Preview, PDF export, the Shortcuts intent, and the macOS Service all compile through it, so the app runs no helper process and bundles no `typst` binary.
 
-You can also build the Typst CLI manually for SwiftPM or command-line development:
+Typeset hands the compiler an app-owned local package directory and package cache directory. That lets `#import "@preview/package:version"` work like it does in the Typst CLI: locally installed packages are checked first, and missing Typst Universe packages are downloaded into Typeset's cache on first use. These directories live under `Application Support/Typeset/Typst/Packages` in the app's container.
 
-```sh
-cd Vendor/typst
-cargo build --release --bin typst
-```
-
-If the app bundle does not contain `typst`, Typeset looks for `Vendor/typst/target/release/typst` from the current working directory.
-
-You can also point the app at a specific Typst binary with `TYPESET_TYPST_PATH`.
-
-Typeset passes an app-owned local package directory and package cache directory to `typst compile`. That lets `#import "@preview/package:version"` work like it does in the Typst CLI: locally installed packages are checked first, and missing Typst Universe packages can be downloaded into Typeset's cache during export. On macOS these directories live under `~/Library/Application Support/Typeset/Typst/Packages`.
+The packages the sample document imports, and everything they import in turn, ship in `Resources/TypstPackages` exactly as published and are copied into the cache before the first compile, so a new document renders offline. `Scripts/fetch-bundled-packages.sh` refreshes them; run it after changing the sample document's imports. Each package keeps its own license (CeTZ is LGPL-3.0-or-later), listed with source links in `Resources/Acknowledgements/TypstPackages-NOTICE.txt`. Settings > Typst Packages lists every installed package with its license and sources, and can replace one with a user's modified copy by placing it in the local package directory, which the compiler reads first.
 
 ## Preview Architecture
 
@@ -57,10 +48,10 @@ The current HTML renderer is intentionally simple starter infrastructure. The ne
 
 Open `Typeset.xcodeproj` and press Run — that is the build system, in its
 entirety. Xcode builds its own dependencies: the `TypesetCore` target's first
-build phase produces `TypesetLang.xcframework` from the Rust FFI crate, and
-the app target's builds the bundled Typst CLI. Both check out the pinned
-`Vendor/typst` submodule and install the Apple Rust targets on first use, so
-a fresh clone needs no terminal step.
+build phase produces `TypesetLang.xcframework` from the Rust FFI crate. It
+checks out the pinned `Vendor/typst` submodule and installs the Apple Rust
+targets on first use, so a fresh clone needs no terminal step beyond having
+`cargo` installed (rustup's `~/.cargo/bin`, or anywhere on `PATH`).
 
 `make` is the same build from the command line (plain `xcodebuild`, no
 overrides):

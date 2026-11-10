@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<!-- Settings and saved folder bookmarks (@AppStorage, UserDefaults). -->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+		<!-- Modification dates of the user's document files and of the app's
+		     own caches: change detection in the editor, and the embedded
+		     compiler's font and package file scans. -->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+				<string>3B52.1</string>
+			</array>
+		</dict>
+		<!-- statfs, called by the embedded compiler only to learn whether a
+		     font file sits on a read-only volume before memory-mapping it. -->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>E174.1</string>
+			</array>
+		</dict>
+		<!-- mach_absolute_time through Rust's Instant: elapsed-time
+		     measurement inside the embedded compiler. -->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>35F9.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

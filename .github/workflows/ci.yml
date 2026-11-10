@@ -34,9 +34,8 @@ jobs:
           xcodebuild -version
           cargo --version
 
-      # xcodebuild builds the dependencies itself: TypesetCore's first build
-      # phase produces TypesetLang.xcframework and the app target's builds the
-      # bundled Typst CLI.
+      # xcodebuild builds the dependency itself: TypesetCore's first build
+      # phase produces TypesetLang.xcframework.
       - name: Build and test
         run: |
           xcodebuild \

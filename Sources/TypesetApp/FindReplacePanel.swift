@@ -148,6 +148,9 @@ struct FindReplacePanel: View {
         .tint(isActive ? .accentColor : .secondary)
         .help(help)
         .accessibilityLabel(help)
+        // The tint is the only sign of which options are on; say it in words.
+        .accessibilityValue(Text(isActive ? "On" : "Off"))
+        .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 
     private var matchStatus: String {

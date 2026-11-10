@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::{CStr, CString};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use typst::diag::{FileError, FileResult, Severity, SourceDiagnostic};
 use typst::foundations::{Bytes, CastInfo, Datetime, Duration, Func, ParamInfo, Repr, Smart, Value};
@@ -26,7 +26,7 @@ use typst_ide::{
     tooltip,
 };
 use typst_kit::datetime::Time;
-use typst_kit::downloader::SystemDownloader;
+use typst_kit::downloader::{Downloader, SystemDownloader};
 use typst_kit::files::{FileLoader, FileStore, FsRoot};
 use typst_kit::fonts::{self, FontSource, FontStore};
 use typst_kit::packages::{FsPackages, SystemPackages, UniversePackages};
@@ -292,21 +292,29 @@ fn completion_labels(completions: &[Completion]) -> String {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn typeset_lang_session_create() -> *mut TypesetLangSession {
-    Box::into_raw(Box::new(TypesetLangSession {
-        root: String::new(),
-        compile_target: String::new(),
-        package_path: String::new(),
-        package_cache_path: String::new(),
-        files: HashMap::new(),
-    }))
+    // Null on a panic, which every other entry point already answers with an
+    // error response rather than a dereference.
+    contain_panic(|| {
+        Ok(Box::into_raw(Box::new(TypesetLangSession {
+            root: String::new(),
+            compile_target: String::new(),
+            package_path: String::new(),
+            package_cache_path: String::new(),
+            files: HashMap::new(),
+        })))
+    })
+    .unwrap_or(std::ptr::null_mut())
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn typeset_lang_session_destroy(session: *mut TypesetLangSession) {
     if !session.is_null() {
-        unsafe {
-            drop(Box::from_raw(session));
-        }
+        let _ = contain_panic(|| {
+            unsafe {
+                drop(Box::from_raw(session));
+            }
+            Ok(())
+        });
     }
 }
 
@@ -315,8 +323,10 @@ pub extern "C" fn typeset_lang_set_debug_logging(
     _session: *mut TypesetLangSession,
     enabled: u8,
 ) -> *mut c_char {
-    LSP_DEBUG_ENABLED.store(enabled != 0, Ordering::Relaxed);
-    into_c_string(status_ok())
+    status_response(|| {
+        LSP_DEBUG_ENABLED.store(enabled != 0, Ordering::Relaxed);
+        Ok(())
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -656,9 +666,8 @@ pub extern "C" fn typeset_typst_compile_svg(
     package_cache_path: *const c_char,
     overlay_json: *const c_char,
 ) -> *mut c_char {
-    into_c_string(match compile_svg_response(root, main_path, package_path, package_cache_path, overlay_json) {
-        Ok(response) => to_json(&response),
-        Err(message) => to_json(&RenderResponse::error(message)),
+    render_response(|| {
+        compile_svg_response(root, main_path, package_path, package_cache_path, overlay_json)
     })
 }
 
@@ -670,9 +679,8 @@ pub extern "C" fn typeset_typst_compile_pdf(
     package_cache_path: *const c_char,
     overlay_json: *const c_char,
 ) -> *mut c_char {
-    into_c_string(match compile_pdf_response(root, main_path, package_path, package_cache_path, overlay_json) {
-        Ok(response) => to_json(&response),
-        Err(message) => to_json(&RenderResponse::error(message)),
+    render_response(|| {
+        compile_pdf_response(root, main_path, package_path, package_cache_path, overlay_json)
     })
 }
 
@@ -684,26 +692,99 @@ pub extern "C" fn typeset_typst_compile_html(
     package_cache_path: *const c_char,
     overlay_json: *const c_char,
 ) -> *mut c_char {
-    into_c_string(match compile_html_response(root, main_path, package_path, package_cache_path, overlay_json) {
-        Ok(response) => to_json(&response),
-        Err(message) => to_json(&RenderResponse::error(message)),
+    render_response(|| {
+        compile_html_response(root, main_path, package_path, package_cache_path, overlay_json)
     })
 }
 
 /// Points the compiler at the directory holding the fonts the app bundles for
 /// scripts the system leaves undrawable (see [`bundled_fonts`]).
 ///
-/// Takes effect until the first compile, which is when the font book is built;
-/// after that the store is shared and immutable, and a later call is ignored.
+/// Best called before anything asks for fonts, so they are scanned once. It
+/// still takes effect afterwards: a store built without this directory (a
+/// completion can reach the fonts before the first compile does) is rebuilt on
+/// the next request — see [`shared_render_fonts`].
 #[unsafe(no_mangle)]
 pub extern "C" fn typeset_typst_set_bundled_font_directory(
     directory: *const c_char,
 ) -> *mut c_char {
-    into_c_string(match read_c_string(directory) {
-        Ok(directory) => {
-            *bundled_font_directory().lock().unwrap() = Some(PathBuf::from(directory));
-            status_ok()
+    status_response(|| {
+        let directory = read_c_string(directory)?;
+        *lock(bundled_font_directory()) = Some(PathBuf::from(directory));
+        Ok(())
+    })
+}
+
+/// Builds the shared font store now rather than inside the first compile, so
+/// the app can pay for the system font scan in the background at launch
+/// instead of in front of the user's first preview. Blocks for the scan the
+/// first time; afterwards it returns at once.
+#[unsafe(no_mangle)]
+pub extern "C" fn typeset_typst_warm_fonts() -> *mut c_char {
+    status_response(|| {
+        shared_render_fonts();
+        Ok(())
+    })
+}
+
+/// Returns the version string of the embedded Typst compiler (e.g. "0.15.0").
+#[unsafe(no_mangle)]
+pub extern "C" fn typeset_typst_version() -> *mut c_char {
+    // Not JSON, so a panic leaves nothing to report but an empty string.
+    into_c_string(
+        contain_panic(|| Ok(typst::utils::version().raw().to_string())).unwrap_or_default(),
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn typeset_lang_string_free(string: *mut c_char) {
+    if !string.is_null() {
+        let _ = contain_panic(|| {
+            unsafe {
+                drop(CString::from_raw(string));
+            }
+            Ok(())
+        });
+    }
+}
+
+/// Runs the body of an entry point, turning a panic into an ordinary error.
+///
+/// Every `extern "C"` function goes through this. A panic that reaches an
+/// `extern "C"` frame aborts the process, so without it one internal error in
+/// the compiler, `typst-ide`, or the formatter — all of which see half-typed
+/// source on every keystroke — would take the editor and its unsaved text down
+/// instead of failing the one request.
+///
+/// `AssertUnwindSafe` is sound here because nothing a body can leave half
+/// done survives the unwind in a harmful state: a session is only ever
+/// assigned whole values, the global caches insert only finished entries, and
+/// their locks are taken with [`lock`], which shrugs off the poisoning.
+fn contain_panic<T>(body: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(result) => result,
+        Err(payload) => {
+            let detail = payload
+                .downcast_ref::<&str>()
+                .map(|message| message.to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic".to_string());
+            Err(format!("Typst hit an internal error: {detail}"))
         }
+    }
+}
+
+/// Locks a global, ignoring poisoning. A panic is contained at the entry point
+/// (see [`contain_panic`]) and the process carries on, so a lock that stayed
+/// poisoned would turn one failed request into every later one failing too.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// An entry point whose only answer is success or failure.
+fn status_response(body: impl FnOnce() -> Result<(), String>) -> *mut c_char {
+    into_c_string(match contain_panic(body) {
+        Ok(()) => status_ok(),
         Err(message) => to_json(&StatusResponse {
             ok: false,
             message: Some(message),
@@ -711,19 +792,12 @@ pub extern "C" fn typeset_typst_set_bundled_font_directory(
     })
 }
 
-/// Returns the version string of the embedded Typst compiler (e.g. "0.15.0").
-#[unsafe(no_mangle)]
-pub extern "C" fn typeset_typst_version() -> *mut c_char {
-    into_c_string(typst::utils::version().raw().to_string())
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn typeset_lang_string_free(string: *mut c_char) {
-    if !string.is_null() {
-        unsafe {
-            drop(CString::from_raw(string));
-        }
-    }
+/// A compile entry point: the response, or the error in the same shape.
+fn render_response(body: impl FnOnce() -> Result<RenderResponse, String>) -> *mut c_char {
+    into_c_string(match contain_panic(body) {
+        Ok(response) => to_json(&response),
+        Err(message) => to_json(&RenderResponse::error(message)),
+    })
 }
 
 fn with_session<F>(session: *mut TypesetLangSession, body: F) -> *mut c_char
@@ -733,7 +807,7 @@ where
     let response = if session.is_null() {
         Err("Language session is null.".to_string())
     } else {
-        body(unsafe { &mut *session })
+        contain_panic(|| body(unsafe { &mut *session }))
     };
 
     match response {
@@ -971,13 +1045,11 @@ fn compile_html_response(
 static LAST_PAGED_DOCUMENT: Mutex<Option<Arc<PagedDocument>>> = Mutex::new(None);
 
 fn cache_paged_document(document: &PagedDocument) {
-    if let Ok(mut slot) = LAST_PAGED_DOCUMENT.lock() {
-        *slot = Some(Arc::new(document.clone()));
-    }
+    *lock(&LAST_PAGED_DOCUMENT) = Some(Arc::new(document.clone()));
 }
 
 fn cached_paged_document() -> Option<Arc<PagedDocument>> {
-    LAST_PAGED_DOCUMENT.lock().ok()?.clone()
+    lock(&LAST_PAGED_DOCUMENT).clone()
 }
 
 fn compile_paged_document(
@@ -1429,7 +1501,7 @@ impl RenderFiles {
         let packages = SystemPackages::from_parts(
             Some(FsPackages::new(package_path)),
             Some(FsPackages::new(package_cache_path)),
-            UniversePackages::new(SystemDownloader::new("Typeset")),
+            UniversePackages::new(StallGuardedDownloader::new(SystemDownloader::new("Typeset"))),
         );
 
         Ok(Self {
@@ -1456,6 +1528,158 @@ impl FileLoader for RenderFiles {
             return Ok(bytes.clone());
         }
         self.root(id)?.load(id.vpath())
+    }
+}
+
+/// How long a package download may go without delivering anything — response
+/// headers first, then each piece of the body — before it is given up on.
+const DOWNLOAD_STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Fails a download that stops making progress instead of waiting on it
+/// forever.
+///
+/// `SystemDownloader` bounds only the connect (ureq's 30 s default); once
+/// connected it reads with no timeout at all. A connection that stalls mid-body
+/// — a captive portal, a cellular handoff — would then block the compile that
+/// asked for the package, and with it the one render queue every open document
+/// shares, until the app was killed.
+///
+/// `typst-kit` offers no way to configure its agent, so the transfer runs on a
+/// helper thread and this side waits for each piece with a deadline. Giving up
+/// abandons that thread rather than stopping it: it ends when the socket does,
+/// or at its next piece, when it finds nobody listening. The limit is on
+/// silence, not on the whole transfer, so a slow link still finishes.
+struct StallGuardedDownloader<D> {
+    inner: Arc<D>,
+    stall_timeout: std::time::Duration,
+}
+
+impl<D: Downloader> StallGuardedDownloader<D> {
+    fn new(inner: D) -> Self {
+        Self { inner: Arc::new(inner), stall_timeout: DOWNLOAD_STALL_TIMEOUT }
+    }
+}
+
+/// What the transfer thread sends back: the size hint once the response has
+/// arrived, then the body in pieces.
+enum DownloadEvent {
+    Started(Option<usize>),
+    Data(Vec<u8>),
+    Finished(std::io::Result<()>),
+}
+
+impl<D: Downloader> Downloader for StallGuardedDownloader<D> {
+    fn stream(
+        &self,
+        _key: &dyn std::any::Any,
+        url: &str,
+    ) -> std::io::Result<(Option<usize>, Box<dyn std::io::Read>)> {
+        use std::io::Read;
+
+        // Bounded, so a reader that falls behind slows the transfer down
+        // instead of buffering the whole body.
+        let (sender, receiver) = std::sync::mpsc::sync_channel(16);
+        let inner = self.inner.clone();
+        let url = url.to_string();
+        std::thread::Builder::new()
+            .name("typeset-package-download".to_string())
+            .spawn(move || {
+                // The caller's key can't cross threads; it only labels progress
+                // reporting, which nothing here does.
+                let mut reader = match inner.stream(&(), &url) {
+                    Ok((hint, reader)) => {
+                        if sender.send(DownloadEvent::Started(hint)).is_err() {
+                            return;
+                        }
+                        reader
+                    }
+                    Err(error) => {
+                        let _ = sender.send(DownloadEvent::Finished(Err(error)));
+                        return;
+                    }
+                };
+                let mut buffer = vec![0; 64 * 1024];
+                loop {
+                    let event = match reader.read(&mut buffer) {
+                        Ok(0) => DownloadEvent::Finished(Ok(())),
+                        Ok(count) => DownloadEvent::Data(buffer[..count].to_vec()),
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(error) => DownloadEvent::Finished(Err(error)),
+                    };
+                    let finished = matches!(event, DownloadEvent::Finished(_));
+                    // A closed channel means the other side gave up.
+                    if sender.send(event).is_err() || finished {
+                        return;
+                    }
+                }
+            })?;
+
+        let mut body = StallGuardedBody {
+            receiver,
+            stall_timeout: self.stall_timeout,
+            pending: Vec::new(),
+            position: 0,
+            finished: false,
+        };
+        match body.next_event()? {
+            DownloadEvent::Started(hint) => Ok((hint, Box::new(body))),
+            DownloadEvent::Finished(Err(error)) => Err(error),
+            DownloadEvent::Finished(Ok(())) | DownloadEvent::Data(_) => {
+                Err(std::io::Error::other("the download ended before it began"))
+            }
+        }
+    }
+}
+
+/// The receiving end of a [`StallGuardedDownloader`] transfer.
+struct StallGuardedBody {
+    receiver: std::sync::mpsc::Receiver<DownloadEvent>,
+    stall_timeout: std::time::Duration,
+    pending: Vec<u8>,
+    position: usize,
+    finished: bool,
+}
+
+impl StallGuardedBody {
+    fn next_event(&mut self) -> std::io::Result<DownloadEvent> {
+        use std::sync::mpsc::RecvTimeoutError;
+        self.receiver.recv_timeout(self.stall_timeout).map_err(|error| match error {
+            RecvTimeoutError::Timeout => std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!(
+                    "the download stalled for {} seconds",
+                    self.stall_timeout.as_secs()
+                ),
+            ),
+            RecvTimeoutError::Disconnected => {
+                std::io::Error::other("the download ended unexpectedly")
+            }
+        })
+    }
+}
+
+impl std::io::Read for StallGuardedBody {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        while self.position == self.pending.len() {
+            if self.finished {
+                return Ok(0);
+            }
+            match self.next_event()? {
+                DownloadEvent::Data(data) => {
+                    self.pending = data;
+                    self.position = 0;
+                }
+                DownloadEvent::Finished(result) => {
+                    self.finished = true;
+                    result?;
+                }
+                DownloadEvent::Started(_) => {}
+            }
+        }
+        let count = buffer.len().min(self.pending.len() - self.position);
+        buffer[..count].copy_from_slice(&self.pending[self.position..self.position + count]);
+        self.position += count;
+        Ok(count)
     }
 }
 
@@ -1795,24 +2019,45 @@ const COMEMO_EVICT_MAX_AGE: usize = 30;
 
 /// The render font store, scanned once and shared by every compile. Rendering
 /// needs real fonts (unlike the completion path's empty book), but the expensive
-/// system font scan happens only on the first compile — every subsequent
+/// system font scan happens only on the first request — every subsequent
 /// `RenderWorld` reuses it, like `typst watch` rather than `typst compile`.
+///
+/// "Once" has one exception. The bundled font directory arrives from Swift, and
+/// a completion can ask for fonts before Swift has said where it is; a store
+/// latched for good at that moment would leave Chinese as tofu until relaunch.
+/// So the store remembers which directory it was built with, and a request
+/// that finds a different one set rebuilds it. That costs a second scan, in
+/// the one case where the first was wrong.
 fn shared_render_fonts() -> &'static FontStore {
-    static FONTS: OnceLock<FontStore> = OnceLock::new();
-    FONTS.get_or_init(|| {
-        let bundled = bundled_font_directory().lock().unwrap().clone();
-        discover_fonts(bundled.as_deref())
-    })
+    shared_render_fonts_and_len().0
 }
 
-/// The number of faces in the shared store's book ([`FontBook`] exposes no
-/// length, so count once and reuse).
-fn shared_render_fonts_len() -> usize {
-    static LEN: OnceLock<usize> = OnceLock::new();
-    *LEN.get_or_init(|| {
-        let book = shared_render_fonts().book();
-        (0usize..).find(|&index| book.info(index).is_none()).unwrap_or(0)
-    })
+/// The shared store with the number of faces in its book ([`FontBook`] exposes
+/// no length, so it is counted once per store). Taken together because the two
+/// must describe the same store, which a rebuild in between would break.
+fn shared_render_fonts_and_len() -> (&'static FontStore, usize) {
+    struct SharedFonts {
+        store: &'static FontStore,
+        len: usize,
+        bundled: Option<PathBuf>,
+    }
+    static SHARED: Mutex<Option<SharedFonts>> = Mutex::new(None);
+
+    // Held across the scan, so requests racing for the first store (a compile
+    // and a completion) share one scan instead of each doing their own.
+    let mut shared = lock(&SHARED);
+    let bundled = lock(bundled_font_directory()).clone();
+    if let Some(current) = shared.as_ref().filter(|current| current.bundled == bundled) {
+        return (current.store, current.len);
+    }
+    // Leaked rather than dropped: merged stores and live worlds hold the old
+    // one by `'static` reference. A rebuild happens at most once per change of
+    // directory, which the app makes once.
+    let store: &'static FontStore = Box::leak(Box::new(discover_fonts(bundled.as_deref())));
+    let book = store.book();
+    let len = (0usize..).find(|&index| book.info(index).is_none()).unwrap_or(0);
+    *shared = Some(SharedFonts { store, len, bundled });
+    (store, len)
 }
 
 /// The fonts visible to one compile or completion request: the shared
@@ -1936,7 +2181,7 @@ fn font_content_key(file: &ProjectFontFile) -> Option<u64> {
 fn cached_project_faces(key: u64, path: &Path) -> Arc<Vec<Font>> {
     static CACHE: OnceLock<Mutex<HashMap<u64, Arc<Vec<Font>>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(faces) = cache.lock().unwrap().get(&key) {
+    if let Some(faces) = lock(cache).get(&key) {
         return faces.clone();
     }
     let faces: Arc<Vec<Font>> = Arc::new(
@@ -1945,7 +2190,7 @@ fn cached_project_faces(key: u64, path: &Path) -> Arc<Vec<Font>> {
             .map(|data| Font::iter(Bytes::new(data)).collect())
             .unwrap_or_default(),
     );
-    let mut cache = cache.lock().unwrap();
+    let mut cache = lock(cache);
     if cache.len() >= 64 {
         cache.clear();
     }
@@ -1967,9 +2212,12 @@ fn fonts_for_root(root: &Path) -> WorldFonts {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
+    // Resolved once, so everything below agrees on which store is the base
+    // even if it is rebuilt meanwhile (see `shared_render_fonts`).
+    let (base, base_len) = shared_render_fonts_and_len();
     let files = project_font_files(root);
     if files.is_empty() {
-        return WorldFonts::Shared(shared_render_fonts());
+        return WorldFonts::Shared(base);
     }
 
     static ROOT_CACHE: OnceLock<Mutex<Vec<(PathBuf, RootFingerprint, Arc<MergedFonts>)>>> =
@@ -1981,10 +2229,14 @@ fn fonts_for_root(root: &Path) -> WorldFonts {
         .map(|file| (file.path.clone(), file.len, file.modified))
         .collect();
     {
-        let mut cache = root_cache.lock().unwrap();
+        let mut cache = lock(root_cache);
         if let Some(position) = cache.iter().position(|(cached_root, cached_fingerprint, _)| {
             cached_root == root && *cached_fingerprint == fingerprint
-        }) {
+        })
+            // A merged store over a base that has since been rebuilt (see
+            // `shared_render_fonts`) is stale; fall through and merge again.
+            && std::ptr::eq(cache[position].2.base, base)
+        {
             let entry = cache.remove(position);
             let merged = entry.2.clone();
             cache.push(entry);
@@ -1999,12 +2251,15 @@ fn fonts_for_root(root: &Path) -> WorldFonts {
         }
     }
     if keyed.is_empty() {
-        return WorldFonts::Shared(shared_render_fonts());
+        return WorldFonts::Shared(base);
     }
     let mut combined_hasher = DefaultHasher::new();
     for (key, _) in &keyed {
         key.hash(&mut combined_hasher);
     }
+    // Keyed on the base store too, so a rebuilt base never reuses a merge made
+    // over the one it replaced.
+    std::ptr::from_ref(base).hash(&mut combined_hasher);
     let combined = combined_hasher.finish();
 
     static MERGED_CACHE: OnceLock<Mutex<HashMap<u64, Arc<MergedFonts>>>> = OnceLock::new();
@@ -2014,15 +2269,13 @@ fn fonts_for_root(root: &Path) -> WorldFonts {
     // one lazily-computed book hash, which the incremental cache keys on —
     // instead of each reading and parsing every font themselves.
     let merged = {
-        let mut cache = merged_cache.lock().unwrap();
+        let mut cache = lock(merged_cache);
         if let Some(existing) = cache.get(&combined) {
             existing.clone()
         } else {
             if cache.len() >= 8 {
                 cache.clear();
             }
-            let base = shared_render_fonts();
-            let base_len = shared_render_fonts_len();
             let mut faces = Vec::new();
             for (key, file) in &keyed {
                 faces.extend(cached_project_faces(*key, &file.path).iter().cloned());
@@ -2043,7 +2296,7 @@ fn fonts_for_root(root: &Path) -> WorldFonts {
     };
 
     {
-        let mut cache = root_cache.lock().unwrap();
+        let mut cache = lock(root_cache);
         cache.retain(|(cached_root, _, _)| cached_root != root);
         cache.push((root.to_path_buf(), fingerprint, merged.clone()));
         if cache.len() > 16 {
@@ -7064,12 +7317,14 @@ description = "Draw diagrams."
             fs::write(root.join("custom.ttf"), &font).unwrap();
         }
 
+        let _base = lock(&SHARED_STORE_IDENTITY);
         let (WorldFonts::Merged(first), WorldFonts::Merged(second)) =
             (fonts_for_root(&root_a), fonts_for_root(&root_b))
         else {
             panic!("project fonts were not merged into the book");
         };
         assert!(Arc::ptr_eq(&first, &second));
+        drop(_base);
 
         let _ = fs::remove_dir_all(root_a);
         let _ = fs::remove_dir_all(root_b);
@@ -7507,5 +7762,145 @@ description = "Draw diagrams."
 
             let _ = fs::remove_dir_all(root);
         }
+    }
+
+    /// Held by tests that compare stores by identity, so the one test that
+    /// replaces the shared store can't do it in the middle of another.
+    static SHARED_STORE_IDENTITY: Mutex<()> = Mutex::new(());
+
+    /// Reads a response string the way Swift does, and frees it.
+    fn take_response(pointer: *mut c_char) -> serde_json::Value {
+        assert!(!pointer.is_null());
+        let json = unsafe { CStr::from_ptr(pointer) }.to_str().unwrap().to_string();
+        typeset_lang_string_free(pointer);
+        serde_json::from_str(&json).unwrap()
+    }
+
+    #[test]
+    fn a_panicking_session_request_is_an_error_response() {
+        let session = typeset_lang_session_create();
+        let response = take_response(with_session(session, |_| panic!("boom")));
+        assert_eq!(response["ok"], false);
+        assert!(response["message"].as_str().unwrap().contains("boom"));
+
+        // The session is still usable afterwards.
+        let path = CString::new("main.typ").unwrap();
+        let text = CString::new("= Title").unwrap();
+        let response =
+            take_response(typeset_lang_update_file(session, path.as_ptr(), text.as_ptr()));
+        assert_eq!(response["ok"], true);
+        typeset_lang_session_destroy(session);
+    }
+
+    #[test]
+    fn a_panicking_compile_is_a_render_error_response() {
+        let response = take_response(render_response(|| panic!("{}", String::from("kaboom"))));
+        assert_eq!(response["ok"], false);
+        assert!(response["message"].as_str().unwrap().contains("kaboom"));
+        assert!(response["pages"].as_array().unwrap().is_empty());
+
+        let response = take_response(status_response(|| panic!("status boom")));
+        assert_eq!(response["ok"], false);
+    }
+
+    #[test]
+    fn a_lock_poisoned_by_a_contained_panic_still_opens() {
+        let mutex = Mutex::new(1);
+        let result: Result<(), String> = contain_panic(|| {
+            let _guard = mutex.lock().unwrap();
+            panic!("poison");
+        });
+        assert!(result.is_err());
+        assert!(mutex.is_poisoned());
+        assert_eq!(*lock(&mutex), 1);
+    }
+
+    #[test]
+    fn warming_fonts_builds_the_shared_store() {
+        let response = take_response(typeset_typst_warm_fonts());
+        assert_eq!(response["ok"], true);
+        // The embedded fonts are in any store, whatever the system has.
+        assert!(shared_render_fonts().book().contains_family("libertinus serif"));
+    }
+
+    #[test]
+    fn a_bundled_directory_set_after_the_store_was_built_still_takes_effect() {
+        // A completion reaching the fonts before Swift has named the
+        // directory: the store is built without it.
+        let _base = lock(&SHARED_STORE_IDENTITY);
+        let before = shared_render_fonts();
+
+        let directory = CString::new(bundled_fonts_directory().to_str().unwrap()).unwrap();
+        let response =
+            take_response(typeset_typst_set_bundled_font_directory(directory.as_ptr()));
+        assert_eq!(response["ok"], true);
+
+        let (after, len) = shared_render_fonts_and_len();
+        assert!(!std::ptr::eq(before, after), "the store was not rebuilt");
+        assert!(after.book().contains_family("noto sans cjk sc"));
+        assert!(after.book().info(len - 1).is_some());
+        assert!(after.book().info(len).is_none());
+
+        // And only once: the same directory again reuses the store.
+        let response =
+            take_response(typeset_typst_set_bundled_font_directory(directory.as_ptr()));
+        assert_eq!(response["ok"], true);
+        assert!(std::ptr::eq(after, shared_render_fonts()));
+    }
+
+    /// A downloader that answers with `body`, then either ends or goes quiet.
+    struct ScriptedDownloader {
+        body: Vec<u8>,
+        stall: bool,
+    }
+
+    struct ScriptedBody {
+        body: std::io::Cursor<Vec<u8>>,
+        stall: bool,
+    }
+
+    impl std::io::Read for ScriptedBody {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let count = self.body.read(buffer)?;
+            if count == 0 && self.stall {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+            Ok(count)
+        }
+    }
+
+    impl Downloader for ScriptedDownloader {
+        fn stream(
+            &self,
+            _: &dyn std::any::Any,
+            _: &str,
+        ) -> std::io::Result<(Option<usize>, Box<dyn std::io::Read>)> {
+            Ok((
+                Some(self.body.len()),
+                Box::new(ScriptedBody {
+                    body: std::io::Cursor::new(self.body.clone()),
+                    stall: self.stall,
+                }),
+            ))
+        }
+    }
+
+    #[test]
+    fn a_download_that_keeps_moving_arrives_whole() {
+        let body: Vec<u8> = (0..200_000u32).map(|value| value as u8).collect();
+        let downloader =
+            StallGuardedDownloader::new(ScriptedDownloader { body: body.clone(), stall: false });
+        assert_eq!(downloader.download(&(), "https://example.invalid/").unwrap(), body);
+    }
+
+    #[test]
+    fn a_stalled_download_fails_instead_of_hanging() {
+        let mut downloader = StallGuardedDownloader::new(ScriptedDownloader {
+            body: vec![1, 2, 3],
+            stall: true,
+        });
+        downloader.stall_timeout = std::time::Duration::from_millis(100);
+        let error = downloader.download(&(), "https://example.invalid/").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
     }
 }

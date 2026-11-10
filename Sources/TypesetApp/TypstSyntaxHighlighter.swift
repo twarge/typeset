@@ -59,12 +59,20 @@ enum TypstSyntaxHighlighter {
         "include", "let", "none", "return", "set", "show", "true", "while"
     ]
 
-    nonisolated static func tokens(in text: String, syntax: SourceSyntax) -> [TypstSyntaxToken] {
+    /// `checkingCancellation` is for the editor's background pass, which is
+    /// superseded on every keystroke: a cancelled pass stops early and returns
+    /// tokens its caller is about to discard. Leave it off anywhere the result
+    /// is used whatever the surrounding task's state.
+    nonisolated static func tokens(
+        in text: String,
+        syntax: SourceSyntax,
+        checkingCancellation: Bool = false
+    ) -> [TypstSyntaxToken] {
         switch syntax {
         case .typst:
-            return tokens(in: text)
+            return tokens(in: text, checkingCancellation: checkingCancellation)
         case .python:
-            return pythonTokens(in: text)
+            return pythonTokens(in: text, checkingCancellation: checkingCancellation)
         case .plainText:
             return []
         }
@@ -73,22 +81,34 @@ enum TypstSyntaxHighlighter {
     /// Tokenizes Python into the shared token kinds, so generator scripts get
     /// the same styling pipeline as Typst sources. Comments and strings win
     /// over everything else; triple-quoted strings span lines.
-    nonisolated static func pythonTokens(in text: String) -> [TypstSyntaxToken] {
+    nonisolated static func pythonTokens(in text: String, checkingCancellation: Bool = false) -> [TypstSyntaxToken] {
         let scalars = Array(text.unicodeScalars)
+        let offsets = Self.utf16Offsets(of: scalars)
         var tokens: [TypstSyntaxToken] = []
         var index = 0
+
+        // The scan below walks Unicode scalars; TextKit ranges are UTF-16.
+        func append(_ kind: TypstSyntaxKind, from start: Int, to end: Int) {
+            tokens.append(TypstSyntaxToken(
+                kind: kind,
+                range: NSRange(location: offsets[start], length: offsets[end] - offsets[start])
+            ))
+        }
 
         func isIdentifierScalar(_ scalar: Unicode.Scalar) -> Bool {
             CharacterSet.alphanumerics.contains(scalar) || scalar == "_"
         }
 
+        var steps = 0
         while index < scalars.count {
+            steps += 1
+            if checkingCancellation, steps & 0xFFF == 0, Task.isCancelled { break }
             let scalar = scalars[index]
 
             if scalar == "#" {
                 var end = index
                 while end < scalars.count, scalars[end] != "\n" { end += 1 }
-                tokens.append(TypstSyntaxToken(kind: .comment, range: NSRange(location: index, length: end - index)))
+                append(.comment, from: index, to: end)
                 index = end
                 continue
             }
@@ -121,7 +141,7 @@ enum TypstSyntaxHighlighter {
                     end += 1
                 }
                 let clamped = min(end, scalars.count)
-                tokens.append(TypstSyntaxToken(kind: .string, range: NSRange(location: index, length: clamped - index)))
+                append(.string, from: index, to: clamped)
                 index = clamped
                 continue
             }
@@ -133,7 +153,7 @@ enum TypstSyntaxHighlighter {
                       CharacterSet.alphanumerics.contains(scalars[end]) || scalars[end] == "." || scalars[end] == "_" {
                     end += 1
                 }
-                tokens.append(TypstSyntaxToken(kind: .number, range: NSRange(location: index, length: end - index)))
+                append(.number, from: index, to: end)
                 index = end
                 continue
             }
@@ -143,9 +163,9 @@ enum TypstSyntaxHighlighter {
                 while end < scalars.count, isIdentifierScalar(scalars[end]) { end += 1 }
                 let word = String(String.UnicodeScalarView(scalars[index..<end]))
                 if pythonKeywords.contains(word) {
-                    tokens.append(TypstSyntaxToken(kind: .keyword, range: NSRange(location: index, length: end - index)))
+                    append(.keyword, from: index, to: end)
                 } else if pythonBuiltins.contains(word) {
-                    tokens.append(TypstSyntaxToken(kind: .command, range: NSRange(location: index, length: end - index)))
+                    append(.command, from: index, to: end)
                 }
                 index = end
                 continue
@@ -170,7 +190,7 @@ enum TypstSyntaxHighlighter {
         "repr", "reversed", "round", "set", "sorted", "str", "sum", "tuple", "zip",
     ]
 
-    nonisolated static func tokens(in text: String) -> [TypstSyntaxToken] {
+    nonisolated static func tokens(in text: String, checkingCancellation: Bool = false) -> [TypstSyntaxToken] {
         let nsText = text as NSString
         var tokens: [TypstSyntaxToken] = []
         var offset = 0
@@ -179,7 +199,11 @@ enum TypstSyntaxHighlighter {
         nsText.enumerateSubstrings(
             in: NSRange(location: 0, length: nsText.length),
             options: [.byLines, .substringNotRequired]
-        ) { _, lineRange, enclosingRange, _ in
+        ) { _, lineRange, enclosingRange, stop in
+            if checkingCancellation, Task.isCancelled {
+                stop.pointee = true
+                return
+            }
             let line = nsText.substring(with: lineRange)
             let visibleLine = line.trimmingCharacters(in: .newlines)
             let lineLength = (visibleLine as NSString).length
@@ -211,42 +235,59 @@ enum TypstSyntaxHighlighter {
 
     nonisolated private static func tokenizeInline(_ line: String, lineOffset: Int, tokens: inout [TypstSyntaxToken]) {
         let scalars = Array(line.unicodeScalars)
+        let offsets = Self.utf16Offsets(of: scalars)
         var index = 0
+
+        // The scan below walks Unicode scalars; TextKit ranges are UTF-16, and
+        // the two part ways after the first character outside the BMP (an
+        // emoji, a math alphanumeric), which used to shift every later token
+        // on the line.
+        func append(_ kind: TypstSyntaxKind, from start: Int, to end: Int) {
+            tokens.append(TypstSyntaxToken(
+                kind: kind,
+                range: NSRange(
+                    location: lineOffset + offsets[start],
+                    length: offsets[end] - offsets[start]
+                )
+            ))
+        }
 
         while index < scalars.count {
             let scalar = scalars[index]
             if scalar == "/" && index + 1 < scalars.count && scalars[index + 1] == "/" {
-                tokens.append(TypstSyntaxToken(kind: .comment, range: NSRange(location: lineOffset + index, length: scalars.count - index)))
+                append(.comment, from: index, to: scalars.count)
                 return
             }
 
             if scalar == "\"" {
                 let end = scanString(scalars, from: index)
-                tokens.append(TypstSyntaxToken(kind: .string, range: NSRange(location: lineOffset + index, length: end - index)))
+                append(.string, from: index, to: end)
                 index = end
                 continue
             }
 
             if scalar == "$" {
-                let end = scanUntil(scalars, from: index + 1, delimiter: "$")
-                tokens.append(TypstSyntaxToken(kind: .math, range: NSRange(location: lineOffset + index, length: end - index)))
+                // Display math routinely opens on one line and closes on
+                // another, and this tokenizer works a line at a time, so an
+                // unclosed `$` colors the rest of its line.
+                let end = scanUntil(scalars, from: index + 1, delimiter: "$") ?? scalars.count
+                append(.math, from: index, to: end)
                 index = end
                 continue
             }
 
-            if scalar == "<" {
-                let end = scanUntil(scalars, from: index + 1, delimiter: ">")
-                if end <= scalars.count, end > index + 1 {
-                    tokens.append(TypstSyntaxToken(kind: .label, range: NSRange(location: lineOffset + index, length: end - index)))
-                    index = end
-                    continue
-                }
+            // A label is `<name>` on one line. A lone `<` is a comparison, and
+            // must not color the rest of the line.
+            if scalar == "<", let end = scanLabel(scalars, from: index) {
+                append(.label, from: index, to: end)
+                index = end
+                continue
             }
 
             if scalar == "@" {
                 let end = scanIdentifierLike(scalars, from: index + 1)
                 if end > index + 1 {
-                    tokens.append(TypstSyntaxToken(kind: .reference, range: NSRange(location: lineOffset + index, length: end - index)))
+                    append(.reference, from: index, to: end)
                     index = end
                     continue
                 }
@@ -256,31 +297,74 @@ enum TypstSyntaxHighlighter {
                 let end = scanIdentifierLike(scalars, from: index + 1)
                 if end > index + 1 {
                     let name = String(String.UnicodeScalarView(scalars[(index + 1)..<end]))
-                    let kind: TypstSyntaxKind = keywords.contains(name) ? .keyword : .command
-                    tokens.append(TypstSyntaxToken(kind: kind, range: NSRange(location: lineOffset + index, length: end - index)))
+                    append(keywords.contains(name) ? .keyword : .command, from: index, to: end)
                     index = end
                     continue
                 }
             }
 
-            if scalar == "*" || scalar == "_" {
-                let end = scanUntil(scalars, from: index + 1, delimiter: scalar)
-                if end <= scalars.count, end > index + 1 {
-                    tokens.append(TypstSyntaxToken(kind: .emphasis, range: NSRange(location: lineOffset + index, length: end - index)))
-                    index = end
-                    continue
-                }
+            // Emphasis needs its closing delimiter on the same line, and — as
+            // in Typst itself — a `*` or `_` between two word characters
+            // (`my_var`, `2*3`) is not a delimiter at all.
+            if scalar == "*" || scalar == "_",
+               !isInsideWord(scalars, at: index),
+               let end = scanUntil(scalars, from: index + 1, delimiter: scalar),
+               end > index + 2 {
+                append(.emphasis, from: index, to: end)
+                index = end
+                continue
             }
 
             if scalar.properties.numericType != nil {
                 let end = scanNumber(scalars, from: index)
-                tokens.append(TypstSyntaxToken(kind: .number, range: NSRange(location: lineOffset + index, length: end - index)))
+                append(.number, from: index, to: end)
                 index = end
                 continue
             }
 
             index += 1
         }
+    }
+
+    /// `result[i]` is the UTF-16 offset of scalar `i`; the last entry is the
+    /// UTF-16 length of the whole run.
+    nonisolated private static func utf16Offsets(of scalars: [Unicode.Scalar]) -> [Int] {
+        var offsets: [Int] = []
+        offsets.reserveCapacity(scalars.count + 1)
+        var offset = 0
+        for scalar in scalars {
+            offsets.append(offset)
+            offset += scalar.utf16.count
+        }
+        offsets.append(offset)
+        return offsets
+    }
+
+    nonisolated private static func isWordScalar(_ scalar: Unicode.Scalar) -> Bool {
+        scalar.properties.isAlphabetic || scalar.properties.numericType != nil
+    }
+
+    nonisolated private static func isInsideWord(_ scalars: [Unicode.Scalar], at index: Int) -> Bool {
+        index > 0 && index + 1 < scalars.count
+            && isWordScalar(scalars[index - 1])
+            && isWordScalar(scalars[index + 1])
+    }
+
+    /// The index just past the `>` closing a label that opens at `start`, or
+    /// `nil` when what follows the `<` is not a label.
+    nonisolated private static func scanLabel(_ scalars: [Unicode.Scalar], from start: Int) -> Int? {
+        var index = start + 1
+        while index < scalars.count {
+            let scalar = scalars[index]
+            if scalar == ">" {
+                return index > start + 1 ? index + 1 : nil
+            }
+            guard isWordScalar(scalar) || scalar == "_" || scalar == "-" || scalar == "." || scalar == ":" else {
+                return nil
+            }
+            index += 1
+        }
+        return nil
     }
 
     nonisolated private static func scanString(_ scalars: [Unicode.Scalar], from start: Int) -> Int {
@@ -299,7 +383,9 @@ enum TypstSyntaxHighlighter {
         return scalars.count
     }
 
-    nonisolated private static func scanUntil(_ scalars: [Unicode.Scalar], from start: Int, delimiter: Unicode.Scalar) -> Int {
+    /// The index just past the next `delimiter`, or `nil` when the rest of the
+    /// line has none — callers decide whether an unterminated run is styled.
+    nonisolated private static func scanUntil(_ scalars: [Unicode.Scalar], from start: Int, delimiter: Unicode.Scalar) -> Int? {
         var index = start
         while index < scalars.count {
             if scalars[index] == delimiter {
@@ -307,7 +393,7 @@ enum TypstSyntaxHighlighter {
             }
             index += 1
         }
-        return scalars.count
+        return nil
     }
 
     nonisolated private static func scanIdentifierLike(_ scalars: [Unicode.Scalar], from start: Int) -> Int {

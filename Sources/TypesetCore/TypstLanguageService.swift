@@ -472,28 +472,41 @@ public struct TypstCodeAction: Equatable, Codable, Sendable, Identifiable {
 }
 
 public enum TypstSourceOffsetConverter {
+    // Both directions measure between the UTF-8 and UTF-16 views directly and
+    // never round-trip through `Character` positions. The compiler's offsets
+    // are only scalar-aligned, so they routinely land inside a grapheme cluster
+    // — between a base letter and its combining mark, inside a ZWJ emoji, or
+    // between the CR and LF of a Windows line ending — where a `Character`
+    // lookup fails, and a failed lookup used to be read as "end of document".
+
     public static func utf8Offset(fromUTF16Offset utf16Offset: Int, in text: String) -> Int {
-        let nsText = text as NSString
-        let clampedUTF16Offset = min(max(0, utf16Offset), nsText.length)
-        guard let stringIndex = Range(NSRange(location: 0, length: clampedUTF16Offset), in: text)?.upperBound else {
-            return text.utf8.count
+        let utf16 = text.utf16
+        var index = utf16.index(utf16.startIndex, offsetBy: max(0, utf16Offset), limitedBy: utf16.endIndex)
+            ?? utf16.endIndex
+        // Between the halves of a surrogate pair there is no UTF-8 position;
+        // take the start of that scalar.
+        if index.samePosition(in: text.unicodeScalars) == nil, index > utf16.startIndex {
+            index = utf16.index(before: index)
         }
-        return text[..<stringIndex].utf8.count
+        return text.utf8.distance(from: text.utf8.startIndex, to: index)
     }
 
     public static func utf16Range(fromUTF8Start startUTF8: Int, endUTF8: Int, in text: String) -> NSRange {
-        let lower = stringIndex(fromUTF8Offset: startUTF8, in: text)
-        let upper = stringIndex(fromUTF8Offset: max(startUTF8, endUTF8), in: text)
-        let location = text.utf16.distance(from: text.utf16.startIndex, to: lower.samePosition(in: text.utf16) ?? text.utf16.endIndex)
-        let end = text.utf16.distance(from: text.utf16.startIndex, to: upper.samePosition(in: text.utf16) ?? text.utf16.endIndex)
+        let location = utf16Offset(fromUTF8Offset: startUTF8, in: text)
+        let end = utf16Offset(fromUTF8Offset: max(startUTF8, endUTF8), in: text)
         return NSRange(location: location, length: max(0, end - location))
     }
 
-    private static func stringIndex(fromUTF8Offset offset: Int, in text: String) -> String.Index {
-        let clamped = min(max(0, offset), text.utf8.count)
-        var utf8Index = text.utf8.startIndex
-        text.utf8.formIndex(&utf8Index, offsetBy: clamped)
-        return utf8Index.samePosition(in: text) ?? text.endIndex
+    private static func utf16Offset(fromUTF8Offset offset: Int, in text: String) -> Int {
+        let utf8 = text.utf8
+        var index = utf8.index(utf8.startIndex, offsetBy: max(0, offset), limitedBy: utf8.endIndex)
+            ?? utf8.endIndex
+        // An offset inside a multi-byte scalar (never expected from the
+        // compiler, but it is foreign data) backs up to the scalar's start.
+        while index > utf8.startIndex, index.samePosition(in: text.unicodeScalars) == nil {
+            index = utf8.index(before: index)
+        }
+        return text.utf16.distance(from: text.utf16.startIndex, to: index)
     }
 }
 
@@ -585,7 +598,7 @@ public actor EmbeddedLanguageService: TypstLanguageService {
     }
 
     public func setDebugLoggingEnabled(_ isEnabled: Bool) async {
-        _ = await call { session in
+        await callStatus("setDebugLogging") { session in
             typeset_lang_set_debug_logging(session, isEnabled ? 1 : 0)
         }
     }
@@ -593,7 +606,7 @@ public actor EmbeddedLanguageService: TypstLanguageService {
     public func setWorkspace(rootURL: URL, compileTarget: String) async {
         let rootPath = rootURL.path
         TypstLanguageDebug.log("setWorkspace root=\(rootPath) target=\(compileTarget)")
-        _ = await call { session in
+        await callStatus("setWorkspace") { session in
             typeset_lang_set_workspace(session, rootPath, compileTarget)
         }
         await ensurePackageStorageConfigured()
@@ -605,7 +618,7 @@ public actor EmbeddedLanguageService: TypstLanguageService {
         TypstLanguageDebug.log(
             "setPackageStorage local=\(localPath) exists=\(FileManager.default.fileExists(atPath: localPath)) cache=\(cachePath) exists=\(FileManager.default.fileExists(atPath: cachePath))"
         )
-        _ = await call { session in
+        await callStatus("setPackageStorage") { session in
             typeset_lang_set_package_storage(session, localPath, cachePath)
         }
         packageStorageConfigured = true
@@ -618,19 +631,23 @@ public actor EmbeddedLanguageService: TypstLanguageService {
 
     public func updateFile(path: String, text: String) async {
         files[path] = text
-        _ = await call { session in
+        await callStatus("updateFile \(path)") { session in
             typeset_lang_update_file(session, path, text)
         }
     }
 
     public func closeFile(path: String) async {
         files[path] = nil
-        _ = await call { session in
+        await callStatus("closeFile \(path)") { session in
             typeset_lang_close_file(session, path)
         }
     }
 
     public func diagnostics() async -> [TypstSourceDiagnostic] {
+        // The texts the request is computed against. Read before suspending:
+        // an `updateFile` that interleaves with the call would otherwise have
+        // these offsets converted against text the compiler never saw.
+        let files = files
         guard let data = await call({ session in
             typeset_lang_diagnostics(session)
         }).data(using: .utf8),
@@ -673,7 +690,7 @@ public actor EmbeddedLanguageService: TypstLanguageService {
 
         let offset = TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: utf16Offset, in: text)
         let rawResponse = await call({ session in
-            typeset_lang_completions(session, path, UInt32(max(0, offset)))
+            typeset_lang_completions(session, path, UInt32(clamping: offset))
         })
         guard let data = rawResponse.data(using: .utf8),
               let response = try? JSONDecoder().decode(FFICompletionResponse.self, from: data) else {
@@ -708,7 +725,7 @@ public actor EmbeddedLanguageService: TypstLanguageService {
         let offset = TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: utf16Offset, in: text)
         TypstLanguageDebug.log("hover request path=\(path) utf16=\(utf16Offset) utf8=\(offset)")
         let rawResponse = await call({ session in
-            typeset_lang_hover(session, path, UInt32(max(0, offset)))
+            typeset_lang_hover(session, path, UInt32(clamping: offset))
         })
         guard let data = rawResponse.data(using: .utf8),
               let response = try? JSONDecoder().decode(FFIHoverResponse.self, from: data) else {
@@ -739,7 +756,7 @@ public actor EmbeddedLanguageService: TypstLanguageService {
         let offset = TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: queryOffset, in: text)
         TypstLanguageDebug.log("signature request path=\(path) utf16=\(utf16Offset) query=\(queryOffset) utf8=\(offset)")
         let rawResponse = await call({ session in
-            typeset_lang_signature_help(session, path, UInt32(max(0, offset)))
+            typeset_lang_signature_help(session, path, UInt32(clamping: offset))
         })
         guard let data = rawResponse.data(using: .utf8),
               let response = try? JSONDecoder().decode(FFISignatureHelpResponse.self, from: data) else {
@@ -818,6 +835,8 @@ public actor EmbeddedLanguageService: TypstLanguageService {
     }
 
     public func proseRanges(path: String, ignoringCommandsAndArguments: Bool) async -> [TypstProseRange] {
+        // Before the call, as in `diagnostics()`.
+        let text = files[path] ?? ""
         guard let data = await call({ session in
             typeset_lang_prose_ranges_with_options(
                 session,
@@ -828,20 +847,20 @@ public actor EmbeddedLanguageService: TypstLanguageService {
               let response = try? JSONDecoder().decode(FFIProseRangeResponse.self, from: data) else {
             return []
         }
-        let text = files[path] ?? ""
         return response.ranges.map {
             TypstProseRange(range: TypstSourceOffsetConverter.utf16Range(fromUTF8Start: $0.startUtf8, endUTF8: $0.endUtf8, in: text))
         }
     }
 
     public func documentSymbols(path: String) async -> TypstDocumentSymbols {
+        // Before the call, as in `diagnostics()`.
+        let text = files[path] ?? ""
         guard let data = await call({ session in
             typeset_lang_document_symbols(session, path)
         }).data(using: .utf8),
               let response = try? JSONDecoder().decode(FFIDocumentSymbolsResponse.self, from: data) else {
             return .empty
         }
-        let text = files[path] ?? ""
         let outline = response.outline.map {
             TypstOutlineItem(
                 title: $0.title,
@@ -1079,12 +1098,40 @@ public actor EmbeddedLanguageService: TypstLanguageService {
     private func call(_ body: @escaping @Sendable (OpaquePointer?) -> UnsafeMutablePointer<CChar>?) async -> String {
         let sessionAddress = sessionAddress
         return await EmbeddedRustWorkQueue.languageService.run {
+            // Completions build the shared font store just as a compile does,
+            // and whichever gets there first fixes its contents for the life
+            // of the process — so the bundled fonts have to be announced on
+            // this path too, not only before the first render.
+            TypstBundledFonts.installOnce()
             let session = OpaquePointer(bitPattern: sessionAddress)
             guard let pointer = body(session) else { return "" }
             defer { typeset_lang_string_free(pointer) }
             return String(cString: pointer)
         }
     }
+
+    /// A call whose only result is a status. Nothing upstream can act on a
+    /// failure, but it should not vanish either: a session that refused its
+    /// workspace or a file answers every later request from stale state.
+    private func callStatus(
+        _ operation: String,
+        _ body: @escaping @Sendable (OpaquePointer?) -> UnsafeMutablePointer<CChar>?
+    ) async {
+        let raw = await call(body)
+        guard let data = raw.data(using: .utf8),
+              let status = try? JSONDecoder().decode(FFIStatusResponse.self, from: data) else {
+            TypstLanguageDebug.log("\(operation) returned no status responsePrefix=\(String(raw.prefix(240)))")
+            return
+        }
+        if !status.ok {
+            TypstLanguageDebug.log("\(operation) failed: \(status.message ?? "no message")")
+        }
+    }
+}
+
+private struct FFIStatusResponse: Decodable {
+    var ok: Bool
+    var message: String?
 }
 
 private struct FFIDiagnosticResponse: Decodable {
@@ -1761,7 +1808,8 @@ public actor BasicTypstLanguageService: TypstLanguageService {
     private static func markupSnippetCompletions(replacementRange: NSRange) -> [TypstCompletionItem] {
         let snippets: [(label: String, insertText: String, documentation: String)] = [
             ("expression", "#$0", "Variables, function calls, blocks, and more."),
-            ("linebreak", "\\\n$0", "Insert a forced line break."),
+            // The backslash is doubled: the snippet resolver reads one as an escape.
+            ("linebreak", "\\\\\n$0", "Insert a forced line break."),
             ("strong text", "*${1:strong}*", "Strongly emphasize content by increasing the font weight."),
             ("emphasized text", "_${1:emphasized}_", "Emphasize content by setting it in italic font style."),
             ("raw text", "`${1:text}`", "Display text verbatim in monospace."),
@@ -1939,11 +1987,24 @@ public actor BasicTypstLanguageService: TypstLanguageService {
         lineOffset: Int,
         ignoringCommandsAndArguments: Bool
     ) -> [NSRange] {
-        mutableProseSegments(
-            in: Array(line.unicodeScalars),
-            lineOffset: lineOffset,
+        // The scanner below walks Unicode scalars, while the ranges it hands
+        // back are measured in UTF-16. The two agree until the line holds an
+        // emoji or any other character outside the BMP, after which every
+        // range sat one unit short per such character — so translate.
+        let scalars = Array(line.unicodeScalars)
+        var utf16Offsets = [0]
+        utf16Offsets.reserveCapacity(scalars.count + 1)
+        for scalar in scalars {
+            utf16Offsets.append(utf16Offsets[utf16Offsets.count - 1] + UTF16.width(scalar))
+        }
+        return mutableProseSegments(
+            in: scalars,
+            lineOffset: 0,
             ignoringCommandsAndArguments: ignoringCommandsAndArguments
-        )
+        ).map { range in
+            let start = utf16Offsets[range.location]
+            return NSRange(location: lineOffset + start, length: utf16Offsets[NSMaxRange(range)] - start)
+        }
     }
 
     private static func mutableProseSegments(

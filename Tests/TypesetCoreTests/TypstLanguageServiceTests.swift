@@ -307,3 +307,94 @@ import Testing
     #expect(updated == "= Second")
     #expect(FileManager.default.fileExists(atPath: documentRoot.appending(path: "assets/readme.txt").path))
 }
+
+@Test func sourceOffsetConversionIsExactInsideGraphemeClusters() {
+    // The compiler's offsets are scalar-aligned, not character-aligned. Each
+    // of these lands inside a Swift `Character`, where a lookup by character
+    // fails — and a failed lookup used to mean "end of document".
+    let crlf = "= Head\r\nbody text here"
+    #expect(TypstSourceOffsetConverter.utf16Range(fromUTF8Start: 0, endUTF8: 7, in: crlf) == NSRange(location: 0, length: 7))
+    #expect(TypstSourceOffsetConverter.utf16Range(fromUTF8Start: 7, endUTF8: 7, in: crlf) == NSRange(location: 7, length: 0))
+    #expect(TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: 7, in: crlf) == 7)
+
+    let combining = "#x\u{301} tail text"
+    #expect(TypstSourceOffsetConverter.utf16Range(fromUTF8Start: 1, endUTF8: 2, in: combining) == NSRange(location: 1, length: 1))
+    #expect(TypstSourceOffsetConverter.utf16Range(fromUTF8Start: 2, endUTF8: 4, in: combining) == NSRange(location: 2, length: 1))
+    #expect(TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: 2, in: combining) == 2)
+
+    // woman, zero-width joiner, girl: one character, three scalars.
+    let family = "a\u{1F469}\u{200D}\u{1F467}b"
+    #expect(TypstSourceOffsetConverter.utf16Range(fromUTF8Start: 5, endUTF8: 8, in: family) == NSRange(location: 3, length: 1))
+    #expect(TypstSourceOffsetConverter.utf16Range(fromUTF8Start: 8, endUTF8: 12, in: family) == NSRange(location: 4, length: 2))
+    #expect(TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: 3, in: family) == 5)
+    #expect(TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: 4, in: family) == 8)
+
+    let astral = "\u{1D465} = 1"
+    #expect(TypstSourceOffsetConverter.utf16Range(fromUTF8Start: 4, endUTF8: 5, in: astral) == NSRange(location: 2, length: 1))
+    #expect(TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: 2, in: astral) == 4)
+}
+
+@Test func sourceOffsetConversionClampsOffsetsThatFitNoPosition() {
+    // Between the halves of a surrogate pair, and inside a multi-byte
+    // scalar: both back up to the start of the scalar.
+    #expect(TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: 2, in: "a\u{1F469}b") == 1)
+    #expect(TypstSourceOffsetConverter.utf16Range(fromUTF8Start: 1, endUTF8: 2, in: "\u{E9}a") == NSRange(location: 0, length: 1))
+
+    #expect(TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: -5, in: "ab") == 0)
+    #expect(TypstSourceOffsetConverter.utf8Offset(fromUTF16Offset: 99, in: "ab") == 2)
+    #expect(TypstSourceOffsetConverter.utf16Range(fromUTF8Start: 100, endUTF8: 200, in: "ab") == NSRange(location: 2, length: 0))
+}
+
+@Test func basicLanguageServiceProseRangesCountAstralCharactersInUTF16() async {
+    let service = BasicTypstLanguageService()
+    let text = "\u{1F600} Spell `raw` \u{1F600} tail"
+
+    await service.updateFile(path: "main.typ", text: text)
+    let ranges = await service.proseRanges(path: "main.typ", ignoringCommandsAndArguments: true)
+    let checkedText = ranges
+        .map { (text as NSString).substring(with: $0.range) }
+        .joined()
+
+    #expect(checkedText == "\u{1F600} Spell  \u{1F600} tail")
+}
+
+@Test func basicLanguageServiceLinebreakSnippetInsertsABackslash() async {
+    let service = BasicTypstLanguageService()
+    await service.updateFile(path: "main.typ", text: "linebreak")
+
+    let completions = await service.completions(path: "main.typ", utf16Offset: 9)
+    let linebreak = completions.first { $0.label == "linebreak" }
+    let resolved = linebreak.map { TypstCompletionSnippet.resolve($0.insertText, format: $0.insertTextFormat) }
+
+    // Typst's forced line break is a backslash at the end of the line.
+    #expect(resolved?.text == "\\\n")
+}
+
+@Test func languageWorkspaceStoreClearsLeftoversAndRemovesItsOwn() async throws {
+    let base = FileManager.default.temporaryDirectory
+        .appending(path: "TypesetLangStore-\(UUID().uuidString)", directoryHint: .isDirectory)
+    let leftover = base.appending(path: "left-by-an-earlier-launch", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: leftover, withIntermediateDirectories: true)
+    try Data("= Stale".utf8).write(to: leftover.appending(path: "main.typ"))
+    defer { try? FileManager.default.removeItem(at: base) }
+
+    let package = try DocumentPackage(files: [
+        PackageFile(path: "main.typ", data: Data("= First".utf8)),
+    ])
+
+    // The first workspace of the process sweeps out what was there before.
+    let store = LanguageWorkspaceStore(baseDirectory: base)
+    let first = try await store.materialize(package: package, documentID: "first")
+    #expect(!FileManager.default.fileExists(atPath: leftover.path))
+    #expect(FileManager.default.fileExists(atPath: first.appending(path: "main.typ").path))
+
+    // A second store — another document window — must not sweep the first
+    // one's live workspace away.
+    let otherStore = LanguageWorkspaceStore(baseDirectory: base)
+    let second = try await otherStore.materialize(package: package, documentID: "second")
+    #expect(FileManager.default.fileExists(atPath: first.appending(path: "main.typ").path))
+
+    await store.remove(documentID: "first")
+    #expect(!FileManager.default.fileExists(atPath: first.path))
+    #expect(FileManager.default.fileExists(atPath: second.path))
+}

@@ -263,6 +263,7 @@ public struct TypstRenderer: TypstRendering {
         try data.write(to: outputURL)
         #elseif os(macOS)
         let workspace = try TemporaryPackageWriter().write(package: package)
+        defer { try? FileManager.default.removeItem(at: workspace) }
         let inputURL = workspace.appending(path: mainPath)
         let command = TypstToolLocator().typstCommand()
         let packageStorage = try TypstPackageStorage.appSupportStorage()
@@ -330,7 +331,7 @@ public struct TypstRenderer: TypstRendering {
     ) async throws -> EmbeddedTypstRenderResponse {
         try await EmbeddedRustWorkQueue.rendering.run {
             // Before the first compile, which is when the font book is built.
-            _ = Self.bundledFontsInstalled
+            TypstBundledFonts.installOnce()
             guard let pointer = body() else {
                 throw TypstRenderError.commandFailed("Embedded Typst returned no response.")
             }
@@ -343,9 +344,6 @@ public struct TypstRenderer: TypstRendering {
             return response
         }
     }
-
-    /// Installs the bundled fonts exactly once per process.
-    private static let bundledFontsInstalled: Void = TypstBundledFonts.install()
 
     private func previewSourceRect(from rect: EmbeddedTypstSourceRect, package: DocumentPackage) -> PreviewSourceRect? {
         guard package.files.contains(where: { $0.path == rect.file }) else { return nil }
@@ -399,10 +397,15 @@ public struct TypstRenderer: TypstRendering {
         process.standardOutput = pipe
 
         try process.run()
+        // Drain the pipe before waiting, not after: a pipe holds only so much
+        // (64 KB), and a compiler with more diagnostics than that blocks on
+        // its write while we block on its exit. Reading to end-of-file returns
+        // once the child has closed both streams, which is when it exits.
+        let output = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
 
         guard process.terminationStatus == 0 else {
-            let message = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            let message = String(decoding: output, as: UTF8.self)
             throw TypstRenderError.commandFailed(message.isEmpty ? fallbackErrorMessage : message)
         }
     }
@@ -555,6 +558,7 @@ public struct TypstPackageStorage: Equatable, Sendable {
     public func createDirectories(fileManager: FileManager = .default) throws {
         try fileManager.createDirectory(at: localPackagesURL, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: packageCacheURL, withIntermediateDirectories: true)
+        TypstBundledPackages.seedOnce(cacheURL: packageCacheURL, fileManager: fileManager)
     }
 }
 
@@ -630,6 +634,24 @@ public final class IncrementalPackageWorkspace: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
+        do {
+            return try syncLocked(package: package)
+        } catch {
+            // A sync that failed partway leaves a mirror that matches neither
+            // the last package nor this one, and the bookkeeping can no longer
+            // say which. Drop it, so the next sync starts from an empty
+            // directory instead of failing the same way for the whole session.
+            if let rootURL {
+                try? FileManager.default.removeItem(at: rootURL)
+            }
+            rootURL = nil
+            writtenFiles = [:]
+            writtenFolders = []
+            throw error
+        }
+    }
+
+    private func syncLocked(package: DocumentPackage) throws -> URL {
         let fileManager = FileManager.default
         let root: URL
         if let rootURL, fileManager.fileExists(atPath: rootURL.path) {
@@ -644,6 +666,22 @@ public final class IncrementalPackageWorkspace: @unchecked Sendable {
         }
 
         let folders = Set(package.allFolderPaths)
+        let filePaths = Set(package.files.map(\.path))
+
+        // Clear out what left the package before writing what joined it. A
+        // path can change kind between syncs — a file `data` deleted and a
+        // folder `data/` created, or a name that changed only in case on a
+        // case-insensitive volume — and the newcomer cannot be created while
+        // the old entry still sits in its place.
+        for removed in Set(writtenFiles.keys).subtracting(filePaths) {
+            try? fileManager.removeItem(at: root.appending(path: removed))
+            writtenFiles[removed] = nil
+        }
+        for removed in writtenFolders.subtracting(folders).sorted(by: { $0.count > $1.count }) {
+            try? fileManager.removeItem(at: root.appending(path: removed))
+            writtenFolders.remove(removed)
+        }
+
         for folder in folders.subtracting(writtenFolders).sorted(by: { $0.count < $1.count }) {
             try fileManager.createDirectory(
                 at: root.appending(path: folder, directoryHint: .isDirectory),
@@ -663,13 +701,6 @@ public final class IncrementalPackageWorkspace: @unchecked Sendable {
                 try file.data.write(to: url)
             }
             nextWritten[file.path] = file.data
-        }
-
-        for removed in Set(writtenFiles.keys).subtracting(nextWritten.keys) {
-            try? fileManager.removeItem(at: root.appending(path: removed))
-        }
-        for removed in writtenFolders.subtracting(folders).sorted(by: { $0.count > $1.count }) {
-            try? fileManager.removeItem(at: root.appending(path: removed))
         }
 
         writtenFiles = nextWritten

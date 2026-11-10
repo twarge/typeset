@@ -5,9 +5,10 @@
 # Builds Vendor/TypesetLang.xcframework from the Rust FFI crate.
 #
 # Incremental by default: when the built binaries are newer than every input
-# (this script, the crate manifest/lock, the header, lib.rs) it exits
-# immediately, so the Xcode build phase can run it on every build for
-# effectively nothing. Pass --force to rebuild regardless. On first use it
+# (this script, the crate manifest/lock, the header, lib.rs) and were built
+# from the Typst commit and Rust toolchain now in place, it exits immediately,
+# so the Xcode build phase can run it on every build for effectively nothing.
+# Pass --force to rebuild regardless. On first use it
 # also checks out the Vendor/typst submodule and installs the Apple Rust
 # targets, so a fresh clone builds from Xcode alone.
 set -euo pipefail
@@ -23,8 +24,16 @@ ROOT_DIR="${SRCROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 CRATE_DIR="$ROOT_DIR/Vendor/typeset-lang-ffi"
 BUILD_DIR="$ROOT_DIR/Vendor/Build/TypesetLang"
 OUT_DIR="$ROOT_DIR/Vendor/TypesetLang.xcframework"
+# What the binaries were built from that file dates can't show; see
+# `build_fingerprint`. Under Vendor/Build, which git ignores.
+STAMP_FILE="$ROOT_DIR/Vendor/Build/TypesetLang.stamp"
+# Xcode's build phases run with a trimmed PATH, so look where rustup installs
+# itself before falling back to the environment's.
 CARGO_BIN="${CARGO:-$HOME/.cargo/bin/cargo}"
-MACOS_MIN_VERSION="${MACOS_MIN_VERSION:-15.0}"
+if [ ! -x "$CARGO_BIN" ]; then
+  CARGO_BIN="$(command -v cargo || true)"
+fi
+MACOS_MIN_VERSION="${MACOS_MIN_VERSION:-26.0}"
 IOS_MIN_VERSION="${IOS_MIN_VERSION:-26.0}"
 
 RUST_TARGETS=(
@@ -40,8 +49,27 @@ has_all_binaries() {
     [ -f "$OUT_DIR/ios-arm64_x86_64-simulator/TypesetLang.framework/TypesetLang" ]
 }
 
+# The crate's path dependencies reach into Vendor/typst, and none of that is
+# in the input list below: moving the submodule pointer, editing the fork, or
+# changing toolchains leaves every listed file untouched. Cargo would notice,
+# but the fast path exits before cargo runs — so record what the binaries were
+# built from and compare. Three quick commands, cheap enough for every build.
+build_fingerprint() {
+  local typst_dir="$ROOT_DIR/Vendor/typst"
+  echo "typst $(git -C "$typst_dir" rev-parse HEAD 2>/dev/null || echo unknown)"
+  # Uncommitted edits to the fork, as a checksum of the diff against HEAD.
+  # `status` as well, because the diff says nothing about a new, untracked file.
+  echo "typst-diff $({ git -C "$typst_dir" status --porcelain; git -C "$typst_dir" diff HEAD; } 2>/dev/null | cksum)"
+  if [ -n "$CARGO_BIN" ] && [ -x "$CARGO_BIN" ]; then
+    echo "toolchain $("$CARGO_BIN" --version 2>/dev/null || echo unknown)"
+  else
+    echo "toolchain unknown"
+  fi
+}
+
 up_to_date() {
   has_all_binaries || return 1
+  [ -f "$STAMP_FILE" ] && [ "$(cat "$STAMP_FILE")" = "$(build_fingerprint)" ] || return 1
 
   local marker="$OUT_DIR/macos-arm64/TypesetLang.framework/TypesetLang"
   local inputs=(
@@ -74,8 +102,7 @@ if [ ! -f "$ROOT_DIR/Vendor/typst/Cargo.toml" ]; then
   git -C "$ROOT_DIR" submodule update --init --recursive Vendor/typst
 fi
 
-# Xcode's build phases run with a trimmed PATH, so look where rustup installs
-# itself before falling back to the environment's.
+# As for cargo above: rustup's own directory first, then the PATH.
 RUSTUP_BIN="${RUSTUP:-$HOME/.cargo/bin/rustup}"
 if [ ! -x "$RUSTUP_BIN" ]; then
   RUSTUP_BIN="$(command -v rustup || true)"
@@ -84,9 +111,6 @@ if [ -n "$RUSTUP_BIN" ] && [ -x "$RUSTUP_BIN" ]; then
   "$RUSTUP_BIN" target add "${RUST_TARGETS[@]}" >/dev/null
 fi
 
-if [ ! -x "$CARGO_BIN" ]; then
-  CARGO_BIN="$(command -v cargo || true)"
-fi
 if [ -z "$CARGO_BIN" ] || [ ! -x "$CARGO_BIN" ]; then
   echo "error: cargo is required to build TypesetLang" >&2
   exit 1
@@ -129,9 +153,13 @@ build_target() {
   esac
   export "CFLAGS_${rust_target//-/_}=$version_min_flag"
 
+  # --locked: a lockfile out of step with the manifests (a Typst bump that
+  # changed a dependency requirement, say) fails the build instead of quietly
+  # resolving newer crates into a release.
   "$CARGO_BIN" build \
     --manifest-path "$CRATE_DIR/Cargo.toml" \
     --release \
+    --locked \
     --target "$rust_target"
 
   local lib_path="$CRATE_DIR/target/$rust_target/release/libtypeset_lang_ffi.a"
@@ -174,6 +202,7 @@ build_universal_simulator() {
 }
 
 rm -rf "$BUILD_DIR" "$OUT_DIR"
+rm -f "$STAMP_FILE"
 mkdir -p "$BUILD_DIR"
 
 build_target "aarch64-apple-darwin" "macosx" "$MACOS_MIN_VERSION" "macos-arm64"
@@ -190,3 +219,89 @@ if ! has_all_binaries; then
   echo "error: TypesetLang.xcframework is incomplete after build." >&2
   exit 1
 fi
+
+# The xcframework's Info.plist is tracked (Xcode plans the build against it on
+# a fresh clone, before this script has produced any binaries), but
+# `xcodebuild -create-xcframework` lists the slices in an order that varies
+# from run to run, which dirtied the tree after every rebuild. The slices are
+# fixed by this script, so write the plist out in one canonical order — after
+# checking that the generated one names exactly the slices expected.
+write_canonical_info_plist() {
+  local plist="$OUT_DIR/Info.plist"
+  local expected="ios-arm64 ios-arm64_x86_64-simulator macos-arm64"
+  local found
+  found="$(
+    for index in 0 1 2 3; do
+      /usr/libexec/PlistBuddy -c "Print :AvailableLibraries:$index:LibraryIdentifier" "$plist" 2>/dev/null || true
+    done | sort | xargs
+  )"
+  if [ "$found" != "$expected" ]; then
+    echo "error: TypesetLang.xcframework has slices '$found'; expected '$expected'. Update write_canonical_info_plist." >&2
+    exit 1
+  fi
+
+  cat > "$plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>AvailableLibraries</key>
+	<array>
+		<dict>
+			<key>BinaryPath</key>
+			<string>TypesetLang.framework/TypesetLang</string>
+			<key>LibraryIdentifier</key>
+			<string>ios-arm64</string>
+			<key>LibraryPath</key>
+			<string>TypesetLang.framework</string>
+			<key>SupportedArchitectures</key>
+			<array>
+				<string>arm64</string>
+			</array>
+			<key>SupportedPlatform</key>
+			<string>ios</string>
+		</dict>
+		<dict>
+			<key>BinaryPath</key>
+			<string>TypesetLang.framework/TypesetLang</string>
+			<key>LibraryIdentifier</key>
+			<string>ios-arm64_x86_64-simulator</string>
+			<key>LibraryPath</key>
+			<string>TypesetLang.framework</string>
+			<key>SupportedArchitectures</key>
+			<array>
+				<string>arm64</string>
+				<string>x86_64</string>
+			</array>
+			<key>SupportedPlatform</key>
+			<string>ios</string>
+			<key>SupportedPlatformVariant</key>
+			<string>simulator</string>
+		</dict>
+		<dict>
+			<key>BinaryPath</key>
+			<string>TypesetLang.framework/TypesetLang</string>
+			<key>LibraryIdentifier</key>
+			<string>macos-arm64</string>
+			<key>LibraryPath</key>
+			<string>TypesetLang.framework</string>
+			<key>SupportedArchitectures</key>
+			<array>
+				<string>arm64</string>
+			</array>
+			<key>SupportedPlatform</key>
+			<string>macos</string>
+		</dict>
+	</array>
+	<key>CFBundlePackageType</key>
+	<string>XFWK</string>
+	<key>XCFrameworkFormatVersion</key>
+	<string>1.0</string>
+</dict>
+</plist>
+PLIST
+}
+write_canonical_info_plist
+
+# Last, so an interrupted or failed build leaves no stamp and is redone.
+build_fingerprint > "$STAMP_FILE"
