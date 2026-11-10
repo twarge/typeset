@@ -115,7 +115,12 @@ private struct Sandbox {
     #expect(package.isReplaced)
     #expect(package.origin == .bundled)
     // The local folder is the one the compiler reads first.
-    #expect(package.directoryURL.path.hasPrefix(sandbox.storage.localPackagesURL.path))
+    // Compared resolved: a listing may spell the temporary directory through
+    // /private where the sandbox's own URL doesn't.
+    #expect(
+        package.directoryURL.resolvingSymlinksInPath().path
+            .hasPrefix(sandbox.storage.localPackagesURL.resolvingSymlinksInPath().path)
+    )
     try #expect(String(contentsOf: package.directoryURL.appending(path: "lib.typ"), encoding: .utf8) == "modified")
     #expect(!FileManager.default.fileExists(atPath: package.directoryURL.appending(path: ".git").path))
 
