@@ -412,7 +412,7 @@ struct TypesetWorkspaceView: View {
                 .overlay(alignment: .top) {
                     iosDistractionFreeRevealTouchTarget
                 }
-                .animation(.easeInOut(duration: 0.18), value: shouldHideIOSDistractionFreeChrome)
+                .accessibleAnimation(.easeInOut(duration: 0.18), value: shouldHideIOSDistractionFreeChrome)
                 .onChange(of: isDistractionFreeWindowChrome) { _, enabled in
                     handleIOSDistractionFreePreferenceChange(enabled)
                 }
@@ -615,6 +615,20 @@ struct TypesetWorkspaceView: View {
                 refreshPreview()
             }
             #if os(macOS)
+            .touchBar {
+                Button(action: exportPDF) {
+                    Label("Export PDF", systemImage: "square.and.arrow.up")
+                }
+                Button(action: toggleParagraphComment) {
+                    Label("Comment", systemImage: "text.badge.minus")
+                }
+                Button { formatSource(selectionOnly: false) } label: {
+                    Label("Format", systemImage: "text.alignleft")
+                }
+                Button(action: showFindReplace) {
+                    Label("Find", systemImage: "magnifyingglass")
+                }
+            }
             .background(DocumentProxyConfigurator(fileURL: fileURL))
             #endif
             .alert(
@@ -741,7 +755,7 @@ struct TypesetWorkspaceView: View {
     // chrome — present whenever the toolbar is shown, gone when it auto-hides.
     private var macOSSidebarToggle: some View {
         Button {
-            withAnimation {
+            withAccessibleAnimation {
                 columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
             }
         } label: {
@@ -1120,7 +1134,8 @@ struct TypesetWorkspaceView: View {
             onDeleteFolder: deleteFolder,
             onSetCompileTarget: setCompileTarget,
             onError: { title, message in
-                recordLog(title, message: message, level: .error, present: true)
+                // The sidebar composes its own titles as plain strings.
+                recordLog("\(title)", message: message, level: .error, present: true)
             }
         )
     }
@@ -1139,14 +1154,23 @@ struct TypesetWorkspaceView: View {
             exportPDF: exportPDF,
             exportPDFToDefaultLocation: exportPDFToDefaultLocation,
             canExportPDFToDefaultLocation: canExportPDFToDefaultLocation,
+            printDocument: printDocument,
+            sharePDF: {
+                #if os(macOS)
+                sharePDF()
+                #else
+                exportPDF()
+                #endif
+            },
             newFolder: prepareNewFolder,
             toggleLogs: {
-                withAnimation(.snappy(duration: 0.28)) {
+                withAccessibleAnimation(.snappy(duration: 0.28)) {
                     isLogPresented.toggle()
                 }
             },
             requestCompletion: { requestLanguageIntelligence(forceCompletion: true) },
             showFindReplace: showFindReplace,
+            useSelectionForFind: useSelectionForFind,
             showFindInFiles: showFindInFiles,
             findNext: { selectFindMatch(direction: .next) },
             findPrevious: { selectFindMatch(direction: .previous) },
@@ -1301,13 +1325,13 @@ struct TypesetWorkspaceView: View {
     }
 
     private func dismissLogs() {
-        withAnimation(.snappy(duration: 0.28)) {
+        withAccessibleAnimation(.snappy(duration: 0.28)) {
             isLogPresented = false
         }
     }
 
     private func presentLogs() {
-        withAnimation(.snappy(duration: 0.28)) {
+        withAccessibleAnimation(.snappy(duration: 0.28)) {
             isLogPresented = true
         }
     }
@@ -1324,7 +1348,7 @@ struct TypesetWorkspaceView: View {
                     verticalSplitView
                 }
             }
-            .animation(.snappy(duration: 0.24), value: orientation)
+            .accessibleAnimation(.snappy(duration: 0.24), value: orientation)
         }
     }
 
@@ -1394,7 +1418,7 @@ struct TypesetWorkspaceView: View {
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .animation(.snappy(duration: 0.18), value: isFindReplacePresented)
+        .accessibleAnimation(.snappy(duration: 0.18), value: isFindReplacePresented)
         // Carry the top-edge extension directly (like the preview does), so
         // StableSourcePane's clip reaches into the title-bar region in
         // distraction-free mode instead of cutting the editor there and leaving
@@ -3273,8 +3297,27 @@ struct TypesetWorkspaceView: View {
         if range.length > 0 {
             findText = (sourceText as NSString).substring(with: range)
         }
+        #if os(macOS)
+        // With nothing selected, start from what was last searched for,
+        // here or in another app.
+        if range.length == 0, findText.isEmpty, let shared = FindPasteboard.string {
+            findText = shared
+        }
+        FindPasteboard.string = findText
+        #endif
         isFindReplacePresented = true
         selectFirstFindMatch()
+    }
+
+    /// ⌘E: makes the selection the search term, here and for the next app's
+    /// Find, without opening the panel.
+    private func useSelectionForFind() {
+        let range = currentEditorRange
+        guard selectedFile?.isTextEditable == true, range.length > 0 else { return }
+        findText = (sourceText as NSString).substring(with: range)
+        #if os(macOS)
+        FindPasteboard.string = findText
+        #endif
     }
 
     private func selectFirstFindMatch() {
@@ -3382,7 +3425,7 @@ struct TypesetWorkspaceView: View {
             requestEditorReveal(target)
         }
         focusSourceEditor()
-        withAnimation(.snappy(duration: 0.24)) {
+        withAccessibleAnimation(.snappy(duration: 0.24)) {
             isLogPresented = false
         }
     }
@@ -3731,6 +3774,58 @@ struct TypesetWorkspaceView: View {
                         level: .error,
                         present: true
                     )
+                }
+            }
+        }
+    }
+
+    private func printDocument() {
+        let jobName = (defaultPDFExportFilename() as NSString).deletingPathExtension
+        withExportedPDF(failureTitle: "Printing failed") { url in
+            if !PDFPrinter.print(pdfAt: url, jobName: jobName) {
+                recordLog(
+                    "Printing failed",
+                    message: "The document compiled, but the print panel could not be shown.",
+                    level: .error,
+                    present: true
+                )
+            }
+        }
+    }
+
+    #if os(macOS)
+    private func sharePDF() {
+        withExportedPDF(failureTitle: "Sharing failed") { url in
+            PDFSharing.present(url)
+        }
+    }
+    #endif
+
+    /// Compiles the document as it stands to a PDF in the temporary directory
+    /// and hands over its URL. The file stays until the next launch clears
+    /// `TypesetExports`: a print job or a share service reads it after this
+    /// returns.
+    private func withExportedPDF(failureTitle: LocalizedStringResource, perform: @escaping @MainActor (URL) -> Void) {
+        let runID = beginExportRun()
+        let package = packageSnapshotForExport()
+        let renderer = self.renderer
+        let filename = defaultPDFExportFilename()
+        Task {
+            do {
+                let directory = FileManager.default.temporaryDirectory
+                    .appending(path: "TypesetExports", directoryHint: .isDirectory)
+                    .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                let outputURL = directory.appending(path: filename)
+                try await renderer.exportPDF(package: package, to: outputURL)
+                await MainActor.run {
+                    guard exportRunID == runID else { return }
+                    perform(outputURL)
+                }
+            } catch {
+                await MainActor.run {
+                    guard exportRunID == runID else { return }
+                    recordLog(failureTitle, message: error.localizedDescription, level: .error, present: true)
                 }
             }
         }
@@ -4364,7 +4459,10 @@ struct TypesetWorkspaceView: View {
     /// unless a newer compile has started. Without one it is a notice, which
     /// compiles leave alone (see `noticeEntries`); `present` then opens the
     /// log, once per distinct message.
-    private func recordLog(_ title: String, message: String, level: DiagnosticLogEntry.Level, runID: UUID? = nil, present: Bool = false) {
+    /// `title` is a localisable resource so that every literal passed here
+    /// lands in the String Catalog; `message` is usually an error's own text.
+    private func recordLog(_ title: LocalizedStringResource, message: String, level: DiagnosticLogEntry.Level, runID: UUID? = nil, present: Bool = false) {
+        let title = String(localized: title)
         let entry = DiagnosticLogEntry(title: title, message: message, level: level)
         if let runID {
             guard diagnosticRunID == runID else { return }

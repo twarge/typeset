@@ -72,7 +72,7 @@ struct PaneSplit<Leading: View, Trailing: View>: View {
                 trailing
             }
             .coordinateSpace(.named(Self.coordinateSpaceName))
-            .animation(.snappy(duration: 0.24), value: fold)
+            .accessibleAnimation(.snappy(duration: 0.24), value: fold)
         }
     }
 
@@ -157,9 +157,9 @@ struct ToolbarStatusIcon: View {
                 Image(systemName: "play.fill")
             }
         }
-        .animation(.easeInOut(duration: 0.15), value: isLogPresented)
-        .animation(.easeInOut(duration: 0.15), value: isCompiling)
-        .animation(.easeInOut(duration: 0.15), value: hasErrorLogs)
+        .accessibleAnimation(.easeInOut(duration: 0.15), value: isLogPresented)
+        .accessibleAnimation(.easeInOut(duration: 0.15), value: isCompiling)
+        .accessibleAnimation(.easeInOut(duration: 0.15), value: hasErrorLogs)
     }
 }
 

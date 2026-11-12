@@ -44,6 +44,9 @@ struct WorkspaceSettingsPane: View {
     @State private var grantedFolders: [String] = []
     #endif
     @State private var isShowingPackages = false
+    #if os(macOS)
+    @AppStorage(MenuBarItemController.isShownKey) private var showsMenuBarExtra = false
+    #endif
     var onDismiss: () -> Void
 
     var body: some View {
@@ -188,6 +191,10 @@ struct WorkspaceSettingsPane: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                #if os(macOS)
+                Toggle("Show Typeset in the Menu Bar", isOn: $showsMenuBarExtra)
+                #endif
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -349,7 +356,7 @@ struct WorkspaceSettingsPane: View {
                                 .help(path)
                             Spacer(minLength: 8)
                             Button {
-                                withAnimation {
+                                withAccessibleAnimation {
                                     FolderAccessStore.revokeAccess(toPath: path)
                                     grantedFolders = FolderAccessStore.grantedPaths()
                                 }

@@ -53,6 +53,16 @@ struct TypesetShortcuts: AppShortcutsProvider {
             phrases: ["Compile Typst with \(.applicationName)"],
             shortTitle: "Compile Typst",
             systemImageName: "doc.richtext")
+        AppShortcut(
+            intent: ExportTypstFileIntent(),
+            phrases: ["Export a Typst file with \(.applicationName)"],
+            shortTitle: "Export as PDF",
+            systemImageName: "square.and.arrow.up")
+        AppShortcut(
+            intent: CreateTypstFileIntent(),
+            phrases: ["Create a Typst file with \(.applicationName)"],
+            shortTitle: "Create Typst File",
+            systemImageName: "doc.badge.plus")
     }
 }
 
@@ -106,6 +116,7 @@ final class CompileService: NSObject {
 final class TypesetAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.servicesProvider = CompileService()
+        MenuBarItemController.shared.start()
     }
 }
 #endif

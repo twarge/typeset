@@ -57,6 +57,7 @@
 		200000000000000000000012 /* TypstPackageLibraryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000002 /* TypstPackageLibraryTests.swift */; };
 		200000000000000000000013 /* PackagesSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* PackagesSettingsView.swift */; };
 		200000000000000000000014 /* Resources/TypstPackages in Resources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000004 /* Resources/TypstPackages */; };
+		600000000000000000000002 /* Resources/Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 600000000000000000000001 /* Resources/Localizable.xcstrings */; };
 		200000000000000000000015 /* Resources/Acknowledgements/TypstPackages-NOTICE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000005 /* Resources/Acknowledgements/TypstPackages-NOTICE.txt */; };
 		200000000000000000000016 /* Resources/Acknowledgements/GPL-3.0.txt in Resources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000006 /* Resources/Acknowledgements/GPL-3.0.txt */; };
 		200000000000000000000017 /* Resources/Acknowledgements/EPL-2.0.txt in Resources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000007 /* Resources/Acknowledgements/EPL-2.0.txt */; };
@@ -68,6 +69,13 @@
 		100000000000000000000D04 /* WorkspacePreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C04 /* WorkspacePreviews.swift */; };
 		100000000000000000000D05 /* DiagnosticLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C05 /* DiagnosticLog.swift */; };
 		100000000000000000000D06 /* WorkspaceSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C06 /* WorkspaceSearch.swift */; };
+		300000000000000000000B0F /* Motion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000B0E /* Motion.swift */; };
+		300000000000000000000B0D /* ErrorExplainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000B0C /* ErrorExplainer.swift */; };
+		300000000000000000000B0B /* MenuBarExtraScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000B0A /* MenuBarExtraScene.swift */; };
+		300000000000000000000B09 /* SettingsSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000B08 /* SettingsSync.swift */; };
+		300000000000000000000B07 /* SystemTextSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000B06 /* SystemTextSupport.swift */; };
+		300000000000000000000B05 /* DocumentIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000B04 /* DocumentIntents.swift */; };
+		300000000000000000000B03 /* DocumentOutput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000B02 /* DocumentOutput.swift */; };
 		100000000000000000000D07 /* FileSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C07 /* FileSidebar.swift */; };
 		100000000000000000000D08 /* FileTreeDragDrop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C08 /* FileTreeDragDrop.swift */; };
 		100000000000000000000D09 /* FileTreeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C09 /* FileTreeModel.swift */; };
@@ -77,8 +85,14 @@
 		100000000000000000000F03 /* TypstSyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000E03 /* TypstSyntaxHighlighter.swift */; };
 		100000000000000000000F90 /* EditorTextGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000E90 /* EditorTextGeometry.swift */; };
 		300000000000000000000001 /* PreviewViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000101 /* PreviewViewController.swift */; };
+		500000000000000000000001 /* ImportExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 500000000000000000000101 /* ImportExtension.swift */; };
+		400000000000000000000001 /* ThumbnailProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 400000000000000000000101 /* ThumbnailProvider.swift */; };
 		300000000000000000000002 /* TypesetCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; };
+		500000000000000000000002 /* TypesetCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; };
+		400000000000000000000002 /* TypesetCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; };
 		300000000000000000000003 /* TypesetQuickLook.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 300000000000000000000201 /* TypesetQuickLook.appex */; platformFilters = (macos, ); settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		500000000000000000000003 /* TypesetSpotlight.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 500000000000000000000201 /* TypesetSpotlight.appex */; platformFilters = (macos, ); settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		400000000000000000000003 /* TypesetThumbnail.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 400000000000000000000201 /* TypesetThumbnail.appex */; platformFilters = (macos, ); settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -103,12 +117,40 @@
 			remoteGlobalIDString = 100000000000000000000801;
 			remoteInfo = TypesetCore;
 		};
+		500000000000000000000301 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 100000000000000000000900 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 100000000000000000000801;
+			remoteInfo = TypesetCore;
+		};
+		400000000000000000000301 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 100000000000000000000900 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 100000000000000000000801;
+			remoteInfo = TypesetCore;
+		};
 		300000000000000000000302 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 100000000000000000000900 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 300000000000000000000801;
 			remoteInfo = TypesetQuickLook;
+		};
+		500000000000000000000302 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 100000000000000000000900 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 500000000000000000000801;
+			remoteInfo = TypesetSpotlight;
+		};
+		400000000000000000000302 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 100000000000000000000900 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 400000000000000000000801;
+			remoteInfo = TypesetThumbnail;
 		};
 		8FF558822FE38487001E1051 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -138,6 +180,8 @@
 			dstSubfolderSpec = 13;
 			files = (
 				300000000000000000000003 /* TypesetQuickLook.appex in Embed Foundation Extensions */,
+				500000000000000000000003 /* TypesetSpotlight.appex in Embed Foundation Extensions */,
+				400000000000000000000003 /* TypesetThumbnail.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -167,6 +211,7 @@
 		200000000000000000000002 /* TypstPackageLibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstPackageLibraryTests.swift; sourceTree = "<group>"; };
 		200000000000000000000003 /* PackagesSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackagesSettingsView.swift; sourceTree = "<group>"; };
 		200000000000000000000004 /* Resources/TypstPackages */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/TypstPackages; sourceTree = SOURCE_ROOT; };
+		600000000000000000000001 /* Resources/Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Resources/Localizable.xcstrings; sourceTree = SOURCE_ROOT; };
 		200000000000000000000005 /* Resources/Acknowledgements/TypstPackages-NOTICE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Resources/Acknowledgements/TypstPackages-NOTICE.txt"; sourceTree = SOURCE_ROOT; };
 		200000000000000000000006 /* Resources/Acknowledgements/GPL-3.0.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Resources/Acknowledgements/GPL-3.0.txt"; sourceTree = SOURCE_ROOT; };
 		200000000000000000000007 /* Resources/Acknowledgements/EPL-2.0.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Resources/Acknowledgements/EPL-2.0.txt"; sourceTree = SOURCE_ROOT; };
@@ -206,6 +251,13 @@
 		100000000000000000000C04 /* WorkspacePreviews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspacePreviews.swift; sourceTree = "<group>"; };
 		100000000000000000000C05 /* DiagnosticLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticLog.swift; sourceTree = "<group>"; };
 		100000000000000000000C06 /* WorkspaceSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSearch.swift; sourceTree = "<group>"; };
+		300000000000000000000B0E /* Motion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Motion.swift; sourceTree = "<group>"; };
+		300000000000000000000B0C /* ErrorExplainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorExplainer.swift; sourceTree = "<group>"; };
+		300000000000000000000B0A /* MenuBarExtraScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarExtraScene.swift; sourceTree = "<group>"; };
+		300000000000000000000B08 /* SettingsSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsSync.swift; sourceTree = "<group>"; };
+		300000000000000000000B06 /* SystemTextSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemTextSupport.swift; sourceTree = "<group>"; };
+		300000000000000000000B04 /* DocumentIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentIntents.swift; sourceTree = "<group>"; };
+		300000000000000000000B02 /* DocumentOutput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentOutput.swift; sourceTree = "<group>"; };
 		100000000000000000000C07 /* FileSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileSidebar.swift; sourceTree = "<group>"; };
 		100000000000000000000C08 /* FileTreeDragDrop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTreeDragDrop.swift; sourceTree = "<group>"; };
 		100000000000000000000C09 /* FileTreeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTreeModel.swift; sourceTree = "<group>"; };
@@ -215,8 +267,14 @@
 		100000000000000000000E03 /* TypstSyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstSyntaxHighlighter.swift; sourceTree = "<group>"; };
 		100000000000000000000E90 /* EditorTextGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextGeometry.swift; sourceTree = "<group>"; };
 		300000000000000000000101 /* PreviewViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewViewController.swift; sourceTree = "<group>"; };
+		500000000000000000000101 /* ImportExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportExtension.swift; sourceTree = "<group>"; };
+		400000000000000000000101 /* ThumbnailProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThumbnailProvider.swift; sourceTree = "<group>"; };
 		300000000000000000000102 /* TypesetQuickLook-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "TypesetQuickLook-Info.plist"; sourceTree = "<group>"; };
+		500000000000000000000102 /* TypesetSpotlight-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "TypesetSpotlight-Info.plist"; sourceTree = "<group>"; };
+		400000000000000000000102 /* TypesetThumbnail-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "TypesetThumbnail-Info.plist"; sourceTree = "<group>"; };
 		300000000000000000000201 /* TypesetQuickLook.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TypesetQuickLook.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		500000000000000000000201 /* TypesetSpotlight.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TypesetSpotlight.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		400000000000000000000201 /* TypesetThumbnail.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TypesetThumbnail.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -252,6 +310,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		500000000000000000000501 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				500000000000000000000002 /* TypesetCore.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		400000000000000000000501 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				400000000000000000000002 /* TypesetCore.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -273,6 +347,8 @@
 				100000000000000000000603 /* TypesetCore */,
 				100000000000000000000604 /* TypesetApp */,
 				300000000000000000000601 /* TypesetQuickLook */,
+				500000000000000000000601 /* TypesetSpotlight */,
+				400000000000000000000601 /* TypesetThumbnail */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -310,6 +386,13 @@
 				100000000000000000000C04 /* WorkspacePreviews.swift */,
 				100000000000000000000C05 /* DiagnosticLog.swift */,
 				100000000000000000000C06 /* WorkspaceSearch.swift */,
+				300000000000000000000B0E /* Motion.swift */,
+				300000000000000000000B0C /* ErrorExplainer.swift */,
+				300000000000000000000B0A /* MenuBarExtraScene.swift */,
+				300000000000000000000B08 /* SettingsSync.swift */,
+				300000000000000000000B06 /* SystemTextSupport.swift */,
+				300000000000000000000B04 /* DocumentIntents.swift */,
+				300000000000000000000B02 /* DocumentOutput.swift */,
 				200000000000000000000003 /* PackagesSettingsView.swift */,
 				100000000000000000000C07 /* FileSidebar.swift */,
 				100000000000000000000C08 /* FileTreeDragDrop.swift */,
@@ -347,6 +430,8 @@
 			children = (
 				100000000000000000000109 /* Typeset-Info.plist */,
 				300000000000000000000102 /* TypesetQuickLook-Info.plist */,
+				500000000000000000000102 /* TypesetSpotlight-Info.plist */,
+				400000000000000000000102 /* TypesetThumbnail-Info.plist */,
 			);
 			path = Config;
 			sourceTree = "<group>";
@@ -357,6 +442,8 @@
 				100000000000000000000201 /* TypesetCore.framework */,
 				100000000000000000000202 /* Typeset.app */,
 				300000000000000000000201 /* TypesetQuickLook.appex */,
+				500000000000000000000201 /* TypesetSpotlight.appex */,
+				400000000000000000000201 /* TypesetThumbnail.appex */,
 				100000000000000000000203 /* TypesetCoreTests.xctest */,
 			);
 			name = Products;
@@ -391,6 +478,7 @@
 				100000000000000000000135 /* Resources/Fonts/NotoCJK */,
 				200000000000000000000004 /* Resources/TypstPackages */,
 				200000000000000000000005 /* Resources/Acknowledgements/TypstPackages-NOTICE.txt */,
+				600000000000000000000001 /* Resources/Localizable.xcstrings */,
 				200000000000000000000006 /* Resources/Acknowledgements/GPL-3.0.txt */,
 				200000000000000000000007 /* Resources/Acknowledgements/EPL-2.0.txt */,
 			);
@@ -403,6 +491,22 @@
 				300000000000000000000101 /* PreviewViewController.swift */,
 			);
 			path = TypesetQuickLook;
+			sourceTree = "<group>";
+		};
+		500000000000000000000601 /* TypesetSpotlight */ = {
+			isa = PBXGroup;
+			children = (
+				500000000000000000000101 /* ImportExtension.swift */,
+			);
+			path = TypesetSpotlight;
+			sourceTree = "<group>";
+		};
+		400000000000000000000601 /* TypesetThumbnail */ = {
+			isa = PBXGroup;
+			children = (
+				400000000000000000000101 /* ThumbnailProvider.swift */,
+			);
+			path = TypesetThumbnail;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -441,6 +545,8 @@
 			dependencies = (
 				100000000000000000000303 /* PBXTargetDependency */,
 				300000000000000000000304 /* PBXTargetDependency */,
+				500000000000000000000304 /* PBXTargetDependency */,
+				400000000000000000000304 /* PBXTargetDependency */,
 			);
 			name = Typeset;
 			productName = Typeset;
@@ -482,6 +588,40 @@
 			productReference = 300000000000000000000201 /* TypesetQuickLook.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		500000000000000000000801 /* TypesetSpotlight */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 500000000000000000000A01 /* Build configuration list for PBXNativeTarget "TypesetSpotlight" */;
+			buildPhases = (
+				500000000000000000000701 /* Sources */,
+				500000000000000000000501 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				500000000000000000000303 /* PBXTargetDependency */,
+			);
+			name = TypesetSpotlight;
+			productName = TypesetSpotlight;
+			productReference = 500000000000000000000201 /* TypesetSpotlight.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		400000000000000000000801 /* TypesetThumbnail */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 400000000000000000000A01 /* Build configuration list for PBXNativeTarget "TypesetThumbnail" */;
+			buildPhases = (
+				400000000000000000000701 /* Sources */,
+				400000000000000000000501 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				400000000000000000000303 /* PBXTargetDependency */,
+			);
+			name = TypesetThumbnail;
+			productName = TypesetThumbnail;
+			productReference = 400000000000000000000201 /* TypesetThumbnail.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -505,6 +645,12 @@
 					300000000000000000000801 = {
 						CreatedOnToolsVersion = 16.4;
 					};
+					500000000000000000000801 = {
+						CreatedOnToolsVersion = 16.4;
+					};
+					400000000000000000000801 = {
+						CreatedOnToolsVersion = 16.4;
+					};
 				};
 			};
 			buildConfigurationList = 100000000000000000000A00 /* Build configuration list for PBXProject "Typeset" */;
@@ -522,6 +668,8 @@
 			targets = (
 				100000000000000000000802 /* Typeset */,
 				300000000000000000000801 /* TypesetQuickLook */,
+				500000000000000000000801 /* TypesetSpotlight */,
+				400000000000000000000801 /* TypesetThumbnail */,
 				100000000000000000000801 /* TypesetCore */,
 				100000000000000000000803 /* TypesetCoreTests */,
 			);
@@ -561,6 +709,7 @@
 				10000000000000000000002A /* Resources/Acknowledgements/FiraCode-LICENSE.txt in Resources */,
 				100000000000000000000037 /* Resources/Acknowledgements/NotoSansCJK-LICENSE.txt in Resources */,
 				200000000000000000000015 /* Resources/Acknowledgements/TypstPackages-NOTICE.txt in Resources */,
+				600000000000000000000002 /* Resources/Localizable.xcstrings in Resources */,
 				200000000000000000000016 /* Resources/Acknowledgements/GPL-3.0.txt in Resources */,
 				200000000000000000000017 /* Resources/Acknowledgements/EPL-2.0.txt in Resources */,
 				100000000000000000000020 /* Resources/Fonts/FiraCode/FiraCode-Light.ttf in Resources */,
@@ -636,6 +785,13 @@
 				100000000000000000000D04 /* WorkspacePreviews.swift in Sources */,
 				100000000000000000000D05 /* DiagnosticLog.swift in Sources */,
 				100000000000000000000D06 /* WorkspaceSearch.swift in Sources */,
+				300000000000000000000B0F /* Motion.swift in Sources */,
+				300000000000000000000B0D /* ErrorExplainer.swift in Sources */,
+				300000000000000000000B0B /* MenuBarExtraScene.swift in Sources */,
+				300000000000000000000B09 /* SettingsSync.swift in Sources */,
+				300000000000000000000B07 /* SystemTextSupport.swift in Sources */,
+				300000000000000000000B05 /* DocumentIntents.swift in Sources */,
+				300000000000000000000B03 /* DocumentOutput.swift in Sources */,
 				200000000000000000000013 /* PackagesSettingsView.swift in Sources */,
 				100000000000000000000D07 /* FileSidebar.swift in Sources */,
 				100000000000000000000D08 /* FileTreeDragDrop.swift in Sources */,
@@ -667,6 +823,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		500000000000000000000701 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				500000000000000000000001 /* ImportExtension.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		400000000000000000000701 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				400000000000000000000001 /* ThumbnailProvider.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -685,6 +857,16 @@
 			target = 100000000000000000000801 /* TypesetCore */;
 			targetProxy = 300000000000000000000301 /* PBXContainerItemProxy */;
 		};
+		500000000000000000000303 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 100000000000000000000801 /* TypesetCore */;
+			targetProxy = 500000000000000000000301 /* PBXContainerItemProxy */;
+		};
+		400000000000000000000303 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 100000000000000000000801 /* TypesetCore */;
+			targetProxy = 400000000000000000000301 /* PBXContainerItemProxy */;
+		};
 		300000000000000000000304 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			platformFilters = (
@@ -692,6 +874,22 @@
 			);
 			target = 300000000000000000000801 /* TypesetQuickLook */;
 			targetProxy = 300000000000000000000302 /* PBXContainerItemProxy */;
+		};
+		500000000000000000000304 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			platformFilters = (
+				macos,
+			);
+			target = 500000000000000000000801 /* TypesetSpotlight */;
+			targetProxy = 500000000000000000000302 /* PBXContainerItemProxy */;
+		};
+		400000000000000000000304 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			platformFilters = (
+				macos,
+			);
+			target = 400000000000000000000801 /* TypesetThumbnail */;
+			targetProxy = 400000000000000000000302 /* PBXContainerItemProxy */;
 		};
 		8FF558832FE38487001E1051 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -895,6 +1093,7 @@
 			buildSettings = {
 				"ARCHS[sdk=macosx*]" = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphone*]" = "Config/Typeset-iOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/Typeset.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
@@ -931,6 +1130,7 @@
 			buildSettings = {
 				"ARCHS[sdk=macosx*]" = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphone*]" = "Config/Typeset-iOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/Typeset.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
@@ -1041,6 +1241,72 @@
 			};
 			name = Debug;
 		};
+		500000000000000000000B00 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Config/TypesetSpotlight.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 4;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				EXCLUDED_ARCHS = x86_64;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/TypesetSpotlight-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.3;
+				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.app.typeset.spotlight;
+				PRODUCT_NAME = TypesetSpotlight;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = 6;
+			};
+			name = Debug;
+		};
+		400000000000000000000B00 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Config/TypesetThumbnail.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 4;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				EXCLUDED_ARCHS = x86_64;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/TypesetThumbnail-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.3;
+				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.app.typeset.thumbnail;
+				PRODUCT_NAME = TypesetThumbnail;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = 6;
+			};
+			name = Debug;
+		};
 		300000000000000000000B01 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1063,6 +1329,72 @@
 				MARKETING_VERSION = 1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.app.typeset.quicklook;
 				PRODUCT_NAME = TypesetQuickLook;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = 6;
+			};
+			name = Release;
+		};
+		500000000000000000000B01 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Config/TypesetSpotlight.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 4;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				EXCLUDED_ARCHS = x86_64;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/TypesetSpotlight-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.3;
+				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.app.typeset.spotlight;
+				PRODUCT_NAME = TypesetSpotlight;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = 6;
+			};
+			name = Release;
+		};
+		400000000000000000000B01 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Config/TypesetThumbnail.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 4;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				EXCLUDED_ARCHS = x86_64;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/TypesetThumbnail-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.3;
+				PRODUCT_BUNDLE_IDENTIFIER = com.twarge.app.typeset.thumbnail;
+				PRODUCT_NAME = TypesetThumbnail;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1118,6 +1450,24 @@
 			buildConfigurations = (
 				300000000000000000000B00 /* Debug */,
 				300000000000000000000B01 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		500000000000000000000A01 /* Build configuration list for PBXNativeTarget "TypesetSpotlight" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				500000000000000000000B00 /* Debug */,
+				500000000000000000000B01 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		400000000000000000000A01 /* Build configuration list for PBXNativeTarget "TypesetThumbnail" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				400000000000000000000B00 /* Debug */,
+				400000000000000000000B01 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

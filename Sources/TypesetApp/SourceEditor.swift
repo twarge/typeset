@@ -251,7 +251,7 @@ struct SourceEditor: View {
             ring
                 .stroke(.tint.opacity(isPackageDropTargeted ? 0.75 : 0), lineWidth: 2)
                 .background(.tint.opacity(isPackageDropTargeted ? 0.08 : 0), in: ring)
-                .animation(.snappy(duration: 0.18), value: isPackageDropTargeted)
+                .accessibleAnimation(.snappy(duration: 0.18), value: isPackageDropTargeted)
                 .allowsHitTesting(false)
         }
         .overlay(alignment: .topLeading) {
@@ -1124,7 +1124,7 @@ private struct SourceEditorLanguageOverlay: View {
             VStack(alignment: .leading, spacing: 5) {
                 if let language {
                     Text(language.uppercased())
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(.caption2.weight(.semibold))
                         .foregroundStyle(.tertiary)
                 }
                 Text(text)
@@ -1257,7 +1257,7 @@ private struct SourceEditorLanguageOverlay: View {
     /// "Positional", "Settable", and "Element" markers.
     private func specificationChip(_ label: String) -> some View {
         Text(label.capitalized)
-            .font(.system(size: 9, weight: .medium))
+            .font(.caption2.weight(.medium))
             .italic()
             .padding(.horizontal, 5)
             .padding(.vertical, 1.5)
@@ -1269,7 +1269,7 @@ private struct SourceEditorLanguageOverlay: View {
     private func typePill(_ type: String) -> some View {
         let color = Self.typePillColor(type)
         return Text(type)
-            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .font(.system(.caption2, design: .monospaced).weight(.medium))
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(color.opacity(0.16), in: Capsule())

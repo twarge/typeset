@@ -27,6 +27,8 @@
 				<string>com.twarge.typeset.package</string>
 				<string>com.twarge.typset.package</string>
 			</array>
+			<key>NSUbiquitousDocumentUserActivityType</key>
+			<string>$(PRODUCT_BUNDLE_IDENTIFIER).editing</string>
 		</dict>
 		<dict>
 			<key>CFBundleTypeIconFile</key>
@@ -46,6 +48,8 @@
 			<array>
 				<string>com.typst.source</string>
 			</array>
+			<key>NSUbiquitousDocumentUserActivityType</key>
+			<string>$(PRODUCT_BUNDLE_IDENTIFIER).editing</string>
 		</dict>
 	</array>
 	<key>CFBundleExecutable</key>
@@ -66,6 +70,22 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<key>NSUbiquitousContainers</key>
+	<dict>
+		<key>iCloud.com.twarge.app.typeset</key>
+		<dict>
+			<key>NSUbiquitousContainerIsDocumentScopePublic</key>
+			<true/>
+			<key>NSUbiquitousContainerName</key>
+			<string>Typeset</string>
+			<key>NSUbiquitousContainerSupportedFolderLevels</key>
+			<string>Any</string>
+		</dict>
+	</dict>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER).editing</string>
+	</array>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright (c) 2026 Twarge LLC.</string>
 	<key>NSServices</key>

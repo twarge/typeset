@@ -32,6 +32,17 @@ Typeset hands the compiler an app-owned local package directory and package cach
 
 The packages the sample document imports, and everything they import in turn, ship in `Resources/TypstPackages` exactly as published and are copied into the cache before the first compile, so a new document renders offline. `Scripts/fetch-bundled-packages.sh` refreshes them; run it after changing the sample document's imports. Each package keeps its own license (CeTZ is LGPL-3.0-or-later), listed with source links in `Resources/Acknowledgements/TypstPackages-NOTICE.txt`. Settings > Typst Packages lists every installed package with its license and sources, and can replace one with a user's modified copy by placing it in the local package directory, which the compiler reads first.
 
+## System Integration
+
+- **Extensions (macOS):** `TypesetQuickLook` previews documents, `TypesetThumbnail` draws the first page as the Finder icon, and `TypesetSpotlight` gives Spotlight the text inside a package.
+- **Shortcuts:** `Intents.swift` and `DocumentIntents.swift` offer Compile Typst, Export Typst File as PDF and Create Typst File, plus a Focus filter that turns on distraction-free mode.
+- **Printing and sharing:** File > Print and, on macOS, File > Share PDF compile to a temporary PDF first (`DocumentOutput.swift`).
+- **Writing Tools:** limited to the prose ranges the language service reports, so markup is never rewritten (`SystemTextSupport.swift`).
+- **Settings sync:** `SettingsSync.swift` mirrors a fixed list of preferences through iCloud's key-value store. This needs the `ubiquity-kvstore-identifier` entitlement, so a signed build needs the iCloud capability on its App ID.
+- **iCloud Drive folder:** the app declares a public container (`iCloud.com.twarge.app.typeset`, shown as "Typeset" in iCloud Drive) in `NSUbiquitousContainers` and its entitlements. Nothing in the code depends on it; documents can still live anywhere. The folder appears only after a build with a higher `CFBundleVersion` has run.
+- **Diagnostics:** MetricKit crash and hang reports are kept as JSON under `Application Support/Typeset/Diagnostics`.
+- **Localisation:** user-facing strings are collected in `Resources/Localizable.xcstrings`. Xcode updates it on each build; English is the only language so far.
+
 ## Preview Architecture
 
 Tinymist obtains its editor preview through a web preview surface and a data-plane bridge that maps rendered elements back to Typst source spans. Typeset follows that same high-level shape:

@@ -67,6 +67,9 @@ struct PlatformTextView: NSViewRepresentable {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isContinuousSpellCheckingEnabled = false
         textView.isGrammarCheckingEnabled = false
+        // Proofreading and rewriting in place, but none of the panels that
+        // would take over the editor; the delegate keeps it to prose.
+        textView.writingToolsBehavior = .limited
         textView.isAutomaticSpellingCorrectionEnabled = spellCheckingEnabled
         textView.enabledTextCheckingTypes = spellCheckingEnabled ? Self.nativeTextCheckingTypes : 0
         textView.font = context.coordinator.font()
@@ -757,6 +760,14 @@ struct PlatformTextView: NSViewRepresentable {
             sendSelectionChange(range)
             updateLanguageOverlayAnchor(in: textView, selectedRange: range)
             (textView as? PackagePathTextView)?.diagnosticCaretDidChange()
+        }
+
+        func textView(_ textView: NSTextView, writingToolsIgnoredRangesInEnclosingRange enclosingRange: NSRange) -> [NSValue] {
+            WritingToolsRanges.ignored(
+                in: enclosingRange,
+                prose: proseRanges.map(\.range),
+                proseIsCurrent: proseRangesAreCurrent
+            )
         }
 
         func textView(

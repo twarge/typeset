@@ -332,7 +332,7 @@ struct WorkspaceSearchView: View {
 
             HStack(spacing: searchOptionSpacing) {
                 Button {
-                    withAnimation(.snappy(duration: 0.15)) { isReplaceVisible.toggle() }
+                    withAccessibleAnimation(.snappy(duration: 0.15)) { isReplaceVisible.toggle() }
                 } label: {
                     Image(systemName: isReplaceVisible ? "chevron.down" : "chevron.right")
                 }
@@ -353,7 +353,7 @@ struct WorkspaceSearchView: View {
                 }
 
                 Button {
-                    withAnimation(.snappy(duration: 0.15)) { areFileFiltersVisible.toggle() }
+                    withAccessibleAnimation(.snappy(duration: 0.15)) { areFileFiltersVisible.toggle() }
                 } label: {
                     Image(systemName: "line.3.horizontal.decrease.circle")
                 }

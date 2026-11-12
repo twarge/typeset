@@ -1,0 +1,690 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%.2fs" : {
+
+    },
+    "%@" : {
+
+    },
+    "%@ %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ %2$@"
+          }
+        }
+      }
+    },
+    "%@%@%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@%2$@%3$@"
+          }
+        }
+      }
+    },
+    "%lld" : {
+
+    },
+    "%lld pt" : {
+
+    },
+    "%lld:%lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld:%2$lld"
+          }
+        }
+      }
+    },
+    "(" : {
+
+    },
+    ")" : {
+
+    },
+    "," : {
+
+    },
+    "= %@" : {
+
+    },
+    "@%@" : {
+
+    },
+    "About Typeset" : {
+
+    },
+    "Add Photo" : {
+
+    },
+    "Add script failed" : {
+
+    },
+    "All" : {
+
+    },
+    "Application" : {
+
+    },
+    "Auto" : {
+
+    },
+    "Cancel" : {
+
+    },
+    "Clear Filter" : {
+
+    },
+    "Clear Search History" : {
+
+    },
+    "Close" : {
+
+    },
+    "Close Quick Actions" : {
+
+    },
+    "Close References" : {
+
+    },
+    "Collapse Folder" : {
+
+    },
+    "Comment" : {
+
+    },
+    "Compilation messages will appear here." : {
+
+    },
+    "Compile ${source} into a PDF named ${name}" : {
+
+    },
+    "Compile Typst" : {
+
+    },
+    "Compiles Typst source text into a PDF with Typeset's embedded Typst compiler." : {
+
+    },
+    "Compiles a Typst source file or a Typeset package into a PDF. A single source file is compiled by itself, without the files beside it." : {
+
+    },
+    "Complete" : {
+
+    },
+    "Couldn’t Change the Package" : {
+
+    },
+    "Create Document" : {
+
+    },
+    "Create Typst File" : {
+
+    },
+    "Create a Typst file named ${name} from ${source}" : {
+
+    },
+    "Creates a Typst source file from text, ready to save or to open in Typeset." : {
+
+    },
+    "Delete" : {
+
+    },
+    "Delete failed" : {
+
+    },
+    "Directory load failed" : {
+
+    },
+    "Disable Auto Preview" : {
+
+    },
+    "Distraction-Free Mode" : {
+
+    },
+    "Distraction-free mode" : {
+
+    },
+    "Done" : {
+
+    },
+    "Duplicate" : {
+
+    },
+    "Duplicate failed" : {
+
+    },
+    "Editor" : {
+
+    },
+    "Editor Font Size" : {
+
+    },
+    "Editor state update failed" : {
+
+    },
+    "Enable Auto Preview" : {
+
+    },
+    "Errors in the paragraph you're editing keep their line tint, but the message popup waits until the caret leaves the paragraph." : {
+
+    },
+    "Expand Folder" : {
+
+    },
+    "Expand Selection" : {
+
+    },
+    "Explain" : {
+
+    },
+    "Export" : {
+
+    },
+    "Export ${file} as a PDF" : {
+
+    },
+    "Export Files…" : {
+
+    },
+    "Export PDF" : {
+
+    },
+    "Export PDF on Close" : {
+
+    },
+    "Export PDF to Default Location" : {
+
+    },
+    "Export PDF…" : {
+
+    },
+    "Export Typst File as PDF" : {
+
+    },
+    "Export as PDF" : {
+
+    },
+    "Figure Insert Template" : {
+
+    },
+    "File" : {
+
+    },
+    "File creation failed" : {
+
+    },
+    "Files" : {
+
+    },
+    "Files to exclude" : {
+
+    },
+    "Files to include" : {
+
+    },
+    "Filter Files" : {
+
+    },
+    "Filter references" : {
+
+    },
+    "Find" : {
+
+    },
+    "Find Next" : {
+
+    },
+    "Find Previous" : {
+
+    },
+    "Find References" : {
+
+    },
+    "Find and Replace…" : {
+
+    },
+    "Find in Files…" : {
+
+    },
+    "Find in files" : {
+
+    },
+    "Folder Access" : {
+
+    },
+    "Folder access needed" : {
+
+    },
+    "Folder creation failed" : {
+
+    },
+    "Folder left in place" : {
+
+    },
+    "Folders you've granted Typeset access to outside its sandbox." : {
+
+    },
+    "Format" : {
+
+    },
+    "Format Document" : {
+
+    },
+    "Format Selection" : {
+
+    },
+    "Go to Definition" : {
+
+    },
+    "Hide the toolbar and title bar until you move the pointer to the top of the window." : {
+
+    },
+    "Hides Typeset's window chrome while this Focus is on." : {
+
+    },
+    "Hold Error Popups While Editing" : {
+
+    },
+    "How long a freshly compiled page renders off-screen before it replaces the visible preview. Newer compiles restart the wait, so the preview updates when you pause typing." : {
+
+    },
+    "Ignore Typst Commands and Arguments" : {
+
+    },
+    "Image Insert Template" : {
+
+    },
+    "Import" : {
+
+    },
+    "Import Files" : {
+
+    },
+    "Import failed" : {
+
+    },
+    "Include Sample Content" : {
+
+    },
+    "Insert" : {
+
+    },
+    "Insert Figure" : {
+
+    },
+    "Insert Python Script" : {
+
+    },
+    "Insert Table" : {
+
+    },
+    "Inserted with ⌥⌘F. Use {cursor} to place the caret." : {
+
+    },
+    "Inserted with ⌥⌘T. Use {cursor} to place the caret." : {
+
+    },
+    "Keep My Version" : {
+
+    },
+    "Kept the versions edited here" : {
+
+    },
+    "Language service failed" : {
+
+    },
+    "License" : {
+
+    },
+    "Logs" : {
+
+    },
+    "Move failed" : {
+
+    },
+    "Name" : {
+
+    },
+    "Navigate" : {
+
+    },
+    "New Document" : {
+
+    },
+    "New Documents" : {
+
+    },
+    "New File" : {
+
+    },
+    "New Folder" : {
+
+    },
+    "New Window" : {
+
+    },
+    "New documents start with a demonstration of Typst. Turn off Include Sample Content in Settings to start empty." : {
+
+    },
+    "Next" : {
+
+    },
+    "Next Match" : {
+
+    },
+    "No File Selected" : {
+
+    },
+    "No Logs" : {
+
+    },
+    "No Packages" : {
+
+    },
+    "No explanation is available for this message." : {
+
+    },
+    "No folders granted." : {
+
+    },
+    "OK" : {
+
+    },
+    "Off" : {
+
+    },
+    "On" : {
+
+    },
+    "Open…" : {
+
+    },
+    "PDF export failed" : {
+
+    },
+    "PDF exported" : {
+
+    },
+    "Package" : {
+
+    },
+    "Package Removed" : {
+
+    },
+    "Packages appear here once a document imports them." : {
+
+    },
+    "Pane Divider" : {
+
+    },
+    "Paste failed" : {
+
+    },
+    "Photo import failed" : {
+
+    },
+    "Prefer a Blank Page?" : {
+
+    },
+    "Preview Buffer Delay" : {
+
+    },
+    "Preview compilation failed" : {
+
+    },
+    "Previous" : {
+
+    },
+    "Previous Match" : {
+
+    },
+    "Printing failed" : {
+
+    },
+    "Print…" : {
+
+    },
+    "Quick Actions" : {
+
+    },
+    "Quick Actions…" : {
+
+    },
+    "Quit Typeset" : {
+
+    },
+    "Recent Searches" : {
+
+    },
+    "Recompile Delay" : {
+
+    },
+    "References" : {
+
+    },
+    "Removal skipped" : {
+
+    },
+    "Removed file left in place" : {
+
+    },
+    "Rename" : {
+
+    },
+    "Rename Symbol" : {
+
+    },
+    "Rename Symbol…" : {
+
+    },
+    "Rename canceled" : {
+
+    },
+    "Rename failed" : {
+
+    },
+    "Rename unavailable" : {
+
+    },
+    "Replace" : {
+
+    },
+    "Replace Again with Folder…" : {
+
+    },
+    "Replace every match" : {
+
+    },
+    "Replace failed" : {
+
+    },
+    "Replace with Folder…" : {
+
+    },
+    "Reveal" : {
+
+    },
+    "Revert to Disk" : {
+
+    },
+    "Revert to Original" : {
+
+    },
+    "Revoke access to %@" : {
+
+    },
+    "Save failed" : {
+
+    },
+    "Selection failed" : {
+
+    },
+    "Set Typeset Appearance" : {
+
+    },
+    "Set as Compile Target" : {
+
+    },
+    "Settings" : {
+
+    },
+    "Settings…" : {
+
+    },
+    "Share PDF…" : {
+
+    },
+    "Sharing failed" : {
+
+    },
+    "Show Code" : {
+
+    },
+    "Show Files in Finder" : {
+
+    },
+    "Show Line Numbers" : {
+
+    },
+    "Show Logs" : {
+
+    },
+    "Show Preview" : {
+
+    },
+    "Show Source" : {
+
+    },
+    "Show Source and Preview" : {
+
+    },
+    "Show Typeset in the Menu Bar" : {
+
+    },
+    "Shrink Selection" : {
+
+    },
+    "Sidebar View" : {
+
+    },
+    "Source" : {
+
+    },
+    "Source update failed" : {
+
+    },
+    "Spelling and Autocorrect in Prose" : {
+
+    },
+    "Split Layout" : {
+
+    },
+    "Start new documents with a demonstration of Typst features instead of a blank file." : {
+
+    },
+    "Status" : {
+
+    },
+    "Symbol Name" : {
+
+    },
+    "Table Insert Template" : {
+
+    },
+    "Tall Window Threshold" : {
+
+    },
+    "Target selection failed" : {
+
+    },
+    "The PDF could not be displayed." : {
+
+    },
+    "The font could not be read." : {
+
+    },
+    "The image could not be displayed." : {
+
+    },
+    "Theme" : {
+
+    },
+    "This file has unsaved changes here and was also modified by another program. Keep your version, or replace it with the version on disk?" : {
+
+    },
+    "To use a modified version, choose a folder holding the package with the same name and version in its typst.toml. Typeset copies it and uses it in place of the original, which stays available to revert to." : {
+
+    },
+    "Toggle Comment" : {
+
+    },
+    "Toggle Replace" : {
+
+    },
+    "Toggle Sidebar" : {
+
+    },
+    "Typeset" : {
+
+    },
+    "Typeset includes the packages its sample document uses and downloads others from Typst Universe when a document imports them. Each package is its author's work under its own license. Choose one to read its license, get its source, or replace it with your own version." : {
+
+    },
+    "Typeset is made by Twarge LLC." : {
+
+    },
+    "Typst %@" : {
+
+    },
+    "Typst Packages" : {
+
+    },
+    "Typst Packages…" : {
+
+    },
+    "Update References When Renaming or Moving Files" : {
+
+    },
+    "Use Selection for Find" : {
+
+    },
+    "Use {path} for the dragged file path." : {
+
+    },
+    "When Auto Preview is on, how long to wait after each compile before automatically recompiling again." : {
+
+    },
+    "Write skipped" : {
+
+    },
+    "Written by an on-device model. It can be wrong." : {
+
+    },
+    "Your Version" : {
+
+    },
+    "hello@twarge.com" : {
+
+    },
+    "typst.app documentation" : {
+
+    },
+    "“%@” was changed on disk" : {
+
+    },
+    "•" : {
+
+    },
+    "→" : {
+
+    }
+  },
+  "version" : "1.0"
+}

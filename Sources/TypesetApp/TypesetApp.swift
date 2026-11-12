@@ -35,6 +35,8 @@ struct TypesetApp: App {
         // rest of the compiler's one-time setup) while the user waits on it.
         TypstRuntime.warmUp()
         Self.removeStaleTemporaryItems()
+        SettingsSync.shared.start()
+        DiagnosticReports.shared.start()
     }
 
     /// Drag exports, dropped files and iOS share exports are staged in the
@@ -116,10 +118,13 @@ struct TypesetCommandSet: Equatable {
     var exportPDF: () -> Void
     var exportPDFToDefaultLocation: () -> Void
     var canExportPDFToDefaultLocation: Bool
+    var printDocument: () -> Void
+    var sharePDF: () -> Void
     var newFolder: () -> Void
     var toggleLogs: () -> Void
     var requestCompletion: () -> Void
     var showFindReplace: () -> Void
+    var useSelectionForFind: () -> Void
     var showFindInFiles: () -> Void
     var findNext: () -> Void
     var findPrevious: () -> Void
@@ -209,6 +214,22 @@ struct TypesetCommands: Commands {
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(commands == nil || commands?.canExportPDFToDefaultLocation != true)
+
+            #if os(macOS)
+            // iOS shares from the toolbar's Share button, which is its export.
+            Button("Share PDF…") {
+                commands?.sharePDF()
+            }
+            .disabled(commands == nil)
+            #endif
+        }
+
+        CommandGroup(replacing: .printItem) {
+            Button("Print…") {
+                commands?.printDocument()
+            }
+            .keyboardShortcut("p", modifiers: .command)
+            .disabled(commands == nil)
         }
 
         CommandGroup(after: .pasteboard) {
@@ -236,6 +257,12 @@ struct TypesetCommands: Commands {
                 commands?.findPrevious()
             }
             .keyboardShortcut("g", modifiers: [.command, .shift])
+            .disabled(commands == nil)
+
+            Button("Use Selection for Find") {
+                commands?.useSelectionForFind()
+            }
+            .keyboardShortcut("e", modifiers: .command)
             .disabled(commands == nil)
 
             Button("Replace") {

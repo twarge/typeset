@@ -125,15 +125,24 @@ struct DiagnosticLogRow: View {
     var onSelectDiagnostic: (TypstSourceDiagnostic) -> Void = { _ in }
 
     var body: some View {
-        Button {
-            if let diagnostic = entry.diagnostic {
-                onSelectDiagnostic(diagnostic)
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                if let diagnostic = entry.diagnostic {
+                    onSelectDiagnostic(diagnostic)
+                }
+            } label: {
+                content
             }
-        } label: {
-            content
+            .buttonStyle(.plain)
+            .disabled(entry.diagnostic == nil)
+
+            // Outside the row's own button, which jumps to the source.
+            if entry.level == .error || entry.level == .warning, ErrorExplainer.isAvailable {
+                DiagnosticExplanationView(entry: entry)
+                    .id(entry.id)
+                    .padding(.horizontal, 12)
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(entry.diagnostic == nil)
     }
 
     private var content: some View {

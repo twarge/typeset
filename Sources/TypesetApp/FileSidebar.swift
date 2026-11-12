@@ -669,7 +669,7 @@ struct FileSidebar: View {
             .stroke(.tint.opacity(isRootDropTargeted ? 0.55 : 0), lineWidth: 2)
             .background(.tint.opacity(isRootDropTargeted ? 0.06 : 0), in: ring)
             .padding(4)
-            .animation(.snappy(duration: 0.18), value: isRootDropTargeted)
+            .accessibleAnimation(.snappy(duration: 0.18), value: isRootDropTargeted)
             .allowsHitTesting(false)
     }
 
@@ -769,8 +769,8 @@ struct FileTreeRow: View {
                     folderChildren
                 }
             }
-            .animation(.snappy(duration: 0.18), value: isDropTargetedFolder)
-            .animation(.snappy(duration: 0.18), value: expandedFolders.contains(node.path))
+            .accessibleAnimation(.snappy(duration: 0.18), value: isDropTargetedFolder)
+            .accessibleAnimation(.snappy(duration: 0.18), value: expandedFolders.contains(node.path))
             #else
             DisclosureGroup(isExpanded: folderExpansionBinding) {
                 folderChildren
@@ -779,7 +779,7 @@ struct FileTreeRow: View {
             }
             .tag(FileTreeSelection.folder(node.path))
             .listRowBackground(isDropTargetedFolder ? dropTargetRowBackground : nil)
-            .animation(.snappy(duration: 0.18), value: isDropTargetedFolder)
+            .accessibleAnimation(.snappy(duration: 0.18), value: isDropTargetedFolder)
             #endif
         case .file(let file):
             fileRow(for: file)

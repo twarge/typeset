@@ -65,6 +65,9 @@ struct PlatformTextView: UIViewRepresentable {
         textView.smartQuotesType = .no
         textView.smartDashesType = .no
         textView.smartInsertDeleteType = .no
+        // Proofreading and rewriting in place, but none of the panels that
+        // would take over the editor; the delegate keeps it to prose.
+        textView.writingToolsBehavior = .limited
         textView.font = context.coordinator.font()
         textView.delegate = context.coordinator
         textView.textDropDelegate = context.coordinator
@@ -345,6 +348,14 @@ struct PlatformTextView: UIViewRepresentable {
             self.onRenameSymbol = onRenameSymbol
             self.onShowCodeActions = onShowCodeActions
             self.isPackageDropTargeted = isPackageDropTargeted
+        }
+
+        func textView(_ textView: UITextView, writingToolsIgnoredRangesInEnclosingRange enclosingRange: NSRange) -> [NSValue] {
+            WritingToolsRanges.ignored(
+                in: enclosingRange,
+                prose: proseRanges.map(\.range),
+                proseIsCurrent: proseRangesAreCurrent
+            )
         }
 
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText replacement: String) -> Bool {
