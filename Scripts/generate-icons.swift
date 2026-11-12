@@ -7,17 +7,10 @@ import CoreText
 import Foundation
 import ImageIO
 
-enum IconKind {
-    case app
-    case package
-    case source
-}
-
 let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
 let assetRoot = root.appending(path: "Resources/Assets.xcassets")
 let appIconBundle = root.appending(path: "Resources/AppIcon.icon")
 let visionIconStack = assetRoot.appending(path: "AppIcon.solidimagestack")
-let documentIconRoot = root.appending(path: "Resources/DocumentIcons")
 
 let lightCMYOGV: [NSColor] = [
     NSColor(calibratedRed: 0.72, green: 0.96, blue: 1.00, alpha: 1.0),
@@ -74,8 +67,8 @@ func ramp(_ colors: [NSColor]) -> NSGradient {
 
 func gradient() -> NSGradient { ramp(lightCMYOGV) }
 
-/// The same hues, pushed toward full saturation and darkened a little, so the
-/// border reads as a deeper band of the fill rather than a different colour.
+/// The same hue, pushed toward full saturation and, by default, darkened a
+/// little.
 func saturated(_ color: NSColor, by factor: CGFloat = 2.7, darkenedTo brightness: CGFloat = 0.86) -> NSColor {
     guard let rgb = color.usingColorSpace(.deviceRGB) else { return color }
     var hue: CGFloat = 0, saturation: CGFloat = 0, value: CGFloat = 0, alpha: CGFloat = 0
@@ -88,63 +81,10 @@ func saturated(_ color: NSColor, by factor: CGFloat = 2.7, darkenedTo brightness
     )
 }
 
-func saturatedGradient() -> NSGradient { ramp(lightCMYOGV.map { saturated($0) }) }
-
-/// Strokes a rounded rect with the gradient itself: the ring between the edge
-/// and an inset copy, filled from the same rect at the same angle so the ramp
-/// lines up with the fill it surrounds.
-func drawGradientRing(in rect: CGRect, cornerRadius: CGFloat, width: CGFloat) {
-    let ring = NSBezierPath(roundedRect: rect, xRadius: cornerRadius, yRadius: cornerRadius)
-    let innerRadius = max(0, cornerRadius - width)
-    ring.append(NSBezierPath(
-        roundedRect: rect.insetBy(dx: width, dy: width),
-        xRadius: innerRadius,
-        yRadius: innerRadius
-    ))
-    ring.windingRule = .evenOdd
-
-    NSGraphicsContext.saveGraphicsState()
-    ring.addClip()
-    saturatedGradient().draw(in: rect, angle: gradientAngle)
-    NSGraphicsContext.restoreGraphicsState()
-}
-
-func drawText(
-    _ text: String,
-    in rect: CGRect,
-    font: NSFont,
-    color: NSColor = ink,
-    alignment: NSTextAlignment = .left
-) {
-    let paragraph = NSMutableParagraphStyle()
-    paragraph.alignment = alignment
-    let attributes: [NSAttributedString.Key: Any] = [
-        .font: font,
-        .foregroundColor: color,
-        .paragraphStyle: paragraph,
-    ]
-    NSAttributedString(string: text, attributes: attributes).draw(in: rect)
-}
-
-func drawDocumentPage(in page: CGRect, scale: CGFloat, cornerRadius: CGFloat, borderWidth: CGFloat, shadowAlpha: CGFloat = 0.18) {
-    let shadow = NSShadow()
-    shadow.shadowBlurRadius = 36 * scale
-    shadow.shadowOffset = CGSize(width: 0, height: -12 * scale)
-    shadow.shadowColor = NSColor.black.withAlphaComponent(shadowAlpha)
-    shadow.set()
-
-    let body = NSBezierPath(roundedRect: page, xRadius: cornerRadius, yRadius: cornerRadius)
-    // Filled with the same gradient as the app icon, so a document reads as a
-    // sheet of the app's colour rather than a white card.
-    NSGraphicsContext.saveGraphicsState()
-    body.addClip()
-    gradient().draw(in: page, angle: gradientAngle)
-    NSGraphicsContext.restoreGraphicsState()
-
-    NSShadow().set()
-    drawGradientRing(in: page, cornerRadius: cornerRadius, width: borderWidth)
-}
-
+/// The wordmark: T, Y and P stepping down a diagonal, set in Libertinus and
+/// kerned tight enough that the letters interlock. Each letter sits on its own
+/// baseline: tightened this far, they would collide without the vertical
+/// stagger to separate the glyphs.
 let typLetters = ["T", "Y", "P"]
 /// Horizontal advance as a fraction of the letter's own width: under 1 the
 /// letters overlap.
@@ -170,42 +110,6 @@ func typLayout(at size: CGFloat) -> (font: NSFont, origins: [CGPoint], size: CGS
     let boxWidth = origins[origins.count - 1].x + widths[widths.count - 1]
     let boxHeight = cap + step * CGFloat(typLetters.count - 1)
     return (font, origins, CGSize(width: boxWidth, height: boxHeight))
-}
-
-/// The wordmark: T, Y and P stepping down a diagonal, set in Libertinus and
-/// kerned tight enough that the letters interlock.
-///
-/// Each letter is placed individually — a single drawn string can only sit on
-/// one baseline, and tightening it this far needs negative tracking that would
-/// collide without the vertical stagger to separate the glyphs.
-func drawDiagonalTyp(in rect: CGRect, fill: CGFloat = 0.92) {
-    // Size the whole group, not one glyph, so it fills the frame on whichever
-    // axis runs out first.
-    let probeSize: CGFloat = 100
-    let probe = typLayout(at: probeSize)
-    let size = probeSize * min(
-        rect.width * fill / probe.size.width,
-        rect.height * fill / probe.size.height
-    )
-    let final = typLayout(at: size)
-
-    // Centre the group's bounding box: it runs from the first cap top down to
-    // the last baseline.
-    let cap = final.font.capHeight
-    let step = cap * typDrop
-    let originX = rect.midX - final.size.width / 2
-    let originY = rect.midY - (cap - step * CGFloat(typLetters.count - 1)) / 2
-
-    for (index, letter) in typLetters.enumerated() {
-        let text = NSAttributedString(string: letter, attributes: [
-            .font: final.font,
-            .foregroundColor: ink,
-        ])
-        text.draw(at: CGPoint(
-            x: originX + final.origins[index].x,
-            y: originY + final.origins[index].y + final.font.descender
-        ))
-    }
 }
 
 func renderImage(size: Int, draw: (CGFloat) -> Void) -> NSImage {
@@ -265,7 +169,7 @@ let iconWordmarkWidth: CGFloat = 700
 let visionWordmarkWidth: CGFloat = 600
 
 /// The wordmark's letters as outlines on the icon canvas, y up, in the
-/// spacing `drawDiagonalTyp` gives them, scaled until the ink is `width`
+/// spacing `typLayout` gives them, scaled until the ink is `width`
 /// across and centred on its own bounds.
 func typOutlines(width: CGFloat) -> [String: CGPath] {
     let probe = typLayout(at: 1000)
@@ -291,7 +195,7 @@ func typOutlines(width: CGFloat) -> [String: CGPath] {
 }
 
 /// A colour as the bitmaps here end up holding it: drawn into one pixel and
-/// read back, so the vector layers match the document icons exactly.
+/// read back, so the vector layers match the visionOS bitmaps exactly.
 func hex(_ color: NSColor) -> String {
     let image = renderImage(size: 1) { side in
         color.setFill()
@@ -372,33 +276,6 @@ func fillOutlines(_ paths: [CGPath]) {
     }
 }
 
-func documentIcon(size: Int, kind: IconKind) -> NSImage {
-    renderImage(size: size) { side in
-        let scale = side / 1024.0
-
-        let page = CGRect(x: 154 * scale, y: 74 * scale, width: 716 * scale, height: 874 * scale)
-        let borderWidth = max(1.0, 46 * scale)
-
-        drawDocumentPage(in: page, scale: scale, cornerRadius: 0, borderWidth: borderWidth, shadowAlpha: 0.14)
-
-        drawDiagonalTyp(in: CGRect(x: page.minX + borderWidth * 1.6, y: page.minY + 170 * scale, width: page.width - borderWidth * 3.2, height: page.height - 190 * scale), fill: 0.94)
-
-        let badge = CGRect(x: page.minX + 78 * scale, y: page.minY + 64 * scale, width: page.width - 156 * scale, height: 86 * scale)
-        let badgePath = NSBezierPath(roundedRect: badge, xRadius: 28 * scale, yRadius: 28 * scale)
-        ink.setFill()
-        badgePath.fill()
-
-        switch kind {
-        case .package:
-            drawText(".typeset", in: CGRect(x: badge.minX + 18 * scale, y: badge.minY + 21 * scale, width: badge.width - 36 * scale, height: 56 * scale), font: NSFont.systemFont(ofSize: 48 * scale, weight: .bold), color: white, alignment: .center)
-        case .source:
-            drawText(".typ", in: CGRect(x: badge.minX + 18 * scale, y: badge.minY + 20 * scale, width: badge.width - 36 * scale, height: 58 * scale), font: NSFont.systemFont(ofSize: 50 * scale, weight: .bold), color: white, alignment: .center)
-        case .app:
-            break
-        }
-    }
-}
-
 func writePNG(_ image: NSImage, to url: URL) throws {
     guard let rep = image.representations.compactMap({ $0 as? NSBitmapImageRep }).first,
           let data = rep.representation(using: .png, properties: [.compressionFactor: 0.92]) else {
@@ -448,17 +325,6 @@ func writeOpaquePNG(_ image: NSImage, to url: URL, background: NSColor = white) 
     try (destinationData as Data).write(to: url, options: [.atomic])
 }
 
-func run(_ executable: String, _ arguments: [String]) throws {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: executable)
-    process.arguments = arguments
-    try process.run()
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else {
-        throw NSError(domain: "TypesetIconGeneration", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: "\(executable) \(arguments.joined(separator: " ")) failed"])
-    }
-}
-
 /// An Icon Composer colour: components in extended sRGB.
 func iconColor(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat) -> String {
     String(format: "extended-srgb:%.5f,%.5f,%.5f,1.00000", Double(red), Double(green), Double(blue))
@@ -479,8 +345,8 @@ func generateAppIcon() throws {
     // Each letter twice: in ink for the light icon, and in colour for the
     // dark one, where the ramp behind is put away and the letters are what is
     // left of it. There the ramp is fitted to the wordmark, so all six
-    // colours run through the three letters unbroken, and they are the
-    // ring's saturated hues at full brightness: pastels wash out on black.
+    // colours run through the three letters unbroken, and they are
+    // saturated and at full brightness: pastels wash out on black.
     let vivid = lightCMYOGV.map { saturated($0, darkenedTo: 1.0) }
     for letter in typLetters {
         let data = svgPathData(outlines[letter]!)
@@ -582,46 +448,7 @@ func generateVisionAppIcon() throws {
         .write(to: visionIconStack.appending(path: "Contents.json"), atomically: true, encoding: .utf8)
 }
 
-func generateDocumentIcon(name: String, kind: IconKind) throws {
-    try FileManager.default.createDirectory(at: documentIconRoot, withIntermediateDirectories: true)
-    try writePNG(documentIcon(size: 64, kind: kind), to: documentIconRoot.appending(path: "\(name)-64.png"))
-    try writePNG(documentIcon(size: 320, kind: kind), to: documentIconRoot.appending(path: "\(name)-320.png"))
-    try writePNG(documentIcon(size: 1024, kind: kind), to: documentIconRoot.appending(path: "\(name)-1024.png"))
-
-    let iconset = documentIconRoot.appending(path: "\(name).iconset")
-    if FileManager.default.fileExists(atPath: iconset.path) {
-        try FileManager.default.removeItem(at: iconset)
-    }
-    try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
-
-    let iconSizes: [(String, Int)] = [
-        ("icon_16x16.png", 16),
-        ("icon_16x16@2x.png", 32),
-        ("icon_32x32.png", 32),
-        ("icon_32x32@2x.png", 64),
-        ("icon_128x128.png", 128),
-        ("icon_128x128@2x.png", 256),
-        ("icon_256x256.png", 256),
-        ("icon_256x256@2x.png", 512),
-        ("icon_512x512.png", 512),
-        ("icon_512x512@2x.png", 1024),
-    ]
-
-    for (filename, size) in iconSizes {
-        try writePNG(documentIcon(size: size, kind: kind), to: iconset.appending(path: filename))
-    }
-
-    try run("/usr/bin/iconutil", [
-        "-c", "icns",
-        "-o", documentIconRoot.appending(path: "\(name).icns").path,
-        iconset.path,
-    ])
-    try FileManager.default.removeItem(at: iconset)
-}
-
 try generateAppIcon()
 try generateVisionAppIcon()
-try generateDocumentIcon(name: "TypesetPackageIcon", kind: .package)
-try generateDocumentIcon(name: "TypstSourceIcon", kind: .source)
 
-print("Generated Typeset app and document icons.")
+print("Generated the Typeset app icon.")

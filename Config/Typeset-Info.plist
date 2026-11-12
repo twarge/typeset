@@ -9,13 +9,6 @@
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
-			<key>CFBundleTypeIconFile</key>
-			<string>TypesetPackageIcon.icns</string>
-			<key>CFBundleTypeIconFiles</key>
-			<array>
-				<string>TypesetPackageIcon-64.png</string>
-				<string>TypesetPackageIcon-320.png</string>
-			</array>
 			<key>CFBundleTypeName</key>
 			<string>Typeset Package</string>
 			<key>CFBundleTypeRole</key>
@@ -31,13 +24,6 @@
 			<string>$(PRODUCT_BUNDLE_IDENTIFIER).editing</string>
 		</dict>
 		<dict>
-			<key>CFBundleTypeIconFile</key>
-			<string>TypstSourceIcon.icns</string>
-			<key>CFBundleTypeIconFiles</key>
-			<array>
-				<string>TypstSourceIcon-64.png</string>
-				<string>TypstSourceIcon-320.png</string>
-			</array>
 			<key>CFBundleTypeName</key>
 			<string>Typst Source</string>
 			<key>CFBundleTypeRole</key>
@@ -154,8 +140,14 @@
 			</array>
 			<key>UTTypeDescription</key>
 			<string>Typeset Package</string>
-			<key>UTTypeIconFile</key>
-			<string>TypesetPackageIcon.icns</string>
+			<!-- No artwork of its own: the system draws the app icon on a
+			     folded page with this label under it, so the document icon
+			     follows the app icon on every platform. -->
+			<key>UTTypeIcons</key>
+			<dict>
+				<key>UTTypeIconText</key>
+				<string>typeset</string>
+			</dict>
 			<key>UTTypeIdentifier</key>
 			<string>com.twarge.typeset.package</string>
 			<key>UTTypeTagSpecification</key>
@@ -197,8 +189,11 @@
 			</array>
 			<key>UTTypeDescription</key>
 			<string>Typeset Package (Legacy)</string>
-			<key>UTTypeIconFile</key>
-			<string>TypesetPackageIcon.icns</string>
+			<key>UTTypeIcons</key>
+			<dict>
+				<key>UTTypeIconText</key>
+				<string>typset</string>
+			</dict>
 			<key>UTTypeIdentifier</key>
 			<string>com.twarge.typset.package</string>
 			<key>UTTypeTagSpecification</key>
@@ -216,8 +211,9 @@
 			</array>
 			<key>UTTypeDescription</key>
 			<string>Typst Source</string>
-			<key>UTTypeIconFile</key>
-			<string>TypstSourceIcon.icns</string>
+			<!-- No UTTypeIcons: an icon here is drawn on every .typ file,
+			     whichever app opens it, and Typeset is only one of the apps
+			     that can. Typst source keeps the system's text document icon. -->
 			<key>UTTypeIdentifier</key>
 			<string>com.typst.source</string>
 			<key>UTTypeTagSpecification</key>

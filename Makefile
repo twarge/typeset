@@ -11,7 +11,7 @@ CONFIGURATION := Debug
 
 all: macos
 
-# Regenerates the app and document icon artwork. The generated files are
+# Regenerates the app icon artwork. The generated files are
 # committed, so this is only needed after changing the icon design — builds
 # never depend on it (nor does Xcode's).
 icons:
