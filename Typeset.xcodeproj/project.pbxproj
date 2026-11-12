@@ -40,6 +40,7 @@
 		10000000000000000000002B /* Resources/Acknowledgements/Tinymist-cmark-writer-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000012B /* Resources/Acknowledgements/Tinymist-cmark-writer-LICENSE.txt */; };
 		10000000000000000000002C /* PDFPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000010F /* PDFPreviewView.swift */; };
 		10000000000000000000002D /* Resources/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000012C /* Resources/Assets.xcassets */; };
+		10000000000000000000003A /* Resources/AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000138 /* Resources/AppIcon.icon */; };
 		10000000000000000000002E /* Resources/DocumentIcons/TypesetPackageIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000012D /* Resources/DocumentIcons/TypesetPackageIcon.icns */; };
 		10000000000000000000002F /* Resources/DocumentIcons/TypstSourceIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000012E /* Resources/DocumentIcons/TypstSourceIcon.icns */; };
 		100000000000000000000030 /* Resources/DocumentIcons/TypesetPackageIcon-64.png in Resources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000012F /* Resources/DocumentIcons/TypesetPackageIcon-64.png */; };
@@ -229,6 +230,7 @@
 		10000000000000000000012A /* Resources/Acknowledgements/FiraCode-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Resources/Acknowledgements/FiraCode-LICENSE.txt"; sourceTree = SOURCE_ROOT; };
 		10000000000000000000012B /* Resources/Acknowledgements/Tinymist-cmark-writer-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Resources/Acknowledgements/Tinymist-cmark-writer-LICENSE.txt"; sourceTree = SOURCE_ROOT; };
 		10000000000000000000012C /* Resources/Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Resources/Assets.xcassets; sourceTree = SOURCE_ROOT; };
+		100000000000000000000138 /* Resources/AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = Resources/AppIcon.icon; sourceTree = SOURCE_ROOT; };
 		10000000000000000000012D /* Resources/DocumentIcons/TypesetPackageIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = Resources/DocumentIcons/TypesetPackageIcon.icns; sourceTree = SOURCE_ROOT; };
 		10000000000000000000012E /* Resources/DocumentIcons/TypstSourceIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = Resources/DocumentIcons/TypstSourceIcon.icns; sourceTree = SOURCE_ROOT; };
 		10000000000000000000012F /* Resources/DocumentIcons/TypesetPackageIcon-64.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Resources/DocumentIcons/TypesetPackageIcon-64.png"; sourceTree = SOURCE_ROOT; };
@@ -453,6 +455,7 @@
 			isa = PBXGroup;
 			children = (
 				10000000000000000000012C /* Resources/Assets.xcassets */,
+				100000000000000000000138 /* Resources/AppIcon.icon */,
 				100000000000000000000137 /* Resources/PrivacyInfo.xcprivacy */,
 				10000000000000000000012D /* Resources/DocumentIcons/TypesetPackageIcon.icns */,
 				10000000000000000000012E /* Resources/DocumentIcons/TypstSourceIcon.icns */,
@@ -692,6 +695,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				10000000000000000000002D /* Resources/Assets.xcassets in Resources */,
+				10000000000000000000003A /* Resources/AppIcon.icon in Resources */,
 				100000000000000000000038 /* Resources/PrivacyInfo.xcprivacy in Resources */,
 				10000000000000000000002E /* Resources/DocumentIcons/TypesetPackageIcon.icns in Resources */,
 				10000000000000000000002F /* Resources/DocumentIcons/TypstSourceIcon.icns in Resources */,

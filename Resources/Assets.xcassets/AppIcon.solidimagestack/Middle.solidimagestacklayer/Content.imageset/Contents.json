@@ -1,0 +1,6 @@
+{
+  "images" : [
+    { "idiom" : "vision", "scale" : "2x", "filename" : "Middle.png" }
+  ],
+  "info" : { "author" : "xcode", "version" : 1 }
+}
