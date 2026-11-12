@@ -484,7 +484,7 @@ struct FileSidebar: View {
     }
 
     private var sidebarToolbarSpacing: CGFloat {
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         8
         #else
         6
@@ -492,7 +492,7 @@ struct FileSidebar: View {
     }
 
     private var sidebarToolbarButtonSize: CGFloat {
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         44
         #else
         24
@@ -500,7 +500,7 @@ struct FileSidebar: View {
     }
 
     private var sidebarToolbarHorizontalPadding: CGFloat {
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         12
         #else
         10
@@ -508,7 +508,7 @@ struct FileSidebar: View {
     }
 
     private var sidebarToolbarVerticalPadding: CGFloat {
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         8
         #else
         6
@@ -516,7 +516,7 @@ struct FileSidebar: View {
     }
 
     private var sidebarToolbarFont: Font {
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         .title3
         #else
         .body
@@ -525,7 +525,7 @@ struct FileSidebar: View {
 
     @ViewBuilder
     private var fileList: some View {
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 fileTreeRows
@@ -762,7 +762,7 @@ struct FileTreeRow: View {
     var body: some View {
         switch node.kind {
         case .folder:
-            #if os(iOS)
+            #if os(iOS) || os(visionOS)
             VStack(alignment: .leading, spacing: 0) {
                 iosFolderHeader
                 if expandedFolders.contains(node.path) {
@@ -822,7 +822,7 @@ struct FileTreeRow: View {
         }
     }
 
-    #if os(iOS)
+    #if os(iOS) || os(visionOS)
     @ViewBuilder
     private var iosFolderHeader: some View {
         if editingTarget == .folder(node.path) {
@@ -1156,7 +1156,7 @@ struct FileTreeRow: View {
         #endif
     }
 
-    #if os(iOS)
+    #if os(iOS) || os(visionOS)
     @ViewBuilder
     private func fileIcon(for file: PackageFile) -> some View {
         if file.path == compileTargetPath {
@@ -1172,7 +1172,7 @@ struct FileTreeRow: View {
     #endif
 
     private func shouldBeginRename(for selection: FileTreeSelection, isCurrentSelection: Bool) -> Bool {
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         return false
         #else
         let now = Date()
@@ -1225,7 +1225,7 @@ extension View {
     /// background on top of it.
     @ViewBuilder
     func sidebarListStyle() -> some View {
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         self.listStyle(.sidebar)
             .scrollContentBackground(.hidden)
         #else
@@ -1237,7 +1237,7 @@ extension View {
 private extension View {
     @ViewBuilder
     func sidebarRowInsets(depth: Int = 0) -> some View {
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         let leadingPadding = 16 + CGFloat(depth) * 22
         self
             .padding(.leading, leadingPadding)
@@ -1251,7 +1251,7 @@ private extension View {
 
     @ViewBuilder
     func iosSidebarRowBackground<Background: View>(@ViewBuilder _ background: () -> Background) -> some View {
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         self.background {
             background()
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -1344,7 +1344,7 @@ struct FileRenameField: View {
     #endif
 }
 
-#if os(iOS)
+#if os(iOS) || os(visionOS)
 private struct StemSelectingRenameTextField: UIViewRepresentable {
     @Binding var text: String
     var onCommit: () -> Void

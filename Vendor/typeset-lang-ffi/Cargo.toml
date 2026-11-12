@@ -42,9 +42,18 @@ typst-syntax = { path = "../typst/crates/typst-syntax" }
 
 # Finding the system's fonts through Core Text (see `core_text_fonts`). Both of
 # these, like the two above, are already in the tree via typst and typst-kit.
-[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+[target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))'.dependencies]
 core-foundation = "0.10"
 fontdb = { version = "0.23", default-features = false, features = ["memmap"] }
+
+# typst-kit's `system-downloader` feature pulls in `openssl` on every target
+# outside a fixed list (Windows, macOS, iOS, watchOS, tvOS). visionOS isn't on
+# that list, so there it asked for an OpenSSL installation that doesn't exist
+# — and that nothing would call, since native-tls uses Security.framework on
+# all Apple platforms. This crate is only ever built for Apple targets, so an
+# empty stand-in is enough, and avoids editing the pinned Typst submodule.
+[patch.crates-io]
+openssl = { path = "stubs/openssl" }
 
 [dev-dependencies]
 # Supplies real font bytes for the project-font discovery tests (the same

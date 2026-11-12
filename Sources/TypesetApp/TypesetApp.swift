@@ -64,7 +64,7 @@ struct TypesetApp: App {
             #endif
         }
 
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         DocumentGroupLaunchScene("Typeset") {
             // Use the plain `NewDocumentButton` (Apple's documented launch-scene
             // pattern). It delegates to the `DocumentGroup`'s `newDocument:`
@@ -82,7 +82,7 @@ struct TypesetApp: App {
     }
 }
 
-#if os(iOS)
+#if os(iOS) || os(visionOS)
 /// Opens an additional window on iPadOS.
 ///
 /// SwiftUI has no route to this for a document app: `newDocument` is
@@ -183,7 +183,7 @@ struct TypesetCommands: Commands {
             // opens in its own window). iPadOS gets no such command, so add it
             // here; on iPhone it stays disabled, since there is only ever one
             // scene.
-            #if os(iOS)
+            #if os(iOS) || os(visionOS)
             Button("New Window") {
                 TypesetWindowOpener.openNewWindow()
             }

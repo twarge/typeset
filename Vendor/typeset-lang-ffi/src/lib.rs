@@ -1693,7 +1693,7 @@ fn bundled_font_directory() -> &'static Mutex<Option<PathBuf>> {
 
 fn discover_fonts(bundled: Option<&Path>) -> FontStore {
     let system: Vec<_> = fonts::system().collect();
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
     let listed = core_text_fonts::unscanned_faces(&system);
 
     // macOS's LastResort maps every code point to a placeholder box, and
@@ -1708,7 +1708,7 @@ fn discover_fonts(bundled: Option<&Path>) -> FontStore {
             .into_iter()
             .filter(|(_, info)| !info.is_last_resort()),
     );
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
     font_store.extend(
         listed
             .into_iter()
@@ -1842,7 +1842,7 @@ fn map(path: &Path) -> Option<Bytes> {
 /// the embedded fonts cover no CJK, Arabic, Indic, or emoji, so all of those
 /// rendered as tofu. On macOS `fontdb` already scans the standard font
 /// folders, so this adds only what they miss.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 mod core_text_fonts {
     use super::*;
     use core_foundation::array::{CFArray, CFArrayRef};
@@ -7359,10 +7359,10 @@ description = "Draw diagrams."
     }
 
     /// Discards outline commands; only whether a glyph has an outline matters.
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
     struct NoOutline;
 
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
     impl ttf_parser::OutlineBuilder for NoOutline {
         fn move_to(&mut self, _: f32, _: f32) {}
         fn line_to(&mut self, _: f32, _: f32) {}
@@ -7377,7 +7377,7 @@ description = "Draw diagrams."
     /// outline, bitmap, or SVG Typst can draw. Judged per cluster because
     /// shaping some scripts (Khmer vowel signs, say) leaves an empty glyph
     /// beside the ones that draw.
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
     fn collect_undrawn(frame: &Frame, undrawn: &mut Vec<String>) {
         for (_, item) in frame.items() {
             match item {
@@ -7411,7 +7411,7 @@ description = "Draw diagrams."
         }
     }
 
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
     #[test]
     fn system_fonts_render_text_beyond_the_embedded_fonts() {
         // Regression: on iOS every CJK character rendered as tofu, because
@@ -7446,7 +7446,7 @@ description = "Draw diagrams."
         let _ = fs::remove_dir_all(root);
     }
 
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
     #[test]
     fn core_text_fonts_leave_out_hidden_faces() {
         // GeezaPro.ttc holds the public Geeza Pro faces alongside Apple's
@@ -7461,7 +7461,7 @@ description = "Draw diagrams."
         assert!(!book.contains_family("geeza pro interface"));
     }
 
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
     #[test]
     fn core_text_fonts_leave_out_fonts_the_app_bundles() {
         use core_foundation::base::TCFType;
@@ -7638,7 +7638,7 @@ description = "Draw diagrams."
 
 
     /// The text of every run in `frame`, one entry per font switch.
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
     fn collect_runs(frame: &Frame, runs: &mut Vec<String>) {
         for (_, item) in frame.items() {
             match item {
@@ -7649,7 +7649,7 @@ description = "Draw diagrams."
         }
     }
 
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
     #[test]
     fn farsi_words_are_shaped_in_one_font_each() {
         // Regression: Arabic letters join only within a single font's run, so a
@@ -7691,7 +7691,7 @@ description = "Draw diagrams."
     }
 
     /// Every run in `frame` as its font family, text and glyph count.
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
     fn collect_shaped_runs(frame: &Frame, runs: &mut Vec<(String, String, usize)>) {
         for (_, item) in frame.items() {
             match item {
@@ -7706,7 +7706,7 @@ description = "Draw diagrams."
         }
     }
 
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
     #[test]
     fn devanagari_conjuncts_and_matras_are_formed() {
         // Devanagari needs the font's own shaping rules to tie consonants into

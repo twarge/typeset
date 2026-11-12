@@ -37,7 +37,7 @@ struct DiagnosticLogEntry: Identifiable, Equatable {
     }
 }
 
-#if os(iOS)
+#if os(iOS) || os(visionOS)
 struct PDFShareItem: Identifiable {
     let id = UUID()
     var url: URL

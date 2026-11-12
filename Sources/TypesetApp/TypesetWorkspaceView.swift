@@ -138,7 +138,7 @@ struct TypesetWorkspaceView: View {
     // visibility while distraction-free is on.
     @State private var distractionFreeChromeHidden = false
     #endif
-    #if os(iOS)
+    #if os(iOS) || os(visionOS)
     @State private var pdfShareItem: PDFShareItem?
     @State private var hasSeenIOSDistractionFreePointer = false
     @State private var isIOSDistractionFreePointerInRevealArea = false
@@ -242,7 +242,7 @@ struct TypesetWorkspaceView: View {
     @State private var didAutoExportPDFOnDisappear = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .detailOnly
     @State private var isFileSidebarPresented = false
-    #if os(iOS)
+    #if os(iOS) || os(visionOS)
     /// Whether the file sidebar is up, as an inspector column in regular width
     /// or a sheet in compact. Stored rather than derived from
     /// `isFileSidebarPresented`: handed a computed binding, the inspector
@@ -295,7 +295,7 @@ struct TypesetWorkspaceView: View {
     @State private var managedFileDiskHash: Int?
     @AppStorage("workspace.splitBehavior") private var splitBehaviorRaw = SplitBehavior.sideBySide.rawValue
     @AppStorage("workspace.tallSplitThreshold") private var tallSplitThreshold = 1.12
-    #if os(iOS)
+    #if os(iOS) || os(visionOS)
     /// The code pane's share of the side-by-side split, as last dragged.
     @AppStorage("workspace.paneSplitFraction") private var paneSplitFraction = 0.5
     #endif
@@ -344,7 +344,7 @@ struct TypesetWorkspaceView: View {
     // distraction-free, so the code never shifts as the toolbar auto-hides.
     private static let macOSEditorTopInset: CGFloat = 52
     #endif
-    #if os(iOS)
+    #if os(iOS) || os(visionOS)
     private static let iosDistractionFreeHideDelay: UInt64 = 220_000_000
     #endif
 
@@ -467,7 +467,7 @@ struct TypesetWorkspaceView: View {
                     performSymbolRename(request, newName: newName)
                 }
             }
-            #if os(iOS)
+            #if os(iOS) || os(visionOS)
             // The file sidebar is the system inspector in regular width, a
             // trailing column beside the panes (they narrow to make room), and
             // a sheet in compact width. The inspector would become a sheet by
@@ -475,9 +475,11 @@ struct TypesetWorkspaceView: View {
             // present, and never comes back after a swipe dismisses it. Both
             // are applied inside the NavigationStack so the navigation bar and
             // its items keep spanning the window.
+            #if !os(visionOS)
             .inspector(isPresented: $fileSidebarInspectorPresented) {
                 iosFileSidebarInspector
             }
+            #endif
             .sheet(isPresented: $fileSidebarSheetPresented) {
                 iosFileSidebarInspector
             }
@@ -489,7 +491,7 @@ struct TypesetWorkspaceView: View {
                 // The sheet swiped away. The column has no way to close but
                 // the Files button; what it writes back is its own doing
                 // while the window resizes, before the width class changes.
-                guard !isPresented, isFileSidebarSettled, isCompactWidth, isFileSidebarPresented else { return }
+                guard !isPresented, isFileSidebarSettled, usesFileSidebarSheet, isFileSidebarPresented else { return }
                 setFileSidebarPresented(false)
             }
             #endif
@@ -499,7 +501,7 @@ struct TypesetWorkspaceView: View {
                 contentType: .pdf,
                 defaultFilename: exportDefaultFilename
             ) { _ in }
-            #if os(iOS)
+            #if os(iOS) || os(visionOS)
             .sheet(item: $pdfShareItem) { item in
                 PDFShareSheet(url: item.url)
             }
@@ -580,7 +582,7 @@ struct TypesetWorkspaceView: View {
                 flushPendingEditorState()
                 flushPendingScrollFraction()
                 flushPendingPreviewViewport()
-                #if os(iOS)
+                #if os(iOS) || os(visionOS)
                 cancelIOSDistractionFreeHide()
                 #endif
                 setAutoPreviewEnabled(false)
@@ -688,7 +690,7 @@ struct TypesetWorkspaceView: View {
 
     @ToolbarContentBuilder
     private var workspaceToolbarContent: some ToolbarContent {
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         ToolbarItem(placement: .principal) {
             documentToolbarTitle
         }
@@ -833,7 +835,7 @@ struct TypesetWorkspaceView: View {
 
     private var exportToolbarButton: some View {
         // iOS presents the system share sheet, macOS a save panel — label each honestly.
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         let exportTitle = "Share"
         #else
         let exportTitle = "Export PDF"
@@ -926,7 +928,7 @@ struct TypesetWorkspaceView: View {
         }
     }
 
-    #if os(iOS)
+    #if os(iOS) || os(visionOS)
     private var documentToolbarFilename: String {
         guard let fileURL else { return "Typeset" }
         if fileURL.pathExtension.lowercased() == "typeset" {
@@ -975,7 +977,7 @@ struct TypesetWorkspaceView: View {
     }
     #endif
 
-    #if os(iOS)
+    #if os(iOS) || os(visionOS)
     private var shouldHideIOSDistractionFreeChrome: Bool {
         // Until the chrome has been measured there's no band to reveal it
         // from, so it stays up.
@@ -1195,7 +1197,7 @@ struct TypesetWorkspaceView: View {
     }
     #endif
 
-    #if os(iOS)
+    #if os(iOS) || os(visionOS)
     /// Moves the file sidebar between column and sheet when the width class
     /// changes, as when an iPhone folds or unfolds. Swapping one for the other
     /// while the window is still resizing is a race: the retired one reports
@@ -1218,12 +1220,22 @@ struct TypesetWorkspaceView: View {
     private func syncFileSidebarPresentation() {
         guard isFileSidebarSettled else { return }
         let isShown = isFileSidebarPresented
-        if fileSidebarInspectorPresented != (isShown && !isCompactWidth) {
-            fileSidebarInspectorPresented = isShown && !isCompactWidth
+        if fileSidebarInspectorPresented != (isShown && !usesFileSidebarSheet) {
+            fileSidebarInspectorPresented = isShown && !usesFileSidebarSheet
         }
-        if fileSidebarSheetPresented != (isShown && isCompactWidth) {
-            fileSidebarSheetPresented = isShown && isCompactWidth
+        if fileSidebarSheetPresented != (isShown && usesFileSidebarSheet) {
+            fileSidebarSheetPresented = isShown && usesFileSidebarSheet
         }
+    }
+
+    /// Whether the file sidebar goes up as a sheet rather than an inspector
+    /// column. visionOS has no inspector, so there it is a sheet at any width.
+    private var usesFileSidebarSheet: Bool {
+        #if os(visionOS)
+        true
+        #else
+        isCompactWidth
+        #endif
     }
 
     /// The inspector's content. The column bounds only apply in regular width:
@@ -1233,7 +1245,9 @@ struct TypesetWorkspaceView: View {
     /// the compact sheet.
     private var iosFileSidebarInspector: some View {
         fileSidebar(dismissAfterSelect: false)
+            #if !os(visionOS)
             .inspectorColumnWidth(min: 240, ideal: 320, max: 480)
+            #endif
             .presentationDetents([.medium, .large])
             // Attached here rather than on the workspace: in compact width the
             // inspector is a sheet, and a view underneath an active sheet can't
@@ -1279,7 +1293,7 @@ struct TypesetWorkspaceView: View {
     }
 
     private var isCompactWidth: Bool {
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         return horizontalSizeClass == .compact
         #else
         return false
@@ -1565,7 +1579,7 @@ struct TypesetWorkspaceView: View {
     }
 
     private func splitOrientation(for size: CGSize) -> SplitOrientation {
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         // iOS always shows code and preview side by side — never stacked. The
         // size class alone decides whether there's a split at all (see
         // `resolvedView`), and the panes divide the width left inside the
@@ -2421,7 +2435,7 @@ struct TypesetWorkspaceView: View {
         }
         selectedRange = clampedRange(range, in: sourceText)
         focusSourceEditor()
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         setFileSidebarPresented(false)
         #endif
     }
@@ -2438,7 +2452,7 @@ struct TypesetWorkspaceView: View {
             requestEditorReveal(clampedRange(range, in: sourceText))
         }
         focusSourceEditor()
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         setFileSidebarPresented(false)
         #endif
     }
@@ -3683,7 +3697,7 @@ struct TypesetWorkspaceView: View {
         let renderer = self.renderer
         Task {
             do {
-                #if os(iOS)
+                #if os(iOS) || os(visionOS)
                 let directory = FileManager.default.temporaryDirectory
                     .appending(path: "TypesetExports", directoryHint: .isDirectory)
                     .appending(path: UUID().uuidString, directoryHint: .isDirectory)
@@ -4309,7 +4323,7 @@ struct TypesetWorkspaceView: View {
     }
 
     private var supportsPDFExport: Bool {
-        #if os(macOS) || os(iOS)
+        #if os(macOS) || os(iOS) || os(visionOS)
         true
         #else
         false

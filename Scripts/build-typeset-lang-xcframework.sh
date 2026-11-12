@@ -35,18 +35,23 @@ if [ ! -x "$CARGO_BIN" ]; then
 fi
 MACOS_MIN_VERSION="${MACOS_MIN_VERSION:-26.0}"
 IOS_MIN_VERSION="${IOS_MIN_VERSION:-26.0}"
+VISIONOS_MIN_VERSION="${VISIONOS_MIN_VERSION:-26.0}"
 
 RUST_TARGETS=(
   aarch64-apple-darwin
   aarch64-apple-ios
   aarch64-apple-ios-sim
   x86_64-apple-ios
+  aarch64-apple-visionos
+  aarch64-apple-visionos-sim
 )
 
 has_all_binaries() {
   [ -f "$OUT_DIR/macos-arm64/TypesetLang.framework/TypesetLang" ] &&
     [ -f "$OUT_DIR/ios-arm64/TypesetLang.framework/TypesetLang" ] &&
-    [ -f "$OUT_DIR/ios-arm64_x86_64-simulator/TypesetLang.framework/TypesetLang" ]
+    [ -f "$OUT_DIR/ios-arm64_x86_64-simulator/TypesetLang.framework/TypesetLang" ] &&
+    [ -f "$OUT_DIR/xros-arm64/TypesetLang.framework/TypesetLang" ] &&
+    [ -f "$OUT_DIR/xros-arm64-simulator/TypesetLang.framework/TypesetLang" ]
 }
 
 # The crate's path dependencies reach into Vendor/typst, and none of that is
@@ -137,7 +142,7 @@ build_target() {
   # toolchain's default minimum instead of $min_version — harmless, since the
   # final app link warns only when an object's minimum is NEWER than the
   # app's.
-  unset MACOSX_DEPLOYMENT_TARGET IPHONEOS_DEPLOYMENT_TARGET
+  unset MACOSX_DEPLOYMENT_TARGET IPHONEOS_DEPLOYMENT_TARGET XROS_DEPLOYMENT_TARGET
 
   # The min-version stamp still matters for C/asm objects built by the `cc`
   # crate (psm's assembly, notably): without direction they stamp at the host
@@ -150,8 +155,20 @@ build_target() {
     macosx) version_min_flag="-mmacosx-version-min=$min_version" ;;
     iphoneos) version_min_flag="-miphoneos-version-min=$min_version" ;;
     iphonesimulator) version_min_flag="-mios-simulator-version-min=$min_version" ;;
+    # visionOS has no -m<os>-version-min spelling, and cc already passes a
+    # --target stamped with the SDK's version, which clang won't combine with
+    # -mtargetos. A later --target wins, so restate it with the minimum.
+    xros) version_min_flag="--target=arm64-apple-xros$min_version" ;;
+    xrsimulator) version_min_flag="--target=arm64-apple-xros$min_version-simulator" ;;
   esac
-  export "CFLAGS_${rust_target//-/_}=$version_min_flag"
+  local c_flags="$version_min_flag"
+  # psm's assembly picks Mach-O symbol naming from a list of Apple OS names
+  # that stops short of visionOS, and otherwise emits ELF directives the
+  # assembler rejects. Its `ios` branch is the one that applies.
+  case "$sdk" in
+    xros | xrsimulator) c_flags="$c_flags -DCFG_TARGET_OS_ios" ;;
+  esac
+  export "CFLAGS_${rust_target//-/_}=$c_flags"
 
   # --locked: a lockfile out of step with the manifests (a Typst bump that
   # changed a dependency requirement, say) fails the build instead of quietly
@@ -208,11 +225,15 @@ mkdir -p "$BUILD_DIR"
 build_target "aarch64-apple-darwin" "macosx" "$MACOS_MIN_VERSION" "macos-arm64"
 build_target "aarch64-apple-ios" "iphoneos" "$IOS_MIN_VERSION" "ios-arm64"
 build_universal_simulator
+build_target "aarch64-apple-visionos" "xros" "$VISIONOS_MIN_VERSION" "xros-arm64"
+build_target "aarch64-apple-visionos-sim" "xrsimulator" "$VISIONOS_MIN_VERSION" "xros-simulator-arm64"
 
 xcodebuild -create-xcframework \
   -framework "$BUILD_DIR/macos-arm64/TypesetLang.framework" \
   -framework "$BUILD_DIR/ios-arm64/TypesetLang.framework" \
   -framework "$BUILD_DIR/ios-simulator-universal/TypesetLang.framework" \
+  -framework "$BUILD_DIR/xros-arm64/TypesetLang.framework" \
+  -framework "$BUILD_DIR/xros-simulator-arm64/TypesetLang.framework" \
   -output "$OUT_DIR"
 
 if ! has_all_binaries; then
@@ -228,10 +249,10 @@ fi
 # checking that the generated one names exactly the slices expected.
 write_canonical_info_plist() {
   local plist="$OUT_DIR/Info.plist"
-  local expected="ios-arm64 ios-arm64_x86_64-simulator macos-arm64"
+  local expected="ios-arm64 ios-arm64_x86_64-simulator macos-arm64 xros-arm64 xros-arm64-simulator"
   local found
   found="$(
-    for index in 0 1 2 3; do
+    for index in 0 1 2 3 4 5; do
       /usr/libexec/PlistBuddy -c "Print :AvailableLibraries:$index:LibraryIdentifier" "$plist" 2>/dev/null || true
     done | sort | xargs
   )"
@@ -291,6 +312,36 @@ write_canonical_info_plist() {
 			</array>
 			<key>SupportedPlatform</key>
 			<string>macos</string>
+		</dict>
+		<dict>
+			<key>BinaryPath</key>
+			<string>TypesetLang.framework/TypesetLang</string>
+			<key>LibraryIdentifier</key>
+			<string>xros-arm64</string>
+			<key>LibraryPath</key>
+			<string>TypesetLang.framework</string>
+			<key>SupportedArchitectures</key>
+			<array>
+				<string>arm64</string>
+			</array>
+			<key>SupportedPlatform</key>
+			<string>xros</string>
+		</dict>
+		<dict>
+			<key>BinaryPath</key>
+			<string>TypesetLang.framework/TypesetLang</string>
+			<key>LibraryIdentifier</key>
+			<string>xros-arm64-simulator</string>
+			<key>LibraryPath</key>
+			<string>TypesetLang.framework</string>
+			<key>SupportedArchitectures</key>
+			<array>
+				<string>arm64</string>
+			</array>
+			<key>SupportedPlatform</key>
+			<string>xros</string>
+			<key>SupportedPlatformVariant</key>
+			<string>simulator</string>
 		</dict>
 	</array>
 	<key>CFBundlePackageType</key>

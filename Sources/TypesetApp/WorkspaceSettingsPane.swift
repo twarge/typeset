@@ -47,7 +47,7 @@ struct WorkspaceSettingsPane: View {
     var onDismiss: () -> Void
 
     var body: some View {
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         NavigationStack {
             ScrollView {
                 settingsContent
@@ -55,7 +55,9 @@ struct WorkspaceSettingsPane: View {
                     .frame(maxWidth: 520, alignment: .leading)
                     .frame(maxWidth: .infinity, alignment: .center)
             }
+            #if os(iOS)
             .scrollDismissesKeyboard(.interactively)
+            #endif
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -292,7 +292,7 @@ struct WorkspaceSearchView: View {
                     .textFieldStyle(.plain)
                     .focused($isQueryFocused)
                     .autocorrectionDisabled()
-                    #if os(iOS)
+                    #if os(iOS) || os(visionOS)
                     .textInputAutocapitalization(.never)
                     .submitLabel(.search)
                     #endif
@@ -371,7 +371,7 @@ struct WorkspaceSearchView: View {
                     TextField("Files to include", text: $includedFiles)
                         .textFieldStyle(.plain)
                         .autocorrectionDisabled()
-                        #if os(iOS)
+                        #if os(iOS) || os(visionOS)
                         .textInputAutocapitalization(.never)
                         #endif
                 }
@@ -382,7 +382,7 @@ struct WorkspaceSearchView: View {
                     TextField("Files to exclude", text: $excludedFiles)
                         .textFieldStyle(.plain)
                         .autocorrectionDisabled()
-                        #if os(iOS)
+                        #if os(iOS) || os(visionOS)
                         .textInputAutocapitalization(.never)
                         #endif
                 }
@@ -395,7 +395,7 @@ struct WorkspaceSearchView: View {
                     TextField("Replace", text: $replacement)
                         .textFieldStyle(.plain)
                         .autocorrectionDisabled()
-                        #if os(iOS)
+                        #if os(iOS) || os(visionOS)
                         .textInputAutocapitalization(.never)
                         #endif
                     Button("All") {
@@ -413,7 +413,7 @@ struct WorkspaceSearchView: View {
 
     // Tight on macOS so this row is never what stops the sidebar narrowing.
     private var searchOptionSpacing: CGFloat {
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         8
         #else
         4

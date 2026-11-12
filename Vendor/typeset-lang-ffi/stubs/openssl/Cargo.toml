@@ -1,0 +1,12 @@
+# An empty stand-in for the `openssl` crate; see the [patch.crates-io] note in
+# ../../Cargo.toml for why it exists.
+[package]
+name = "openssl"
+version = "0.10.80"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[features]
+default = []
+vendored = []

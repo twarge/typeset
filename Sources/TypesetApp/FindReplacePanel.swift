@@ -45,7 +45,7 @@ struct FindReplacePanel: View {
                     .textFieldStyle(.roundedBorder)
                     .focused($focusedField, equals: .find)
                     .autocorrectionDisabled()
-                    #if os(iOS)
+                    #if os(iOS) || os(visionOS)
                     .textInputAutocapitalization(.never)
                     #endif
                     .onSubmit(onNext)
@@ -84,7 +84,7 @@ struct FindReplacePanel: View {
                     .textFieldStyle(.roundedBorder)
                     .focused($focusedField, equals: .replace)
                     .autocorrectionDisabled()
-                    #if os(iOS)
+                    #if os(iOS) || os(visionOS)
                     .textInputAutocapitalization(.never)
                     #endif
                     .onSubmit(onReplace)

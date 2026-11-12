@@ -35,7 +35,7 @@ struct PackagesSettingsView: View {
                 }
             }
             .navigationTitle("Typst Packages")
-            #if os(iOS)
+            #if os(iOS) || os(visionOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .navigationDestination(for: TypstPackageSpec.self) { spec in
@@ -124,7 +124,7 @@ private struct PackageDetailView: View {
 
     @State private var isChoosingReplacement = false
     @State private var licenseText = ""
-    #if os(iOS)
+    #if os(iOS) || os(visionOS)
     @State private var isExporting = false
     #endif
 
@@ -195,7 +195,7 @@ private struct PackageDetailView: View {
                 try library.replace(package.spec, withContentsOf: folder)
             }
         }
-        #if os(iOS)
+        #if os(iOS) || os(visionOS)
         .fileExporter(
             isPresented: $isExporting,
             document: PackageFolderDocument(url: package.directoryURL),
@@ -248,7 +248,7 @@ private extension TypstInstalledPackage {
     }
 }
 
-#if os(iOS)
+#if os(iOS) || os(visionOS)
 /// A package folder, for saving a copy to Files.
 private struct PackageFolderDocument: FileDocument {
     static var readableContentTypes: [UTType] { [.folder] }

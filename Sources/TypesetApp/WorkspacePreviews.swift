@@ -29,7 +29,7 @@ struct StableSourcePane<Content: View>: View {
     }
 }
 
-#if os(iOS)
+#if os(iOS) || os(visionOS)
 /// Two panes side by side, divided by a separator the user drags to share
 /// the width between them. On iPhone Duo folded like a book, the separator
 /// sits on the fold instead, so each pane keeps to its own side of it.
@@ -121,7 +121,7 @@ struct PaneSplit<Leading: View, Trailing: View>: View {
     /// book: an active division region running top to bottom with room for
     /// a pane on either side. Flat, the region is inactive and isn't reported.
     private static func fold(in proxy: GeometryProxy) -> CGRect? {
-        guard #available(iOS 27.1, *) else { return nil }
+        guard #available(iOS 27.1, visionOS 27.1, *) else { return nil }
         let totalWidth = proxy.size.width
         return proxy.reservedRegions(kind: .division)
             .map(\.frame)
