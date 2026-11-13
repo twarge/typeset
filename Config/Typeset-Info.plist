@@ -211,9 +211,15 @@
 			</array>
 			<key>UTTypeDescription</key>
 			<string>Typst Source</string>
-			<!-- No UTTypeIcons: an icon here is drawn on every .typ file,
-			     whichever app opens it, and Typeset is only one of the apps
-			     that can. Typst source keeps the system's text document icon. -->
+			<!-- Drawn on every .typ file while Typeset is installed, whichever
+			     app opens it: the icon belongs to the type, not to the app that
+			     opens the file. Without it, Typst source gets the system's text
+			     document icon. -->
+			<key>UTTypeIcons</key>
+			<dict>
+				<key>UTTypeIconText</key>
+				<string>typ</string>
+			</dict>
 			<key>UTTypeIdentifier</key>
 			<string>com.typst.source</string>
 			<key>UTTypeTagSpecification</key>
