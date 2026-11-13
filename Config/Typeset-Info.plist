@@ -18,7 +18,6 @@
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>com.twarge.typeset.package</string>
-				<string>com.twarge.typset.package</string>
 			</array>
 			<key>NSUbiquitousDocumentUserActivityType</key>
 			<string>$(PRODUCT_BUNDLE_IDENTIFIER).editing</string>
@@ -181,29 +180,6 @@
 	</array>
 	<key>UTImportedTypeDeclarations</key>
 	<array>
-		<dict>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>com.apple.package</string>
-				<string>public.directory</string>
-			</array>
-			<key>UTTypeDescription</key>
-			<string>Typeset Package (Legacy)</string>
-			<key>UTTypeIcons</key>
-			<dict>
-				<key>UTTypeIconText</key>
-				<string>typset</string>
-			</dict>
-			<key>UTTypeIdentifier</key>
-			<string>com.twarge.typset.package</string>
-			<key>UTTypeTagSpecification</key>
-			<dict>
-				<key>public.filename-extension</key>
-				<array>
-					<string>typset</string>
-				</array>
-			</dict>
-		</dict>
 		<dict>
 			<key>UTTypeConformsTo</key>
 			<array>
