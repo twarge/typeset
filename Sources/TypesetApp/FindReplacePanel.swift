@@ -24,6 +24,9 @@ struct FindReplacePanel: View {
     var currentIndex: Int?
     var matchCount: Int
     var errorMessage: String?
+    /// Bumped each time Find is invoked, so ⌘F with the panel already open
+    /// returns focus to the find field instead of leaving it in the editor.
+    var focusRequest: Int = 0
     var onFindChanged: () -> Void
     var onPrevious: () -> Void
     var onNext: () -> Void
@@ -128,9 +131,27 @@ struct FindReplacePanel: View {
             focusedField = .find
             onFindChanged()
         }
+        .onChange(of: focusRequest) { _, _ in
+            focusFindField()
+        }
         .onChange(of: isCaseSensitive) { _, _ in onFindChanged() }
         .onChange(of: isWholeWord) { _, _ in onFindChanged() }
         .onChange(of: usesRegularExpression) { _, _ in onFindChanged() }
+    }
+
+    /// Focuses the find field with its contents selected, so typing replaces
+    /// the previous search term.
+    private func focusFindField() {
+        focusedField = .find
+        #if os(macOS)
+        // Focusing an already-focused field selects nothing; once the field
+        // editor is first responder, select its text as ⌘F does elsewhere.
+        DispatchQueue.main.async {
+            if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.isFieldEditor {
+                editor.selectAll(nil)
+            }
+        }
+        #endif
     }
 
     private func searchOptionButton(

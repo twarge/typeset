@@ -237,6 +237,7 @@ struct TypesetWorkspaceView: View {
     @State private var isImporterPresented = false
     @State private var isSettingsPresented = false
     @State private var isFindReplacePresented = false
+    @State private var findFocusRequest = 0
     @State private var findText = ""
     @State private var replaceText = ""
     @State private var findIsCaseSensitive = false
@@ -1414,6 +1415,7 @@ struct TypesetWorkspaceView: View {
                     currentIndex: currentFindMatchDisplayIndex,
                     matchCount: findMatchRanges.count,
                     errorMessage: findPatternError,
+                    focusRequest: findFocusRequest,
                     onFindChanged: selectFirstFindMatch,
                     onPrevious: { selectFindMatch(direction: .previous) },
                     onNext: { selectFindMatch(direction: .next) },
@@ -3388,6 +3390,7 @@ struct TypesetWorkspaceView: View {
         FindPasteboard.string = findText
         #endif
         isFindReplacePresented = true
+        findFocusRequest += 1
         selectFirstFindMatch()
     }
 
