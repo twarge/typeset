@@ -110,6 +110,10 @@ struct SignatureHelp {
     active_signature: usize,
     active_parameter: usize,
     documentation_url: Option<String>,
+    /// UTF-8 offset of the opening parenthesis of the call this describes, so
+    /// a client can tell one call from another of the same function. `None`
+    /// for a keyword construct, which has no parenthesis of its own.
+    call_start: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -4819,6 +4823,7 @@ fn ide_tooltip_for(
 
 struct FunctionCallContext {
     function_name: String,
+    open_paren: usize,
     active_parameter: usize,
     active_parameter_name: Option<String>,
 }
@@ -4844,6 +4849,7 @@ fn signature_help_for(
             active_signature: 0,
             active_parameter,
             documentation_url: official_docs_url(&context.function_name),
+            call_start: Some(context.open_paren),
         });
     }
 
@@ -4878,6 +4884,7 @@ fn signature_help_for(
         active_signature: 0,
         active_parameter,
         documentation_url: None,
+        call_start: Some(context.open_paren),
     })
 }
 
@@ -4946,6 +4953,7 @@ fn function_call_context(text: &str, utf8_offset: usize) -> Option<FunctionCallC
     let active_parameter_name = named_argument_name(text.get(argument_start..utf8_offset)?);
     Some(FunctionCallContext {
         function_name,
+        open_paren,
         active_parameter,
         active_parameter_name,
     })
@@ -5308,6 +5316,7 @@ fn keyword_signature_help(text: &str, utf8_offset: usize) -> Option<SignatureHel
         active_signature: 0,
         active_parameter: 0,
         documentation_url: Some(doc.url.to_string()),
+        call_start: None,
     })
 }
 
@@ -6574,6 +6583,23 @@ mod tests {
     }
 
     #[test]
+    fn signature_help_names_the_call_it_describes() {
+        // Two calls of one function share a signature; the opening
+        // parenthesis is what tells them apart.
+        let text = "#figure(image(\"a.png\"), caption: [é])\n#image(";
+        let inner_paren = text.find("image(").unwrap() + "image".len();
+        let inner = signature_help_for(text, inner_paren + 1, "", "").unwrap();
+        assert_eq!(inner.call_start, Some(inner_paren));
+
+        let in_caption = text.find(", caption").unwrap() + 2;
+        let outer = signature_help_for(text, in_caption, "", "").unwrap();
+        assert_eq!(outer.call_start, Some("#figure".len()));
+
+        let last = signature_help_for(text, text.len(), "", "").unwrap();
+        assert_eq!(last.call_start, Some(text.len() - 1));
+    }
+
+    #[test]
     fn returns_typst_metadata_for_builtin_image() {
         let text = "#image(";
         let signature = signature_help_for(text, text.len(), "", "").unwrap();
@@ -6776,6 +6802,7 @@ description = "Draw diagrams."
             help.documentation_url.as_deref(),
             Some("https://typst.app/docs/reference/scripting/#modules")
         );
+        assert_eq!(help.call_start, None);
     }
 
     #[test]

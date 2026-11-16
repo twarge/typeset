@@ -58,6 +58,9 @@
     "@%@" : {
 
     },
+    "A function's signature and documentation pop up when the caret is on it; Escape hides the popup until the caret leaves the function. When this is off, use Show Function Help in the editor's context menu." : {
+
+    },
     "About Typeset" : {
 
     },
@@ -548,6 +551,9 @@
 
     },
     "Show Files in Finder" : {
+
+    },
+    "Show Function Help Automatically" : {
 
     },
     "Show Line Numbers" : {

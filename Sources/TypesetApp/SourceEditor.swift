@@ -111,6 +111,7 @@ struct SourceEditor: View {
     var onCompletionMove: (Int) -> Void = { _ in }
     var onCompletionAccept: () -> Void = {}
     var onCompletionDismiss: () -> Void = {}
+    var onHelpDismiss: () -> Void = {}
     var onShowFunctionHelp: (NSRange) -> Void = { _ in }
     var onShowSignatureHelp: (NSRange) -> Void = { _ in }
     var onGoToDefinition: (NSRange) -> Void = { _ in }
@@ -144,6 +145,14 @@ struct SourceEditor: View {
     private var isLanguageOverlayShowing: Bool {
         !codeActions.isEmpty || !referenceLocations.isEmpty || !completions.isEmpty
             || signatureHelp != nil || hoverInfo != nil || cursorDiagnostic != nil
+    }
+
+    /// Whether the panel the overlay is showing is help — signature help or
+    /// hover documentation — which Escape dismisses. Mirrors the overlay's own
+    /// order: the lists that take keys of their own outrank it.
+    private var isHelpPresented: Bool {
+        guard codeActions.isEmpty, referenceLocations.isEmpty, completions.isEmpty else { return false }
+        return signatureHelp?.signatures.isEmpty == false || hoverInfo?.text.isEmpty == false
     }
 
     /// The live value when there is one. `state` is passed as a plain argument
@@ -188,6 +197,8 @@ struct SourceEditor: View {
             onCompletionMove: onCompletionMove,
             onCompletionAccept: onCompletionAccept,
             onCompletionDismiss: onCompletionDismiss,
+            isHelpPresented: isHelpPresented,
+            onHelpDismiss: onHelpDismiss,
             onShowFunctionHelp: { range, anchor in
                 setLanguageOverlayAnchor(anchor)
                 onShowFunctionHelp(range)

@@ -199,6 +199,9 @@ struct TypesetWorkspaceView: View {
     @State private var codeActions: [TypstCodeAction] = []
     @State private var pendingSymbolRename: PendingSymbolRename?
     @State private var isManualLanguageHelpPresented = false
+    /// What the help dismissed with Escape was about. Each stays hidden until
+    /// the caret leaves it; see `dismissLanguageHelp`.
+    @State private var dismissedHelpSubjects: Set<TypstHelpSubject> = []
     @State private var languageRequestID = UUID()
     @State private var languageRequestTask: Task<Void, Never>?
     @State private var languageSyncTask: Task<Void, Never>?
@@ -317,6 +320,10 @@ struct TypesetWorkspaceView: View {
     // (Settings > Editor). The line tint and underline still mark the error;
     // the message pops up once the caret leaves the paragraph.
     @AppStorage("editor.holdErrorPopupWhileEditing") private var holdErrorPopupWhileEditing = true
+    // Signature help and documentation that pop up on their own as the caret
+    // moves through code (Settings > Editor). Off leaves them to the context
+    // menu's Show Function Help and Show Signature Help.
+    @AppStorage("editor.showHelpAutomatically") private var showHelpAutomatically = true
     // While non-nil, the caret has stayed inside this paragraph since it was
     // last edited — its error callout is held back.
     @State private var activeEditParagraph: NSRange?
@@ -459,6 +466,7 @@ struct TypesetWorkspaceView: View {
                     previewAutoRetriggerDelay: $previewAutoRetriggerDelay,
                     windowChromePreference: windowChromePreferenceBinding,
                     holdErrorPopupWhileEditing: $holdErrorPopupWhileEditing,
+                    showHelpAutomatically: showHelpAutomaticallyBinding,
                     onDismiss: { isSettingsPresented = false }
                 )
             }
@@ -1470,6 +1478,7 @@ struct TypesetWorkspaceView: View {
                     onCompletionMove: moveCompletionSelection,
                     onCompletionAccept: acceptSelectedCompletion,
                     onCompletionDismiss: clearCompletions,
+                    onHelpDismiss: dismissLanguageHelp,
                     onShowFunctionHelp: showFunctionHelp,
                     onShowSignatureHelp: showSignatureHelp,
                     onGoToDefinition: { goToDefinition(at: $0) },
@@ -1599,6 +1608,20 @@ struct TypesetWorkspaceView: View {
         } set: { preference in
             windowChromeRaw = preference.rawValue
             legacyDistractionFreeWindowChrome = preference.usesDistractionFreeChrome
+        }
+    }
+
+    /// Turning automatic help off also takes down the popover it has up,
+    /// rather than leaving it until the caret next moves.
+    private var showHelpAutomaticallyBinding: Binding<Bool> {
+        Binding {
+            showHelpAutomatically
+        } set: { isOn in
+            showHelpAutomatically = isOn
+            if !isOn, !isManualLanguageHelpPresented {
+                signatureHelp = nil
+                hoverInfo = nil
+            }
         }
     }
 
@@ -1856,6 +1879,7 @@ struct TypesetWorkspaceView: View {
             clearCompletions()
             hoverInfo = nil
             signatureHelp = nil
+            dismissedHelpSubjects = []
             referenceLocations = []
             activeEditParagraph = nil
         } catch {
@@ -2583,6 +2607,8 @@ struct TypesetWorkspaceView: View {
             in: sourceText
         )
         let text = sourceText
+        let showsHelp = showHelpAutomatically
+        lapseDismissedHelp(at: range.location, in: text)
         languageRequestTask = Task {
             if !forceCompletion {
                 try? await Task.sleep(for: .milliseconds(140))
@@ -2596,12 +2622,12 @@ struct TypesetWorkspaceView: View {
             let completions = Self.filteredCompletions(rawCompletions, in: text, at: range.location)
             typesetLSPDebug("async completions raw=\(rawCompletions.count) filtered=\(completions.count)")
             let prefersHover = Self.isFunctionCallee(at: range.location, in: text)
-            let signature = completions.isEmpty && !prefersHover
+            let signature = showsHelp && completions.isEmpty && !prefersHover
                 ? await languageService.signatureHelp(path: path, utf16Offset: range.location)
                 : nil
             typesetLSPDebug("async signature=\(signature?.signatures.first?.label ?? "none")")
             let hover: TypstHoverInfo?
-            if forceCompletion || !completions.isEmpty || signature != nil {
+            if forceCompletion || !showsHelp || !completions.isEmpty || signature != nil {
                 hover = nil
             } else if prefersHover {
                 // A deliberate caret placement on a callable is the keyboard
@@ -2619,8 +2645,12 @@ struct TypesetWorkspaceView: View {
                 guard languageRequestID == requestID, selectedPath == path else { return }
                 completionItems = completions
                 selectedCompletionIndex = 0
-                signatureHelp = signature
-                hoverInfo = Self.filteredHover(hover, in: text)
+                presentPassiveHelp(
+                    signature: signature,
+                    hover: Self.filteredHover(hover, in: text),
+                    at: range.location,
+                    in: text
+                )
             }
         }
     }
@@ -2640,9 +2670,11 @@ struct TypesetWorkspaceView: View {
             in: sourceText
         )
         let text = sourceText
+        let showsHelp = showHelpAutomatically
         let requestID = UUID()
         await MainActor.run {
             languageRequestID = requestID
+            lapseDismissedHelp(at: range.location, in: text)
         }
         let shouldComplete = forceCompletion || (allowAutomaticCompletion && Self.shouldRequestCompletion(in: text, at: range.location))
         typesetLSPDebug(
@@ -2652,19 +2684,67 @@ struct TypesetWorkspaceView: View {
         let completions = Self.filteredCompletions(rawCompletions, in: text, at: range.location)
         typesetLSPDebug("direct completions raw=\(rawCompletions.count) filtered=\(completions.count)")
         let prefersHover = Self.isFunctionCallee(at: range.location, in: text)
-        let signature = completions.isEmpty && !prefersHover
+        let signature = showsHelp && completions.isEmpty && !prefersHover
             ? await languageService.signatureHelp(path: path, utf16Offset: range.location)
             : nil
         typesetLSPDebug("direct signature=\(signature?.signatures.first?.label ?? "none")")
-        let hover = completions.isEmpty && signature == nil && !forceCompletion ? await languageService.hover(path: path, utf16Offset: range.location) : nil
+        let hover = showsHelp && completions.isEmpty && signature == nil && !forceCompletion
+            ? await languageService.hover(path: path, utf16Offset: range.location)
+            : nil
         typesetLSPDebug("direct hover=\(hover?.text ?? "none")")
         await MainActor.run {
             guard languageRequestID == requestID, selectedPath == path else { return }
             completionItems = completions
             selectedCompletionIndex = 0
-            signatureHelp = signature
-            hoverInfo = Self.filteredHover(hover, in: text)
+            presentPassiveHelp(
+                signature: signature,
+                hover: Self.filteredHover(hover, in: text),
+                at: range.location,
+                in: text
+            )
         }
+    }
+
+    /// Shows the help a passive request found — unless automatic help is
+    /// turned off (a request already under way when it was is caught here),
+    /// or the user dismissed help for the same thing with Escape and the caret
+    /// has not left it since (see `dismissLanguageHelp`).
+    private func presentPassiveHelp(
+        signature: TypstSignatureHelp?,
+        hover: TypstHoverInfo?,
+        at location: Int,
+        in text: String
+    ) {
+        let subject = TypstHelpSubject(signature: signature, hover: hover, caret: location, in: text)
+        let isHidden = !showHelpAutomatically || subject.map(dismissedHelpSubjects.contains) ?? false
+        signatureHelp = isHidden ? nil : signature
+        hoverInfo = isHidden ? nil : hover
+    }
+
+    /// Forgets the dismissals whose subject the caret has left, so that
+    /// coming back to one shows its help again.
+    private func lapseDismissedHelp(at location: Int, in text: String) {
+        guard !dismissedHelpSubjects.isEmpty else { return }
+        dismissedHelpSubjects = dismissedHelpSubjects.filter { $0.contains(caret: location, in: text) }
+    }
+
+    /// Escape on a help popover. Passive help is requested again on every
+    /// keystroke and caret move, so hiding it alone would last one keystroke:
+    /// this also remembers what the help was about, and the popover stays
+    /// away until the caret has left that call (or symbol) and come back.
+    /// Help for anything else — a call nested inside it, say — still shows.
+    private func dismissLanguageHelp() {
+        if let subject = TypstHelpSubject(
+            signature: signatureHelp,
+            hover: hoverInfo,
+            caret: sourceCaretLocation,
+            in: sourceText
+        ) {
+            dismissedHelpSubjects.insert(subject)
+        }
+        dismissManualLanguageHelp()
+        signatureHelp = nil
+        hoverInfo = nil
     }
 
     private func showFunctionHelp(at range: NSRange) {
@@ -3069,6 +3149,8 @@ struct TypesetWorkspaceView: View {
         )
         let requestID = UUID()
         isManualLanguageHelpPresented = true
+        // Asking for help outright takes back an earlier Escape.
+        dismissedHelpSubjects = []
         languageRequestID = requestID
         sourceCaretLocation = offset
         completionItems = []
@@ -3510,35 +3592,10 @@ struct TypesetWorkspaceView: View {
     /// its parentheses requests signature help. This mirrors editor LSP clients
     /// and keeps the compact signature from masking the full function docs.
     private static func isFunctionCallee(at location: Int, in text: String) -> Bool {
-        let nsText = text as NSString
-        let length = nsText.length
-        guard length > 0 else { return false }
-        let location = min(max(0, location), length)
-        var probe = location
-        if probe == length || !isCompletionCharacter(nsText.character(at: probe)) {
-            guard probe > 0, isCompletionCharacter(nsText.character(at: probe - 1)) else {
-                return false
-            }
-            probe -= 1
-        }
-
-        var start = probe
-        while start > 0, isCompletionCharacter(nsText.character(at: start - 1)) {
-            start -= 1
-        }
-        var end = probe + 1
-        while end < length, isCompletionCharacter(nsText.character(at: end)) {
-            end += 1
-        }
-        var next = end
-        while next < length, CharacterSet.whitespacesAndNewlines.contains(UnicodeScalar(nsText.character(at: next)) ?? "\0") {
-            next += 1
-        }
-        guard next < length, nsText.character(at: next) == 40 else { return false }
         // Whether this syntactic call-shaped token is actually Typst code is a
         // semantic question. Let the language service decide; its syntax tree
         // correctly handles multiline code blocks, strings, and markup prose.
-        return true
+        TypstHelpSubject.calleeOpenParen(at: location, in: text) != nil
     }
 
     private static func completionPrefixLength(in nsText: NSString, endingAt location: Int) -> Int {
@@ -4288,6 +4345,7 @@ struct TypesetWorkspaceView: View {
         clearCompletions()
         hoverInfo = nil
         signatureHelp = nil
+        dismissedHelpSubjects = []
         activeEditParagraph = nil
         syncLanguageServiceWorkspace()
         refreshPreview()

@@ -189,6 +189,109 @@ import Testing
     #expect(help?.signatures.first?.parameters[1].label == "caption")
 }
 
+@Test func basicLanguageServiceNamesTheCallItsSignatureHelpDescribes() async {
+    let service = BasicTypstLanguageService()
+    let text = "#figure(image(\"a.svg\"), caption: [Atom])"
+    await service.updateFile(path: "main.typ", text: text)
+
+    let outer = await service.signatureHelp(path: "main.typ", utf16Offset: 30)
+    let inner = await service.signatureHelp(path: "main.typ", utf16Offset: 14)
+
+    #expect(outer?.callLocation == (text as NSString).range(of: "figure(").upperBound - 1)
+    #expect(inner?.callLocation == (text as NSString).range(of: "image(").upperBound - 1)
+}
+
+@Test func helpSubjectIsTheCallForSignatureHelpAndForItsCalleeName() {
+    let text = "#figure(image(\"a.svg\"), caption: [Atom])"
+    let ns = text as NSString
+    let figureParen = ns.range(of: "figure(").upperBound - 1
+    let signature = TypstSignatureHelp(
+        signatures: [TypstSignatureInformation(label: "figure(body)")],
+        callLocation: figureParen
+    )
+    let hover = TypstHoverInfo(range: ns.range(of: "figure"), text: "A figure.")
+
+    // Among the arguments it is signature help; on the name, the reference.
+    // Both are help for the one call.
+    #expect(TypstHelpSubject(signature: signature, hover: nil, caret: 30, in: text) == .call(openParen: figureParen))
+    #expect(TypstHelpSubject(signature: nil, hover: hover, caret: 3, in: text) == .call(openParen: figureParen))
+    #expect(TypstHelpSubject(signature: nil, hover: nil, caret: 3, in: text) == nil)
+}
+
+@Test func helpSubjectFallsBackToTheLineAndTheSymbol() {
+    let text = "Intro\n#import \"utils.typ\": rect\n#let size = total"
+    let ns = text as NSString
+    let keyword = TypstSignatureHelp(signatures: [TypstSignatureInformation(label: "#import \"utils.typ\": rect")])
+    let importLine = ns.range(of: "#import").location
+    let total = ns.range(of: "total")
+    let hover = TypstHoverInfo(range: total, text: "A length.")
+
+    let line = TypstHelpSubject(signature: keyword, hover: nil, caret: ns.range(of: "rect").location, in: text)
+    #expect(line == .line(start: importLine))
+    #expect(line?.contains(caret: importLine + 3, in: text) == true)
+    #expect(line?.contains(caret: 2, in: text) == false)
+
+    let symbol = TypstHelpSubject(signature: nil, hover: hover, caret: total.location + 2, in: text)
+    #expect(symbol == .symbol(total))
+    #expect(symbol?.contains(caret: total.upperBound, in: text) == true)
+    #expect(symbol?.contains(caret: total.location - 2, in: text) == false)
+}
+
+@Test func helpSubjectCallContainsItsNameAndArgumentsOnly() {
+    let text = "#figure(image(\"a) .svg\"), caption: [Atom]) and #figure(rect())"
+    let ns = text as NSString
+    let figureParen = ns.range(of: "figure(").upperBound - 1
+    let imageParen = ns.range(of: "image(").upperBound - 1
+    let figure = TypstHelpSubject.call(openParen: figureParen)
+    let closing = ns.range(of: "[Atom])").upperBound - 1
+
+    // On the callee name, and just before the parenthesis.
+    #expect(figure.contains(caret: 1, in: text))
+    #expect(figure.contains(caret: figureParen, in: text))
+    #expect(!figure.contains(caret: 0, in: text))
+    // Among the arguments — a nested call's included, and a `)` inside a
+    // string is not the call's own.
+    #expect(figure.contains(caret: figureParen + 1, in: text))
+    #expect(figure.contains(caret: imageParen + 4, in: text))
+    #expect(figure.contains(caret: closing, in: text))
+    // Past the closing parenthesis, and in another call of the same function.
+    #expect(!figure.contains(caret: closing + 1, in: text))
+    #expect(!figure.contains(caret: ns.length - 1, in: text))
+
+    // The nested call ends at its own parenthesis, still inside the outer one.
+    let image = TypstHelpSubject.call(openParen: imageParen)
+    let afterImage = ns.range(of: ", caption").location
+    #expect(image.contains(caret: afterImage - 1, in: text))
+    #expect(!image.contains(caret: afterImage, in: text))
+    #expect(figure.contains(caret: afterImage, in: text))
+}
+
+@Test func helpSubjectCallContainsItsWholeDottedName() {
+    let text = "#let m = calc.max(1, 2) + (3)"
+    let ns = text as NSString
+    let subject = TypstHelpSubject.call(openParen: ns.range(of: "max(").upperBound - 1)
+
+    #expect(subject.contains(caret: ns.range(of: "calc").location, in: text))
+    #expect(subject.contains(caret: ns.range(of: "max").location + 1, in: text))
+    #expect(!subject.contains(caret: ns.range(of: "calc").location - 1, in: text))
+    // A parenthesis no name leads up to is not a call to be on the name of.
+    let group = TypstHelpSubject.call(openParen: ns.range(of: "(3").location)
+    #expect(!group.contains(caret: ns.range(of: "(3").location, in: text))
+    #expect(group.contains(caret: ns.range(of: "(3").location + 1, in: text))
+}
+
+@Test func helpSubjectCallLapsesWhenItsParenthesisMoves() {
+    let before = "#text(fill: red)"
+    let paren = (before as NSString).range(of: "(").location
+    let subject = TypstHelpSubject.call(openParen: paren)
+
+    // Typing among the arguments leaves the parenthesis where it was…
+    #expect(subject.contains(caret: 16, in: "#text(fill: red, size: 1)"))
+    // …while an edit ahead of it moves it, which reads as having left.
+    #expect(!subject.contains(caret: 12, in: "= #text(fill: red)"))
+    #expect(!subject.contains(caret: 40, in: before))
+}
+
 @Test func basicLanguageServiceSuppressesPlainTextSymbolHover() async {
     let service = BasicTypstLanguageService()
     await service.updateFile(path: "main.typ", text: "This is plain text")
@@ -242,6 +345,36 @@ import Testing
     #expect(preparation?.range == (main as NSString).range(of: "greet", options: .backwards))
     #expect(edit?.files.map(\.path).sorted() == ["defs.typ", "main.typ"])
     #expect(edit?.files.first(where: { $0.path == "main.typ" })?.edits.count == 2)
+}
+
+@Test func embeddedLanguageServiceReportsTheCallLocationInUTF16() async {
+    let service = EmbeddedLanguageService()
+    let text = "Café 😀 #image(\"plot.svg\") #image(\"other.svg\", width: 50%)"
+    let ns = text as NSString
+    let first = ns.range(of: "image(").upperBound - 1
+    let second = ns.range(of: "image(", options: .backwards).upperBound - 1
+    await service.updateFile(path: "main.typ", text: text)
+
+    // Inside the string argument, where the caret usually is.
+    let inFirst = await service.signatureHelp(path: "main.typ", utf16Offset: first + 4)
+    let inSecond = await service.signatureHelp(path: "main.typ", utf16Offset: ns.range(of: "width").location)
+    let keyword = await service.signatureHelp(path: "main.typ", utf16Offset: 2)
+
+    #expect(inFirst?.signatures.first?.label.hasPrefix("image(") == true)
+    #expect(inFirst?.callLocation == first)
+    #expect(inSecond?.callLocation == second)
+    #expect(keyword == nil)
+}
+
+@Test func embeddedLanguageServiceLeavesKeywordHelpWithoutACallLocation() async {
+    let service = EmbeddedLanguageService()
+    let text = "#import \"utils.typ\": rect"
+    await service.updateFile(path: "main.typ", text: text)
+
+    let help = await service.signatureHelp(path: "main.typ", utf16Offset: (text as NSString).length)
+
+    #expect(help?.signatures.isEmpty == false)
+    #expect(help?.callLocation == nil)
 }
 
 @Test func embeddedLanguageServiceReturnsNestedSelectionRangesInUTF16() async {

@@ -46,6 +46,8 @@ struct PlatformTextView: NSViewRepresentable {
     var onCompletionMove: (Int) -> Void
     var onCompletionAccept: () -> Void
     var onCompletionDismiss: () -> Void
+    var isHelpPresented: Bool
+    var onHelpDismiss: () -> Void
     var onShowFunctionHelp: (NSRange, CGPoint) -> Void
     var onShowSignatureHelp: (NSRange, CGPoint) -> Void
     var onGoToDefinition: (NSRange, CGPoint) -> Void
@@ -157,6 +159,8 @@ struct PlatformTextView: NSViewRepresentable {
         context.coordinator.onCompletionMove = onCompletionMove
         context.coordinator.onCompletionAccept = onCompletionAccept
         context.coordinator.onCompletionDismiss = onCompletionDismiss
+        context.coordinator.isHelpPresented = isHelpPresented
+        context.coordinator.onHelpDismiss = onHelpDismiss
         context.coordinator.onLanguageOverlayAnchorChange = onLanguageOverlayAnchorChange
         // Typeset paints spelling indicators itself, but lets AppKit own the
         // correction indicator and Escape-to-reject interaction. Delegate
@@ -287,6 +291,8 @@ struct PlatformTextView: NSViewRepresentable {
             onCompletionMove: onCompletionMove,
             onCompletionAccept: onCompletionAccept,
             onCompletionDismiss: onCompletionDismiss,
+            isHelpPresented: isHelpPresented,
+            onHelpDismiss: onHelpDismiss,
             onLanguageOverlayAnchorChange: onLanguageOverlayAnchorChange,
             isPackageDropTargeted: $isPackageDropTargeted
         )
@@ -444,6 +450,8 @@ struct PlatformTextView: NSViewRepresentable {
         var onCompletionMove: (Int) -> Void
         var onCompletionAccept: () -> Void
         var onCompletionDismiss: () -> Void
+        var isHelpPresented: Bool
+        var onHelpDismiss: () -> Void
         var onLanguageOverlayAnchorChange: (CGPoint) -> Void
         var isPackageDropTargeted: Binding<Bool>
         private var isApplyingHighlighting = false
@@ -495,6 +503,8 @@ struct PlatformTextView: NSViewRepresentable {
             onCompletionMove: @escaping (Int) -> Void,
             onCompletionAccept: @escaping () -> Void,
             onCompletionDismiss: @escaping () -> Void,
+            isHelpPresented: Bool,
+            onHelpDismiss: @escaping () -> Void,
             onLanguageOverlayAnchorChange: @escaping (CGPoint) -> Void,
             isPackageDropTargeted: Binding<Bool>
         ) {
@@ -519,6 +529,8 @@ struct PlatformTextView: NSViewRepresentable {
             self.onCompletionMove = onCompletionMove
             self.onCompletionAccept = onCompletionAccept
             self.onCompletionDismiss = onCompletionDismiss
+            self.isHelpPresented = isHelpPresented
+            self.onHelpDismiss = onHelpDismiss
             self.onLanguageOverlayAnchorChange = onLanguageOverlayAnchorChange
             self.isPackageDropTargeted = isPackageDropTargeted
         }
@@ -734,7 +746,7 @@ struct PlatformTextView: NSViewRepresentable {
         }
 
         func handleCompletionKey(_ event: NSEvent) -> Bool {
-            guard isCompletionPresented else { return false }
+            guard isCompletionPresented else { return handleHelpKey(event) }
             switch event.keyCode {
             case 125:
                 onCompletionMove(1)
@@ -751,6 +763,18 @@ struct PlatformTextView: NSViewRepresentable {
             default:
                 return false
             }
+        }
+
+        /// A bare Escape sends the help popover away. Left alone while an
+        /// input method is composing, where Escape cancels the composition,
+        /// and with a modifier held (Option-Escape is the system's completion
+        /// list).
+        private func handleHelpKey(_ event: NSEvent) -> Bool {
+            guard isHelpPresented, event.keyCode == 53,
+                  event.modifierFlags.isDisjoint(with: [.command, .option, .control, .shift]),
+                  textView?.hasMarkedText() != true else { return false }
+            onHelpDismiss()
+            return true
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {

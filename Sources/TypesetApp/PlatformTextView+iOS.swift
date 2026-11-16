@@ -40,6 +40,8 @@ struct PlatformTextView: UIViewRepresentable {
     var onCompletionMove: (Int) -> Void
     var onCompletionAccept: () -> Void
     var onCompletionDismiss: () -> Void
+    var isHelpPresented: Bool
+    var onHelpDismiss: () -> Void
     var onShowFunctionHelp: (NSRange, CGPoint) -> Void
     var onShowSignatureHelp: (NSRange, CGPoint) -> Void
     var onGoToDefinition: (NSRange, CGPoint) -> Void
@@ -88,6 +90,8 @@ struct PlatformTextView: UIViewRepresentable {
             coordinator?.handleCompletionKey(action) == true
         }
         textView.isCompletionPresented = isCompletionPresented
+        textView.isHelpPresented = isHelpPresented
+        textView.onHelpDismiss = onHelpDismiss
         context.coordinator.textView = textView
         context.coordinator.applyHighlighting(to: textView, text: text)
         return textView
@@ -135,6 +139,8 @@ struct PlatformTextView: UIViewRepresentable {
                 coordinator?.handleCompletionKey(action) == true
             }
             packageTextView.isCompletionPresented = isCompletionPresented
+            packageTextView.isHelpPresented = isHelpPresented
+            packageTextView.onHelpDismiss = onHelpDismiss
         }
         context.coordinator.isPackageDropTargeted = $isPackageDropTargeted
         context.coordinator.updateFontSize(fontSize, in: textView)
@@ -1424,6 +1430,8 @@ struct PlatformTextView: UIViewRepresentable {
         var onPasteExternalFile: ((URL) -> String?)?
         var onCompletionKey: ((CompletionKeyAction) -> Bool)?
         var isCompletionPresented = false
+        var onHelpDismiss: (() -> Void)?
+        var isHelpPresented = false
 
         /// Compiler diagnostics rendered inline. UITextView lays out (and
         /// scrolls) text in content-space sublayers, so decorations are overlay
@@ -1676,7 +1684,16 @@ struct PlatformTextView: UIViewRepresentable {
         }
 
         override var keyCommands: [UIKeyCommand]? {
-            guard isCompletionPresented else { return super.keyCommands }
+            guard isCompletionPresented else {
+                // Escape sends the help popover away. Like the list's keys
+                // below, the command exists only while there is help to
+                // dismiss — and not mid-composition, where Escape belongs to
+                // the input method.
+                guard isHelpPresented, markedTextRange == nil else { return super.keyCommands }
+                let dismiss = UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(dismissHelp))
+                dismiss.wantsPriorityOverSystemBehavior = true
+                return [dismiss] + (super.keyCommands ?? [])
+            }
             let commands = [
                 UIKeyCommand(input: UIKeyCommand.inputDownArrow, modifierFlags: [], action: #selector(moveCompletionDown)),
                 UIKeyCommand(input: UIKeyCommand.inputUpArrow, modifierFlags: [], action: #selector(moveCompletionUp)),
@@ -1709,6 +1726,10 @@ struct PlatformTextView: UIViewRepresentable {
 
         @objc private func dismissCompletion() {
             _ = onCompletionKey?(.dismiss)
+        }
+
+        @objc private func dismissHelp() {
+            onHelpDismiss?()
         }
 
         /// A plain-text `UITextView` only offers Paste when the pasteboard

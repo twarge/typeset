@@ -274,17 +274,162 @@ public struct TypstSignatureHelp: Equatable, Codable, Sendable {
     /// Link to the function's page on typst.app, when it is a standard-library
     /// function with official documentation.
     public var documentationURL: URL?
+    /// UTF-16 location of the opening parenthesis of the call this describes,
+    /// which tells one call from another of the same function. `nil` for a
+    /// keyword construct (`#import …`), which has no parenthesis of its own.
+    public var callLocation: Int?
 
     public init(
         signatures: [TypstSignatureInformation],
         activeSignature: Int = 0,
         activeParameter: Int = 0,
-        documentationURL: URL? = nil
+        documentationURL: URL? = nil,
+        callLocation: Int? = nil
     ) {
         self.signatures = signatures
         self.activeSignature = activeSignature
         self.activeParameter = activeParameter
         self.documentationURL = documentationURL
+        self.callLocation = callLocation
+    }
+}
+
+/// What a help popover describes — the thing a dismissal of it sticks to. Help
+/// the user sends away should stay away while they keep working on what it
+/// described, and is welcome back once they have left and returned.
+public enum TypstHelpSubject: Hashable, Sendable {
+    /// A call, named by the location of its `(`: signature help among its
+    /// arguments, or the reference shown on its callee name.
+    case call(openParen: Int)
+    /// A keyword construct (`#import …`, `#let …`), which has no parenthesis
+    /// of its own, named by the start of the caret's line.
+    case line(start: Int)
+    /// Any other documented symbol, by the range the documentation covers.
+    case symbol(NSRange)
+
+    /// The subject of the help that a request at `caret` produced, or `nil`
+    /// when it produced none.
+    public init?(signature: TypstSignatureHelp?, hover: TypstHoverInfo?, caret: Int, in text: String) {
+        let nsText = text as NSString
+        let caret = min(max(0, caret), nsText.length)
+        if let signature, !signature.signatures.isEmpty {
+            if let openParen = signature.callLocation {
+                self = .call(openParen: openParen)
+            } else {
+                self = .line(start: nsText.lineRange(for: NSRange(location: caret, length: 0)).location)
+            }
+        } else if let hover, !hover.text.isEmpty {
+            if let openParen = Self.calleeOpenParen(at: caret, in: text) {
+                self = .call(openParen: openParen)
+            } else {
+                self = .symbol(hover.range)
+            }
+        } else {
+            return nil
+        }
+    }
+
+    /// Whether `caret` is still on this subject in `text`. Locations are not
+    /// carried across edits: typing among a call's arguments leaves its `(`
+    /// where it was, and an edit that does move the subject reads as having
+    /// left it, which only lets the help back early.
+    public func contains(caret: Int, in text: String) -> Bool {
+        let nsText = text as NSString
+        let length = nsText.length
+        guard caret >= 0, caret <= length else { return false }
+        switch self {
+        case .call(let openParen):
+            guard openParen >= 0, openParen < length, nsText.character(at: openParen) == 40 else {
+                return false
+            }
+            if caret <= openParen {
+                return caret >= Self.calleeStart(beforeOpenParen: openParen, in: nsText)
+            }
+            return Self.isCallOpen(at: openParen, upTo: caret, in: nsText)
+        case .line(let start):
+            return nsText.lineRange(for: NSRange(location: caret, length: 0)).location == start
+        case .symbol(let range):
+            return caret >= range.location && caret <= NSMaxRange(range)
+        }
+    }
+
+    /// The location of the `(` that follows the identifier `location` touches,
+    /// when there is one: the caret is on the callee name of a call-shaped
+    /// token. Whether that token is actually Typst code is a semantic
+    /// question, which the language service answers.
+    public static func calleeOpenParen(at location: Int, in text: String) -> Int? {
+        let nsText = text as NSString
+        let length = nsText.length
+        guard length > 0 else { return nil }
+        let location = min(max(0, location), length)
+        var probe = location
+        if probe == length || !isIdentifierCharacter(nsText.character(at: probe)) {
+            guard probe > 0, isIdentifierCharacter(nsText.character(at: probe - 1)) else {
+                return nil
+            }
+            probe -= 1
+        }
+
+        var end = probe + 1
+        while end < length, isIdentifierCharacter(nsText.character(at: end)) {
+            end += 1
+        }
+        var next = end
+        while next < length, CharacterSet.whitespacesAndNewlines.contains(UnicodeScalar(nsText.character(at: next)) ?? "\0") {
+            next += 1
+        }
+        guard next < length, nsText.character(at: next) == 40 else { return nil }
+        return next
+    }
+
+    /// Where the name of the call opened at `openParen` begins — the whole
+    /// dotted name (`calc.max`), which is what signature help is shown for —
+    /// or past the parenthesis when no name leads up to it.
+    private static func calleeStart(beforeOpenParen openParen: Int, in text: NSString) -> Int {
+        var end = openParen
+        while end > 0, CharacterSet.whitespaces.contains(UnicodeScalar(text.character(at: end - 1)) ?? "\0") {
+            end -= 1
+        }
+        var start = end
+        while start > 0, isIdentifierCharacter(text.character(at: start - 1)) || text.character(at: start - 1) == 46 {
+            start -= 1
+        }
+        return start < end ? start : openParen + 1
+    }
+
+    /// Whether nothing between the `(` at `openParen` and `caret` closes it.
+    /// This reads the text the way the language service does when it picks
+    /// the call to describe — parentheses counted outside strings and raw
+    /// text — so the two agree on where a call ends.
+    private static func isCallOpen(at openParen: Int, upTo caret: Int, in text: NSString) -> Bool {
+        var depth = 0
+        var inString = false
+        var inRaw = false
+        var escaped = false
+        for index in (openParen + 1)..<caret {
+            let character = text.character(at: index)
+            if escaped {
+                escaped = false
+            } else if character == 92, inString { // backslash
+                escaped = true
+            } else if character == 34, !inRaw { // "
+                inString.toggle()
+            } else if character == 96, !inString { // `
+                inRaw.toggle()
+            } else if inString || inRaw {
+                continue
+            } else if character == 40 {
+                depth += 1
+            } else if character == 41 {
+                guard depth > 0 else { return false }
+                depth -= 1
+            }
+        }
+        return true
+    }
+
+    private static func isIdentifierCharacter(_ character: unichar) -> Bool {
+        CharacterSet.alphanumerics.contains(UnicodeScalar(character) ?? "\0") || character == 95 || character == 45
     }
 }
 
@@ -781,7 +926,10 @@ public actor EmbeddedLanguageService: TypstLanguageService {
             },
             activeSignature: signatureHelp.activeSignature,
             activeParameter: signatureHelp.activeParameter,
-            documentationURL: signatureHelp.documentationUrl.flatMap(URL.init(string:))
+            documentationURL: signatureHelp.documentationUrl.flatMap(URL.init(string:)),
+            callLocation: signatureHelp.callStart.map {
+                TypstSourceOffsetConverter.utf16Range(fromUTF8Start: $0, endUTF8: $0, in: text).location
+            }
         )
         TypstLanguageDebug.log("signature Rust result=\(result.signatures.first?.label ?? "none") activeParameter=\(result.activeParameter)")
         return result
@@ -1215,12 +1363,14 @@ private struct FFISignatureHelp: Decodable {
     var activeSignature: Int
     var activeParameter: Int
     var documentationUrl: String?
+    var callStart: Int?
 
     enum CodingKeys: String, CodingKey {
         case signatures
         case activeSignature = "active_signature"
         case activeParameter = "active_parameter"
         case documentationUrl = "documentation_url"
+        case callStart = "call_start"
     }
 }
 
@@ -1497,6 +1647,7 @@ private enum TypstCompletionPathSupport {
 private enum TypstSignatureHelpProvider {
     private struct CallContext {
         var functionName: String
+        var openParen: Int
         var activeParameter: Int
         var activeParameterName: String?
     }
@@ -1602,7 +1753,8 @@ private enum TypstSignatureHelpProvider {
         return TypstSignatureHelp(
             signatures: [signature],
             activeSignature: 0,
-            activeParameter: activeParameter
+            activeParameter: activeParameter,
+            callLocation: context.openParen
         )
     }
 
@@ -1686,6 +1838,7 @@ private enum TypstSignatureHelpProvider {
         }
         return CallContext(
             functionName: functionName,
+            openParen: openParen,
             activeParameter: activeParameter,
             activeParameterName: activeParameterName
         )

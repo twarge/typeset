@@ -32,6 +32,7 @@ struct WorkspaceSettingsPane: View {
     @Binding var previewAutoRetriggerDelay: Double
     @Binding var windowChromePreference: WindowChromePreference
     @Binding var holdErrorPopupWhileEditing: Bool
+    @Binding var showHelpAutomatically: Bool
     // Shares the editor's persisted font-size key, so this control and any
     // open editor stay in sync.
     @AppStorage("sourceEditor.fontSize") private var editorFontSize = SourceEditorFont.defaultSize
@@ -114,6 +115,13 @@ struct WorkspaceSettingsPane: View {
                 Toggle("Hold Error Popups While Editing", isOn: $holdErrorPopupWhileEditing)
 
                 Text("Errors in the paragraph you're editing keep their line tint, but the message popup waits until the caret leaves the paragraph.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Toggle("Show Function Help Automatically", isOn: $showHelpAutomatically)
+
+                Text("A function's signature and documentation pop up when the caret is on it; Escape hides the popup until the caret leaves the function. When this is off, use Show Function Help in the editor's context menu.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

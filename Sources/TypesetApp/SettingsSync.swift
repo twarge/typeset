@@ -26,6 +26,7 @@ final class SettingsSync {
         "sourceEditor.figureInsertTemplate",
         "sourceEditor.tableInsertTemplate",
         "editor.holdErrorPopupWhileEditing",
+        "editor.showHelpAutomatically",
         "preview.renderWarmupDelay",
         "preview.autoRetriggerDelay",
     ]

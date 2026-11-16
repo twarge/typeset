@@ -26,6 +26,7 @@ struct TypesetApp: App {
             "preview.renderWarmupDelay": 0.5,
             "preview.autoRetriggerDelay": 0.5,
             "editor.holdErrorPopupWhileEditing": true,
+            "editor.showHelpAutomatically": true,
             "developer.lspDebugLogging": false
         ])
         // Tips are shown once each and remembered across launches; a failure
