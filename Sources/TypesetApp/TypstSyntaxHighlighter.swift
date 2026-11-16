@@ -254,6 +254,14 @@ enum TypstSyntaxHighlighter {
 
         while index < scalars.count {
             let scalar = scalars[index]
+
+            // A backslash escapes the character after it, so `\$`, `\#`, `\*`,
+            // `\_`, `\<`, `\@`, `\"` and `\/` are literal text and open nothing.
+            if scalar == "\\" {
+                index += 2
+                continue
+            }
+
             if scalar == "/" && index + 1 < scalars.count && scalars[index + 1] == "/" {
                 append(.comment, from: index, to: scalars.count)
                 return
@@ -385,9 +393,15 @@ enum TypstSyntaxHighlighter {
 
     /// The index just past the next `delimiter`, or `nil` when the rest of the
     /// line has none — callers decide whether an unterminated run is styled.
+    /// A backslash-escaped delimiter (`\$` inside math, `\*` inside strong
+    /// text) does not close the run.
     nonisolated private static func scanUntil(_ scalars: [Unicode.Scalar], from start: Int, delimiter: Unicode.Scalar) -> Int? {
         var index = start
         while index < scalars.count {
+            if scalars[index] == "\\" {
+                index += 2
+                continue
+            }
             if scalars[index] == delimiter {
                 return index + 1
             }
