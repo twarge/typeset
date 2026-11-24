@@ -93,7 +93,11 @@ final class SettingsSync {
 /// Reports arrive at most once a day, on a later launch. Each is written as
 /// JSON under `Application Support/Typeset/Diagnostics`, newest twenty kept,
 /// and never leaves the device unless the user sends it.
-final class DiagnosticReports: NSObject, MXMetricManagerSubscriber {
+///
+/// Not main-actor isolated, unlike the rest of the module (see
+/// `SWIFT_DEFAULT_ACTOR_ISOLATION`): MetricKit delivers payloads on its own
+/// queue, and the isolation check traps when it lands on `didReceive`.
+nonisolated final class DiagnosticReports: NSObject, MXMetricManagerSubscriber, Sendable {
     static let shared = DiagnosticReports()
 
     private static let logger = Logger(subsystem: "com.twarge.app.typeset", category: "diagnostics")
