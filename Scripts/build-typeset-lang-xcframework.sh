@@ -123,6 +123,14 @@ fi
 
 export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$ROOT_DIR=. --remap-path-prefix=${HOME:-$ROOT_DIR}=~"
 
+# Compile the whole crate graph with one compiler. rustup's proxy honours a
+# rust-toolchain.toml in the directory cargo runs rustc from, and the registry
+# crate pic-scale ships one pinning nightly. That built pic-scale with nightly
+# while its dependencies were built with stable, and rustc refuses to link
+# crates from different compilers ("compiled by an incompatible version of
+# rustc"). Nothing here needs nightly: pic-scale's nightly_* features are opt-in.
+export RUSTUP_TOOLCHAIN=stable
+
 build_target() {
   local rust_target="$1"
   local sdk="$2"
