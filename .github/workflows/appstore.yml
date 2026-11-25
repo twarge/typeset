@@ -150,7 +150,7 @@ jobs:
           elif [[ -n "$INPUT_VERSION" ]]; then
             VERSION="$INPUT_VERSION"
           else
-            VERSION=$(sed -n 's/.*MARKETING_VERSION = \([0-9.][0-9.]*\);.*/\1/p' Typeset.xcodeproj/project.pbxproj | head -1)
+            VERSION=$(sed -n 's/.*"MARKETING_VERSION": "\([0-9.][0-9.]*\)".*/\1/p' Typeset.xcodeproj/project.xcproj | head -1)
           fi
           [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]] || { echo "::error::Resolved version '$VERSION' is not a plain version number (tag like v1.4)"; exit 1; }
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"

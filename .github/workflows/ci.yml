@@ -43,6 +43,5 @@ jobs:
             -scheme Typeset \
             -configuration Debug \
             -destination 'platform=macOS' \
-            -derivedDataPath build/Xcode \
             CODE_SIGNING_ALLOWED=NO \
             test
