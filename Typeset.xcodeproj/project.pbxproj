@@ -19,12 +19,14 @@
 		100000000000000000000009 /* TypesetCore.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		10000000000000000000000A /* DocumentPackageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000108 /* DocumentPackageTests.swift */; };
 		100000000000000000000E1 /* TextSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001E0 /* TextSearchTests.swift */; };
+		1000000000000000000A0F02 /* PreviewSourceLocatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000A0F12 /* PreviewSourceLocatorTests.swift */; };
 		100000000000000000000E2 /* TypstLanguageServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001E1 /* TypstLanguageServiceTests.swift */; };
 		100000000000000000000E3 /* TypstBundledFontsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001E2 /* TypstBundledFontsTests.swift */; };
 		10000000000000000000000B /* TypesetCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; };
 		10000000000000000000000C /* TypstLanguageService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000010C /* TypstLanguageService.swift */; };
 		10000000000000000000000D /* LanguageWorkspaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000010D /* LanguageWorkspaceStore.swift */; };
 		10000000000000000000000F /* TextSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000110 /* TextSearch.swift */; };
+		1000000000000000000A0F01 /* PreviewSourceLocator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000A0F11 /* PreviewSourceLocator.swift */; };
 		10000000000000000000000E /* Vendor/TypesetLang.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 10000000000000000000010E /* Vendor/TypesetLang.xcframework */; };
 		100000000000000000000020 /* Resources/Fonts/FiraCode/FiraCode-Light.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000120 /* Resources/Fonts/FiraCode/FiraCode-Light.ttf */; };
 		100000000000000000000021 /* Resources/Fonts/FiraCode/FiraCode-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000121 /* Resources/Fonts/FiraCode/FiraCode-Regular.ttf */; };
@@ -192,6 +194,7 @@
 		100000000000000000000107 /* TypstVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstVersion.swift; sourceTree = "<group>"; };
 		100000000000000000000108 /* DocumentPackageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentPackageTests.swift; sourceTree = "<group>"; };
 		1000000000000000000001E0 /* TextSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSearchTests.swift; sourceTree = "<group>"; };
+		1000000000000000000A0F12 /* PreviewSourceLocatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewSourceLocatorTests.swift; sourceTree = "<group>"; };
 		1000000000000000000001E2 /* TypstBundledFontsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstBundledFontsTests.swift; sourceTree = "<group>"; };
 		1000000000000000000001E1 /* TypstLanguageServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstLanguageServiceTests.swift; sourceTree = "<group>"; };
 		100000000000000000000109 /* Typeset-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Typeset-Info.plist"; sourceTree = "<group>"; };
@@ -209,6 +212,7 @@
 		200000000000000000000006 /* Resources/Acknowledgements/GPL-3.0.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Resources/Acknowledgements/GPL-3.0.txt"; sourceTree = SOURCE_ROOT; };
 		200000000000000000000007 /* Resources/Acknowledgements/EPL-2.0.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Resources/Acknowledgements/EPL-2.0.txt"; sourceTree = SOURCE_ROOT; };
 		100000000000000000000110 /* TextSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSearch.swift; sourceTree = "<group>"; };
+		1000000000000000000A0F11 /* PreviewSourceLocator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewSourceLocator.swift; sourceTree = "<group>"; };
 		100000000000000000000120 /* Resources/Fonts/FiraCode/FiraCode-Light.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Resources/Fonts/FiraCode/FiraCode-Light.ttf"; sourceTree = SOURCE_ROOT; };
 		100000000000000000000121 /* Resources/Fonts/FiraCode/FiraCode-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Resources/Fonts/FiraCode/FiraCode-Regular.ttf"; sourceTree = SOURCE_ROOT; };
 		100000000000000000000122 /* Resources/Fonts/FiraCode/FiraCode-Retina.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Resources/Fonts/FiraCode/FiraCode-Retina.ttf"; sourceTree = SOURCE_ROOT; };
@@ -349,6 +353,7 @@
 				10000000000000000000010C /* TypstLanguageService.swift */,
 				10000000000000000000010D /* LanguageWorkspaceStore.swift */,
 				100000000000000000000110 /* TextSearch.swift */,
+				1000000000000000000A0F11 /* PreviewSourceLocator.swift */,
 				100000000000000000000111 /* TypstBundledFonts.swift */,
 				200000000000000000000001 /* TypstPackageLibrary.swift */,
 			);
@@ -404,6 +409,7 @@
 			children = (
 				100000000000000000000108 /* DocumentPackageTests.swift */,
 				1000000000000000000001E0 /* TextSearchTests.swift */,
+				1000000000000000000A0F12 /* PreviewSourceLocatorTests.swift */,
 				1000000000000000000001E1 /* TypstLanguageServiceTests.swift */,
 				1000000000000000000001E2 /* TypstBundledFontsTests.swift */,
 				200000000000000000000002 /* TypstPackageLibraryTests.swift */,
@@ -734,6 +740,7 @@
 				10000000000000000000000C /* TypstLanguageService.swift in Sources */,
 				10000000000000000000000D /* LanguageWorkspaceStore.swift in Sources */,
 				10000000000000000000000F /* TextSearch.swift in Sources */,
+				1000000000000000000A0F01 /* PreviewSourceLocator.swift in Sources */,
 				100000000000000000000010 /* TypstBundledFonts.swift in Sources */,
 				200000000000000000000011 /* TypstPackageLibrary.swift in Sources */,
 			);
@@ -781,6 +788,7 @@
 			files = (
 				10000000000000000000000A /* DocumentPackageTests.swift in Sources */,
 				100000000000000000000E1 /* TextSearchTests.swift in Sources */,
+				1000000000000000000A0F02 /* PreviewSourceLocatorTests.swift in Sources */,
 				100000000000000000000E2 /* TypstLanguageServiceTests.swift in Sources */,
 				100000000000000000000E3 /* TypstBundledFontsTests.swift in Sources */,
 				200000000000000000000012 /* TypstPackageLibraryTests.swift in Sources */,

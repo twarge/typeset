@@ -207,6 +207,7 @@ struct TypesetWorkspaceView: View {
     @State private var languageSyncTask: Task<Void, Never>?
     @State private var pendingEditorState: PendingEditorState?
     @State private var editorStateSaveTask: Task<Void, Never>?
+    @State private var previewRevealRequest: PreviewRevealRequest?
     // Editor scroll restore: a token + fraction handed to the editor to scroll
     // back to where the document was left; and a debounced save of live scrolls.
     @State private var scrollRestoreToken = 0
@@ -1487,6 +1488,8 @@ struct TypesetWorkspaceView: View {
                     onShowFunctionHelp: showFunctionHelp,
                     onShowSignatureHelp: showSignatureHelp,
                     onGoToDefinition: { goToDefinition(at: $0) },
+                    onCommandClick: { handleCommandClick(at: $0) },
+                    onRevealInPreview: { revealInPreview(path: selectedPath, location: $0) },
                     onFindReferences: { findReferences(at: $0) },
                     onRenameSymbol: { beginSymbolRename(at: $0) },
                     onShowCodeActions: { showCodeActions(at: $0) },
@@ -1544,7 +1547,8 @@ struct TypesetWorkspaceView: View {
             revision: previewRevision,
             renderWarmupDelay: previewRenderWarmupDelay,
             restoredViewport: restoredPreviewViewport,
-            onViewportChange: handlePreviewViewportChange
+            onViewportChange: handlePreviewViewportChange,
+            revealRequest: previewRevealRequest
         ) { range in
             seek(to: range)
         }
@@ -2776,6 +2780,45 @@ struct TypesetWorkspaceView: View {
             guard selectedPath == path, sourceText == text else { return }
             jumpToSearchMatch(path: location.path, range: location.range)
         }
+    }
+
+    /// ⌘-click in the source: to the definition of the symbol clicked, when
+    /// it has one somewhere else; otherwise to the spot in the preview that
+    /// the clicked text came out at (prose, a built-in function, a
+    /// definition itself).
+    private func handleCommandClick(at location: Int) {
+        guard selectedFile?.isTextEditable == true else { return }
+        let path = selectedPath
+        let text = sourceText
+        guard let symbol = SourceEditorSymbol.range(in: text, at: location) else {
+            revealInPreview(path: path, location: location)
+            return
+        }
+        let offset = min((text as NSString).length, symbol.location + max(0, symbol.length - 1))
+        referenceLocations = []
+        Task { @MainActor in
+            await languageService.updateFile(path: path, text: text)
+            guard selectedPath == path, sourceText == text else { return }
+            let definition = await languageService.definition(path: path, utf16Offset: offset)
+            guard selectedPath == path, sourceText == text else { return }
+            if let definition,
+               definition.path != path || NSIntersectionRange(definition.range, symbol).length == 0 {
+                jumpToSearchMatch(path: definition.path, range: definition.range)
+            } else {
+                revealInPreview(path: path, location: location)
+            }
+        }
+    }
+
+    private func revealInPreview(path: String, location: Int) {
+        // Where only the source shows (by choice, or on a phone), the
+        // preview comes up for it.
+        if resolvedView == .source {
+            selectedView = isCompactWidth ? .preview : .both
+        }
+        previewRevealRequest = PreviewRevealRequest(
+            id: (previewRevealRequest?.id ?? 0) + 1, path: path, location: location
+        )
     }
 
     private func findReferences(at requestedRange: NSRange? = nil) {

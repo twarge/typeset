@@ -115,6 +115,8 @@ struct SourceEditor: View {
     var onShowFunctionHelp: (NSRange) -> Void = { _ in }
     var onShowSignatureHelp: (NSRange) -> Void = { _ in }
     var onGoToDefinition: (NSRange) -> Void = { _ in }
+    var onCommandClick: (Int) -> Void = { _ in }
+    var onRevealInPreview: (Int) -> Void = { _ in }
     var onFindReferences: (NSRange) -> Void = { _ in }
     var onRenameSymbol: (NSRange) -> Void = { _ in }
     var onShowCodeActions: (NSRange) -> Void = { _ in }
@@ -211,6 +213,8 @@ struct SourceEditor: View {
                 setLanguageOverlayAnchor(anchor)
                 onGoToDefinition(range)
             },
+            onCommandClick: onCommandClick,
+            onRevealInPreview: onRevealInPreview,
             onFindReferences: { range, anchor in
                 setLanguageOverlayAnchor(anchor)
                 onFindReferences(range)

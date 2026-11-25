@@ -55,6 +55,7 @@ struct PDFPreviewView: NSViewRepresentable {
     var renderWarmupDelay: TimeInterval
     var restoredViewport: PreviewViewport?
     var onViewportChange: (PreviewViewport) -> Void = { _ in }
+    var revealRequest: PreviewRevealRequest? = nil
     var onSeek: (SourceRange) -> Void
 
     func makeNSView(context: Context) -> BufferedPDFPreviewContainer {
@@ -63,6 +64,7 @@ struct PDFPreviewView: NSViewRepresentable {
 
     func updateNSView(_ container: BufferedPDFPreviewContainer, context: Context) {
         context.coordinator.update(preview: preview, revision: revision, renderWarmupDelay: renderWarmupDelay, restoredViewport: restoredViewport, onViewportChange: onViewportChange, onSeek: onSeek, in: container)
+        context.coordinator.reveal(revealRequest, in: container)
     }
 }
 #else
@@ -72,6 +74,7 @@ struct PDFPreviewView: UIViewRepresentable {
     var renderWarmupDelay: TimeInterval
     var restoredViewport: PreviewViewport?
     var onViewportChange: (PreviewViewport) -> Void = { _ in }
+    var revealRequest: PreviewRevealRequest? = nil
     var onSeek: (SourceRange) -> Void
 
     func makeUIView(context: Context) -> BufferedPDFPreviewContainer {
@@ -80,6 +83,7 @@ struct PDFPreviewView: UIViewRepresentable {
 
     func updateUIView(_ container: BufferedPDFPreviewContainer, context: Context) {
         context.coordinator.update(preview: preview, revision: revision, renderWarmupDelay: renderWarmupDelay, restoredViewport: restoredViewport, onViewportChange: onViewportChange, onSeek: onSeek, in: container)
+        context.coordinator.reveal(revealRequest, in: container)
     }
 }
 #endif
@@ -118,8 +122,63 @@ extension PDFPreviewView {
         private var restoredViewport: PreviewViewport?
         private var hasAppliedViewportRestore = false
 
+        private var handledRevealID: Int?
+        /// A reveal asked for before the first document was up.
+        private var pendingReveal: PreviewRevealRequest?
+
         init(onSeek: @escaping (SourceRange) -> Void) {
             self.onSeek = onSeek
+        }
+
+        /// Shows where a place in the source came out on the page: scrolls
+        /// the visible document there if it is out of view, and marks the
+        /// spot with a circle that fades. Each request is acted on once.
+        func reveal(_ request: PreviewRevealRequest?, in container: BufferedPDFPreviewContainer) {
+            guard let request, request.id != handledRevealID else { return }
+            handledRevealID = request.id
+            // A request still held when the view is rebuilt (the split
+            // turning over) is old news, not a click.
+            guard request.issued.timeIntervalSinceNow > -1 else { return }
+            // Off the view update: scrolling reports the viewport upward.
+            DispatchQueue.main.async { [weak self, weak container] in
+                guard let self, let container else { return }
+                self.performReveal(request, in: container)
+            }
+        }
+
+        private func performReveal(_ request: PreviewRevealRequest, in container: BufferedPDFPreviewContainer) {
+            let pdfView = container.activePDFView
+            // The pane was only just shown for this (it was hidden, or the
+            // phone was showing the source): wait for its document.
+            guard pdfView.document != nil, !activeSourceRects.isEmpty else {
+                pendingReveal = request
+                return
+            }
+            pendingReveal = nil
+            guard let document = pdfView.document,
+                  let spot = PreviewSourceLocator.spot(for: request.location, path: request.path, in: activeSourceRects),
+                  let page = document.page(at: spot.page) else {
+                #if os(macOS)
+                NSSound.beep()
+                #endif
+                return
+            }
+            let bounds = page.bounds(for: .cropBox)
+            let point = CGPoint(x: bounds.minX + spot.x, y: bounds.maxY - spot.y)
+
+            // Leave the view alone when the spot is already comfortably in it.
+            let current = pdfView.convert(point, from: page)
+            let comfortable = pdfView.bounds.insetBy(dx: min(40, pdfView.bounds.width / 4), dy: min(40, pdfView.bounds.height / 4))
+            if !comfortable.contains(current) {
+                let margin: CGFloat = 90
+                pdfView.go(to: CGRect(x: point.x - margin, y: point.y - margin, width: margin * 2, height: margin * 2), on: page)
+            }
+            // A turn later, when the scroll has landed.
+            DispatchQueue.main.async { [weak container, weak pdfView] in
+                guard let container, let pdfView, pdfView === container.activePDFView, pdfView.document === document else { return }
+                let viewPoint = pdfView.convert(point, from: page)
+                container.flashRevealMarker(at: container.convert(viewPoint, from: pdfView))
+            }
         }
 
         func update(preview: PDFPreview?, revision: Int, renderWarmupDelay: TimeInterval, restoredViewport: PreviewViewport?, onViewportChange: @escaping (PreviewViewport) -> Void, onSeek: @escaping (SourceRange) -> Void, in container: BufferedPDFPreviewContainer) {
@@ -350,6 +409,16 @@ extension PDFPreviewView {
             preparingRevision = nil
             preparingSourceRects = []
             container.showInactiveView(animated: container.hasVisibleDocument)
+            if let pendingReveal {
+                self.pendingReveal = nil
+                if pendingReveal.issued.timeIntervalSinceNow > -5 {
+                    // After the swap's own layout has settled.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self, weak container] in
+                        guard let self, let container else { return }
+                        self.performReveal(pendingReveal, in: container)
+                    }
+                }
+            }
         }
 
         private func seek(from viewPoint: CGPoint, in pdfView: PDFView) {
@@ -1084,3 +1153,61 @@ extension PDFPreviewView {
     }
 }
 #endif
+
+/// Asks the preview to show where a place in the source came out on the page.
+/// A new `id` is a new request, so the same place can be asked for twice.
+struct PreviewRevealRequest: Equatable {
+    var id: Int
+    var path: String
+    /// A UTF-16 offset into the file at `path`.
+    var location: Int
+    var issued = Date()
+}
+
+extension BufferedPDFPreviewContainer {
+    /// Marks a point of the preview with a translucent circle in the accent
+    /// colour: it closes in on the spot, holds for a beat and fades. Drawn
+    /// over the PDF views, and takes no clicks.
+    func flashRevealMarker(at point: CGPoint) {
+        #if os(macOS)
+        guard let host = layer else { return }
+        let accent = NSColor.controlAccentColor
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        #else
+        let host = layer
+        let accent: UIColor = tintColor ?? .systemBlue
+        let reduceMotion = UIAccessibility.isReduceMotionEnabled
+        #endif
+        let radius: CGFloat = 22
+        let marker = CAShapeLayer()
+        marker.bounds = CGRect(x: 0, y: 0, width: radius * 2, height: radius * 2)
+        marker.position = point
+        marker.path = CGPath(ellipseIn: marker.bounds, transform: nil)
+        marker.fillColor = accent.withAlphaComponent(0.28).cgColor
+        marker.strokeColor = accent.withAlphaComponent(0.85).cgColor
+        marker.lineWidth = 1.5
+        marker.contentsScale = host.contentsScale
+        marker.zPosition = 1_000
+        // Invisible once the animation ends, until it is taken away.
+        marker.opacity = 0
+        host.addSublayer(marker)
+
+        let duration: CFTimeInterval = 1.3
+        let fade = CAKeyframeAnimation(keyPath: "opacity")
+        fade.values = [0, 1, 1, 0]
+        fade.keyTimes = [0, 0.12, 0.62, 1]
+        fade.duration = duration
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { marker.removeFromSuperlayer() }
+        marker.add(fade, forKey: "fade")
+        if !reduceMotion {
+            let closeIn = CAKeyframeAnimation(keyPath: "transform.scale")
+            closeIn.values = [2.6, 1, 1]
+            closeIn.keyTimes = [0, 0.25, 1]
+            closeIn.timingFunctions = [CAMediaTimingFunction(name: .easeOut), CAMediaTimingFunction(name: .linear)]
+            closeIn.duration = duration
+            marker.add(closeIn, forKey: "closeIn")
+        }
+        CATransaction.commit()
+    }
+}

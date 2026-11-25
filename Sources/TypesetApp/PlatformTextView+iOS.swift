@@ -45,6 +45,10 @@ struct PlatformTextView: UIViewRepresentable {
     var onShowFunctionHelp: (NSRange, CGPoint) -> Void
     var onShowSignatureHelp: (NSRange, CGPoint) -> Void
     var onGoToDefinition: (NSRange, CGPoint) -> Void
+    /// A ⌘-click with a pointer and a hardware keyboard, at a UTF-16 offset.
+    var onCommandClick: (Int) -> Void = { _ in }
+    /// "Show in Preview" from the edit menu, at a UTF-16 offset.
+    var onRevealInPreview: (Int) -> Void = { _ in }
     var onFindReferences: (NSRange, CGPoint) -> Void
     var onRenameSymbol: (NSRange, CGPoint) -> Void
     var onShowCodeActions: (NSRange, CGPoint) -> Void
@@ -73,6 +77,15 @@ struct PlatformTextView: UIViewRepresentable {
         textView.font = context.coordinator.font()
         textView.delegate = context.coordinator
         textView.textDropDelegate = context.coordinator
+        // ⌘-click, where there is a pointer and a keyboard to do it with.
+        // Alongside the text view's own taps, which still place the caret.
+        let commandClick = UITapGestureRecognizer(
+            target: context.coordinator, action: #selector(Coordinator.handleCommandClick(_:))
+        )
+        commandClick.delegate = context.coordinator
+        commandClick.cancelsTouchesInView = false
+        textView.addGestureRecognizer(commandClick)
+        context.coordinator.commandClickRecognizer = commandClick
         // Dedicated drop interaction for raw image data (Photos, etc.), which
         // the text drop delegate above doesn't receive.
         textView.addInteraction(UIDropInteraction(delegate: context.coordinator))
@@ -125,6 +138,8 @@ struct PlatformTextView: UIViewRepresentable {
         context.coordinator.onShowFunctionHelp = onShowFunctionHelp
         context.coordinator.onShowSignatureHelp = onShowSignatureHelp
         context.coordinator.onGoToDefinition = onGoToDefinition
+        context.coordinator.onCommandClick = onCommandClick
+        context.coordinator.onRevealInPreview = onRevealInPreview
         context.coordinator.onFindReferences = onFindReferences
         context.coordinator.onRenameSymbol = onRenameSymbol
         context.coordinator.onShowCodeActions = onShowCodeActions
@@ -232,7 +247,30 @@ struct PlatformTextView: UIViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, UITextViewDelegate, UITextDropDelegate, UIDropInteractionDelegate {
+    final class Coordinator: NSObject, UITextViewDelegate, UITextDropDelegate, UIDropInteractionDelegate, UIGestureRecognizerDelegate {
+        var onCommandClick: (Int) -> Void = { _ in }
+        var onRevealInPreview: (Int) -> Void = { _ in }
+        weak var commandClickRecognizer: UITapGestureRecognizer?
+
+        @objc func handleCommandClick(_ recognizer: UITapGestureRecognizer) {
+            guard recognizer.state == .ended, let textView = recognizer.view as? UITextView,
+                  let position = textView.closestPosition(to: recognizer.location(in: textView)) else { return }
+            onCommandClick(textView.offset(from: textView.beginningOfDocument, to: position))
+        }
+
+        /// The recognizer is for ⌘-clicks only; every other tap is the text
+        /// view's alone.
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive event: UIEvent) -> Bool {
+            gestureRecognizer !== commandClickRecognizer || event.modifierFlags.contains(.command)
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            gestureRecognizer === commandClickRecognizer
+        }
+
         @Binding var text: String
         @Binding var fontSize: Double
         weak var textView: UITextView?
@@ -691,9 +729,13 @@ struct PlatformTextView: UIViewRepresentable {
             let quickActions = UIAction(title: "Quick Actions…", image: UIImage(systemName: "lightbulb")) { [weak self] _ in
                 self?.onShowCodeActions(actionRange, actionAnchor)
             }
+            // Touch's way to what ⌘-click does with a pointer.
+            let showInPreview = UIAction(title: "Show in Preview", image: UIImage(systemName: "scope")) { [weak self] _ in
+                self?.onRevealInPreview(location)
+            }
             let text = textView.text ?? ""
             guard let symbolRange = SourceEditorSymbol.range(in: text, at: location) else {
-                return UIMenu(children: [quickActions, UIMenu(options: .displayInline, children: suggestedActions)])
+                return UIMenu(children: [quickActions, showInPreview, UIMenu(options: .displayInline, children: suggestedActions)])
             }
             let anchor = navigationAnchor(for: symbolRange, in: textView)
             var children: [UIMenuElement] = [quickActions]
@@ -715,7 +757,7 @@ struct PlatformTextView: UIViewRepresentable {
             let rename = UIAction(title: "Rename Symbol…", image: UIImage(systemName: "pencil")) { [weak self] _ in
                 self?.onRenameSymbol(symbolRange, anchor)
             }
-            children += [definition, rename, references, UIMenu(options: .displayInline, children: suggestedActions)]
+            children += [definition, showInPreview, rename, references, UIMenu(options: .displayInline, children: suggestedActions)]
             return UIMenu(children: children)
         }
 

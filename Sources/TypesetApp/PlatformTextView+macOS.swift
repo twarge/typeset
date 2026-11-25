@@ -51,6 +51,10 @@ struct PlatformTextView: NSViewRepresentable {
     var onShowFunctionHelp: (NSRange, CGPoint) -> Void
     var onShowSignatureHelp: (NSRange, CGPoint) -> Void
     var onGoToDefinition: (NSRange, CGPoint) -> Void
+    /// A ⌘-click, at a UTF-16 offset into the text.
+    var onCommandClick: (Int) -> Void = { _ in }
+    /// iOS's "Show in Preview" menu item; the Mac has ⌘-click.
+    var onRevealInPreview: (Int) -> Void = { _ in }
     var onFindReferences: (NSRange, CGPoint) -> Void
     var onRenameSymbol: (NSRange, CGPoint) -> Void
     var onShowCodeActions: (NSRange, CGPoint) -> Void
@@ -108,6 +112,7 @@ struct PlatformTextView: NSViewRepresentable {
             coordinator?.isProseLocation(location) ?? false
         }
         textView.onGoToDefinition = onGoToDefinition
+        textView.onCommandClick = onCommandClick
         textView.onFindReferences = onFindReferences
         textView.onRenameSymbol = onRenameSymbol
         textView.onShowCodeActions = onShowCodeActions
@@ -193,6 +198,7 @@ struct PlatformTextView: NSViewRepresentable {
                 coordinator?.isProseLocation(location) ?? false
             }
             packageTextView.onGoToDefinition = onGoToDefinition
+            packageTextView.onCommandClick = onCommandClick
             packageTextView.onFindReferences = onFindReferences
             packageTextView.onRenameSymbol = onRenameSymbol
             packageTextView.onShowCodeActions = onShowCodeActions
@@ -1432,6 +1438,7 @@ struct PlatformTextView: NSViewRepresentable {
         /// keyword help for English words like "in" and "for").
         var isProseLocation: ((Int) -> Bool)?
         var onGoToDefinition: ((NSRange, CGPoint) -> Void)?
+        var onCommandClick: ((Int) -> Void)?
         var onFindReferences: ((NSRange, CGPoint) -> Void)?
         var onRenameSymbol: ((NSRange, CGPoint) -> Void)?
         var onShowCodeActions: ((NSRange, CGPoint) -> Void)?
@@ -1466,13 +1473,12 @@ struct PlatformTextView: NSViewRepresentable {
 
         override func mouseDown(with event: NSEvent) {
             onUserInteraction?()
-            if event.modifierFlags.contains(.command) {
+            // ⌘-click goes to the definition of what is under the pointer
+            // or, where there is none to go to, shows the spot in the preview.
+            if event.modifierFlags.contains(.command), let onCommandClick {
                 let point = convert(event.locationInWindow, from: nil)
-                let location = characterIndexForInsertion(at: point)
-                if let range = SourceEditorSymbol.range(in: string, at: location) {
-                    onGoToDefinition?(range, languageOverlayAnchor(for: range))
-                    return
-                }
+                onCommandClick(characterIndexForInsertion(at: point))
+                return
             }
             super.mouseDown(with: event)
         }
