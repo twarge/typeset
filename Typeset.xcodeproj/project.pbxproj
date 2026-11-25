@@ -3,30 +3,13 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 56;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
-		100000000000000000000001 /* DocumentPackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000101 /* DocumentPackage.swift */; };
-		100000000000000000000002 /* PreviewHTMLBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000102 /* PreviewHTMLBuilder.swift */; };
-		100000000000000000000003 /* TypstRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000103 /* TypstRenderer.swift */; };
-		1000000000000000000000F1 /* Intents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001F1 /* Intents.swift */; };
-		100000000000000000000004 /* TypesetApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000104 /* TypesetApp.swift */; };
-		100000000000000000000005 /* TypesetWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000105 /* TypesetWorkspaceView.swift */; };
-		100000000000000000000006 /* SourceEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000106 /* SourceEditor.swift */; };
-		100000000000000000000007 /* TypstVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000107 /* TypstVersion.swift */; };
 		100000000000000000000008 /* TypesetCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; };
 		100000000000000000000009 /* TypesetCore.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		10000000000000000000000A /* DocumentPackageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000108 /* DocumentPackageTests.swift */; };
-		100000000000000000000E1 /* TextSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001E0 /* TextSearchTests.swift */; };
-		1000000000000000000A0F02 /* PreviewSourceLocatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000A0F12 /* PreviewSourceLocatorTests.swift */; };
-		100000000000000000000E2 /* TypstLanguageServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001E1 /* TypstLanguageServiceTests.swift */; };
-		100000000000000000000E3 /* TypstBundledFontsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001E2 /* TypstBundledFontsTests.swift */; };
 		10000000000000000000000B /* TypesetCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; };
-		10000000000000000000000C /* TypstLanguageService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000010C /* TypstLanguageService.swift */; };
-		10000000000000000000000D /* LanguageWorkspaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000010D /* LanguageWorkspaceStore.swift */; };
-		10000000000000000000000F /* TextSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000110 /* TextSearch.swift */; };
-		1000000000000000000A0F01 /* PreviewSourceLocator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000A0F11 /* PreviewSourceLocator.swift */; };
 		10000000000000000000000E /* Vendor/TypesetLang.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 10000000000000000000010E /* Vendor/TypesetLang.xcframework */; };
 		100000000000000000000020 /* Resources/Fonts/FiraCode/FiraCode-Light.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000120 /* Resources/Fonts/FiraCode/FiraCode-Light.ttf */; };
 		100000000000000000000021 /* Resources/Fonts/FiraCode/FiraCode-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000121 /* Resources/Fonts/FiraCode/FiraCode-Regular.ttf */; };
@@ -40,48 +23,17 @@
 		100000000000000000000029 /* Resources/Acknowledgements/Tinymist-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000129 /* Resources/Acknowledgements/Tinymist-LICENSE.txt */; };
 		10000000000000000000002A /* Resources/Acknowledgements/FiraCode-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000012A /* Resources/Acknowledgements/FiraCode-LICENSE.txt */; };
 		10000000000000000000002B /* Resources/Acknowledgements/Tinymist-cmark-writer-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000012B /* Resources/Acknowledgements/Tinymist-cmark-writer-LICENSE.txt */; };
-		10000000000000000000002C /* PDFPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000010F /* PDFPreviewView.swift */; };
 		10000000000000000000002D /* Resources/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000012C /* Resources/Assets.xcassets */; };
 		10000000000000000000003A /* Resources/AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000138 /* Resources/AppIcon.icon */; };
 		100000000000000000000036 /* Resources/Fonts/NotoCJK in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000135 /* Resources/Fonts/NotoCJK */; };
 		100000000000000000000038 /* Resources/PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000137 /* Resources/PrivacyInfo.xcprivacy */; };
 		100000000000000000000039 /* Resources/PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000137 /* Resources/PrivacyInfo.xcprivacy */; };
 		100000000000000000000037 /* Resources/Acknowledgements/NotoSansCJK-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000136 /* Resources/Acknowledgements/NotoSansCJK-LICENSE.txt */; };
-		100000000000000000000010 /* TypstBundledFonts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000111 /* TypstBundledFonts.swift */; };
-		200000000000000000000011 /* TypstPackageLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000001 /* TypstPackageLibrary.swift */; };
-		200000000000000000000012 /* TypstPackageLibraryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000002 /* TypstPackageLibraryTests.swift */; };
-		200000000000000000000013 /* PackagesSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* PackagesSettingsView.swift */; };
 		200000000000000000000014 /* Resources/TypstPackages in Resources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000004 /* Resources/TypstPackages */; };
 		600000000000000000000002 /* Resources/Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 600000000000000000000001 /* Resources/Localizable.xcstrings */; };
 		200000000000000000000015 /* Resources/Acknowledgements/TypstPackages-NOTICE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000005 /* Resources/Acknowledgements/TypstPackages-NOTICE.txt */; };
 		200000000000000000000016 /* Resources/Acknowledgements/GPL-3.0.txt in Resources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000006 /* Resources/Acknowledgements/GPL-3.0.txt */; };
 		200000000000000000000017 /* Resources/Acknowledgements/EPL-2.0.txt in Resources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000007 /* Resources/Acknowledgements/EPL-2.0.txt */; };
-		1000000000000000000000D1 /* DirectoryWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001D1 /* DirectoryWatcher.swift */; };
-		1000000000000000000000DA /* FolderAccessStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1000000000000000000001DA /* FolderAccessStore.swift */; };
-		100000000000000000000D01 /* WorkspaceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C01 /* WorkspaceModels.swift */; };
-		100000000000000000000D02 /* WorkspaceSettingsPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C02 /* WorkspaceSettingsPane.swift */; };
-		100000000000000000000D03 /* FindReplacePanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C03 /* FindReplacePanel.swift */; };
-		100000000000000000000D04 /* WorkspacePreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C04 /* WorkspacePreviews.swift */; };
-		100000000000000000000D05 /* DiagnosticLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C05 /* DiagnosticLog.swift */; };
-		100000000000000000000D06 /* WorkspaceSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C06 /* WorkspaceSearch.swift */; };
-		300000000000000000000B0F /* Motion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000B0E /* Motion.swift */; };
-		300000000000000000000B0D /* ErrorExplainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000B0C /* ErrorExplainer.swift */; };
-		300000000000000000000B0B /* MenuBarExtraScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000B0A /* MenuBarExtraScene.swift */; };
-		300000000000000000000B09 /* SettingsSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000B08 /* SettingsSync.swift */; };
-		300000000000000000000B07 /* SystemTextSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000B06 /* SystemTextSupport.swift */; };
-		300000000000000000000B05 /* DocumentIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000B04 /* DocumentIntents.swift */; };
-		300000000000000000000B03 /* DocumentOutput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000B02 /* DocumentOutput.swift */; };
-		100000000000000000000D07 /* FileSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C07 /* FileSidebar.swift */; };
-		100000000000000000000D08 /* FileTreeDragDrop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C08 /* FileTreeDragDrop.swift */; };
-		100000000000000000000D09 /* FileTreeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C09 /* FileTreeModel.swift */; };
-		100000000000000000000D0A /* WorkspaceConfigurators.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000C0A /* WorkspaceConfigurators.swift */; };
-		100000000000000000000F01 /* PlatformTextView+macOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000E01 /* PlatformTextView+macOS.swift */; };
-		100000000000000000000F02 /* PlatformTextView+iOS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000E02 /* PlatformTextView+iOS.swift */; };
-		100000000000000000000F03 /* TypstSyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000E03 /* TypstSyntaxHighlighter.swift */; };
-		100000000000000000000F90 /* EditorTextGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100000000000000000000E90 /* EditorTextGeometry.swift */; };
-		300000000000000000000001 /* PreviewViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300000000000000000000101 /* PreviewViewController.swift */; };
-		500000000000000000000001 /* ImportExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 500000000000000000000101 /* ImportExtension.swift */; };
-		400000000000000000000001 /* ThumbnailProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 400000000000000000000101 /* ThumbnailProvider.swift */; };
 		300000000000000000000002 /* TypesetCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; };
 		500000000000000000000002 /* TypesetCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; };
 		400000000000000000000002 /* TypesetCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 100000000000000000000201 /* TypesetCore.framework */; };
@@ -184,35 +136,13 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		100000000000000000000101 /* DocumentPackage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentPackage.swift; sourceTree = "<group>"; };
-		100000000000000000000102 /* PreviewHTMLBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewHTMLBuilder.swift; sourceTree = "<group>"; };
-		100000000000000000000103 /* TypstRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstRenderer.swift; sourceTree = "<group>"; };
-		1000000000000000000001F1 /* Intents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Intents.swift; sourceTree = "<group>"; };
-		100000000000000000000104 /* TypesetApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypesetApp.swift; sourceTree = "<group>"; };
-		100000000000000000000105 /* TypesetWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypesetWorkspaceView.swift; sourceTree = "<group>"; };
-		100000000000000000000106 /* SourceEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditor.swift; sourceTree = "<group>"; };
-		100000000000000000000107 /* TypstVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstVersion.swift; sourceTree = "<group>"; };
-		100000000000000000000108 /* DocumentPackageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentPackageTests.swift; sourceTree = "<group>"; };
-		1000000000000000000001E0 /* TextSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSearchTests.swift; sourceTree = "<group>"; };
-		1000000000000000000A0F12 /* PreviewSourceLocatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewSourceLocatorTests.swift; sourceTree = "<group>"; };
-		1000000000000000000001E2 /* TypstBundledFontsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstBundledFontsTests.swift; sourceTree = "<group>"; };
-		1000000000000000000001E1 /* TypstLanguageServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstLanguageServiceTests.swift; sourceTree = "<group>"; };
 		100000000000000000000109 /* Typeset-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Typeset-Info.plist"; sourceTree = "<group>"; };
-		10000000000000000000010C /* TypstLanguageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstLanguageService.swift; sourceTree = "<group>"; };
-		10000000000000000000010D /* LanguageWorkspaceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageWorkspaceStore.swift; sourceTree = "<group>"; };
 		10000000000000000000010E /* Vendor/TypesetLang.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Vendor/TypesetLang.xcframework; sourceTree = SOURCE_ROOT; };
-		10000000000000000000010F /* PDFPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFPreviewView.swift; sourceTree = "<group>"; };
-		100000000000000000000111 /* TypstBundledFonts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstBundledFonts.swift; sourceTree = "<group>"; };
-		200000000000000000000001 /* TypstPackageLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstPackageLibrary.swift; sourceTree = "<group>"; };
-		200000000000000000000002 /* TypstPackageLibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstPackageLibraryTests.swift; sourceTree = "<group>"; };
-		200000000000000000000003 /* PackagesSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackagesSettingsView.swift; sourceTree = "<group>"; };
 		200000000000000000000004 /* Resources/TypstPackages */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/TypstPackages; sourceTree = SOURCE_ROOT; };
 		600000000000000000000001 /* Resources/Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Resources/Localizable.xcstrings; sourceTree = SOURCE_ROOT; };
 		200000000000000000000005 /* Resources/Acknowledgements/TypstPackages-NOTICE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Resources/Acknowledgements/TypstPackages-NOTICE.txt"; sourceTree = SOURCE_ROOT; };
 		200000000000000000000006 /* Resources/Acknowledgements/GPL-3.0.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Resources/Acknowledgements/GPL-3.0.txt"; sourceTree = SOURCE_ROOT; };
 		200000000000000000000007 /* Resources/Acknowledgements/EPL-2.0.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Resources/Acknowledgements/EPL-2.0.txt"; sourceTree = SOURCE_ROOT; };
-		100000000000000000000110 /* TextSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSearch.swift; sourceTree = "<group>"; };
-		1000000000000000000A0F11 /* PreviewSourceLocator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewSourceLocator.swift; sourceTree = "<group>"; };
 		100000000000000000000120 /* Resources/Fonts/FiraCode/FiraCode-Light.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Resources/Fonts/FiraCode/FiraCode-Light.ttf"; sourceTree = SOURCE_ROOT; };
 		100000000000000000000121 /* Resources/Fonts/FiraCode/FiraCode-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Resources/Fonts/FiraCode/FiraCode-Regular.ttf"; sourceTree = SOURCE_ROOT; };
 		100000000000000000000122 /* Resources/Fonts/FiraCode/FiraCode-Retina.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Resources/Fonts/FiraCode/FiraCode-Retina.ttf"; sourceTree = SOURCE_ROOT; };
@@ -230,35 +160,9 @@
 		100000000000000000000135 /* Resources/Fonts/NotoCJK */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/Fonts/NotoCJK; sourceTree = SOURCE_ROOT; };
 		100000000000000000000137 /* Resources/PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = Resources/PrivacyInfo.xcprivacy; sourceTree = SOURCE_ROOT; };
 		100000000000000000000136 /* Resources/Acknowledgements/NotoSansCJK-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Resources/Acknowledgements/NotoSansCJK-LICENSE.txt"; sourceTree = SOURCE_ROOT; };
-		1000000000000000000001D1 /* DirectoryWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectoryWatcher.swift; sourceTree = "<group>"; };
-		1000000000000000000001DA /* FolderAccessStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderAccessStore.swift; sourceTree = "<group>"; };
 		100000000000000000000201 /* TypesetCore.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = TypesetCore.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		100000000000000000000202 /* Typeset.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Typeset.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		100000000000000000000203 /* TypesetCoreTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TypesetCoreTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		100000000000000000000C01 /* WorkspaceModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceModels.swift; sourceTree = "<group>"; };
-		100000000000000000000C02 /* WorkspaceSettingsPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSettingsPane.swift; sourceTree = "<group>"; };
-		100000000000000000000C03 /* FindReplacePanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FindReplacePanel.swift; sourceTree = "<group>"; };
-		100000000000000000000C04 /* WorkspacePreviews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspacePreviews.swift; sourceTree = "<group>"; };
-		100000000000000000000C05 /* DiagnosticLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticLog.swift; sourceTree = "<group>"; };
-		100000000000000000000C06 /* WorkspaceSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSearch.swift; sourceTree = "<group>"; };
-		300000000000000000000B0E /* Motion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Motion.swift; sourceTree = "<group>"; };
-		300000000000000000000B0C /* ErrorExplainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorExplainer.swift; sourceTree = "<group>"; };
-		300000000000000000000B0A /* MenuBarExtraScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarExtraScene.swift; sourceTree = "<group>"; };
-		300000000000000000000B08 /* SettingsSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsSync.swift; sourceTree = "<group>"; };
-		300000000000000000000B06 /* SystemTextSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemTextSupport.swift; sourceTree = "<group>"; };
-		300000000000000000000B04 /* DocumentIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentIntents.swift; sourceTree = "<group>"; };
-		300000000000000000000B02 /* DocumentOutput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentOutput.swift; sourceTree = "<group>"; };
-		100000000000000000000C07 /* FileSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileSidebar.swift; sourceTree = "<group>"; };
-		100000000000000000000C08 /* FileTreeDragDrop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTreeDragDrop.swift; sourceTree = "<group>"; };
-		100000000000000000000C09 /* FileTreeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTreeModel.swift; sourceTree = "<group>"; };
-		100000000000000000000C0A /* WorkspaceConfigurators.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceConfigurators.swift; sourceTree = "<group>"; };
-		100000000000000000000E01 /* PlatformTextView+macOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PlatformTextView+macOS.swift"; sourceTree = "<group>"; };
-		100000000000000000000E02 /* PlatformTextView+iOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PlatformTextView+iOS.swift"; sourceTree = "<group>"; };
-		100000000000000000000E03 /* TypstSyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypstSyntaxHighlighter.swift; sourceTree = "<group>"; };
-		100000000000000000000E90 /* EditorTextGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextGeometry.swift; sourceTree = "<group>"; };
-		300000000000000000000101 /* PreviewViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewViewController.swift; sourceTree = "<group>"; };
-		500000000000000000000101 /* ImportExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportExtension.swift; sourceTree = "<group>"; };
-		400000000000000000000101 /* ThumbnailProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThumbnailProvider.swift; sourceTree = "<group>"; };
 		300000000000000000000102 /* TypesetQuickLook-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "TypesetQuickLook-Info.plist"; sourceTree = "<group>"; };
 		500000000000000000000102 /* TypesetSpotlight-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "TypesetSpotlight-Info.plist"; sourceTree = "<group>"; };
 		400000000000000000000102 /* TypesetThumbnail-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "TypesetThumbnail-Info.plist"; sourceTree = "<group>"; };
@@ -266,6 +170,39 @@
 		500000000000000000000201 /* TypesetSpotlight.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TypesetSpotlight.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		400000000000000000000201 /* TypesetThumbnail.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TypesetThumbnail.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		100000000000000000000603 /* TypesetCore */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = TypesetCore;
+			sourceTree = "<group>";
+		};
+		100000000000000000000604 /* TypesetApp */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = TypesetApp;
+			sourceTree = "<group>";
+		};
+		100000000000000000000606 /* TypesetCoreTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = TypesetCoreTests;
+			sourceTree = "<group>";
+		};
+		300000000000000000000601 /* TypesetQuickLook */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = TypesetQuickLook;
+			sourceTree = "<group>";
+		};
+		400000000000000000000601 /* TypesetThumbnail */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = TypesetThumbnail;
+			sourceTree = "<group>";
+		};
+		500000000000000000000601 /* TypesetSpotlight */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = TypesetSpotlight;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		100000000000000000000501 /* Frameworks */ = {
@@ -343,78 +280,12 @@
 			path = Sources;
 			sourceTree = "<group>";
 		};
-		100000000000000000000603 /* TypesetCore */ = {
-			isa = PBXGroup;
-			children = (
-				100000000000000000000101 /* DocumentPackage.swift */,
-				100000000000000000000102 /* PreviewHTMLBuilder.swift */,
-				100000000000000000000103 /* TypstRenderer.swift */,
-				100000000000000000000107 /* TypstVersion.swift */,
-				10000000000000000000010C /* TypstLanguageService.swift */,
-				10000000000000000000010D /* LanguageWorkspaceStore.swift */,
-				100000000000000000000110 /* TextSearch.swift */,
-				1000000000000000000A0F11 /* PreviewSourceLocator.swift */,
-				100000000000000000000111 /* TypstBundledFonts.swift */,
-				200000000000000000000001 /* TypstPackageLibrary.swift */,
-			);
-			path = TypesetCore;
-			sourceTree = "<group>";
-		};
-		100000000000000000000604 /* TypesetApp */ = {
-			isa = PBXGroup;
-			children = (
-				100000000000000000000104 /* TypesetApp.swift */,
-				1000000000000000000001F1 /* Intents.swift */,
-				100000000000000000000105 /* TypesetWorkspaceView.swift */,
-				100000000000000000000106 /* SourceEditor.swift */,
-				100000000000000000000E01 /* PlatformTextView+macOS.swift */,
-				100000000000000000000E02 /* PlatformTextView+iOS.swift */,
-				100000000000000000000E03 /* TypstSyntaxHighlighter.swift */,
-				100000000000000000000E90 /* EditorTextGeometry.swift */,
-				100000000000000000000C01 /* WorkspaceModels.swift */,
-				100000000000000000000C02 /* WorkspaceSettingsPane.swift */,
-				100000000000000000000C03 /* FindReplacePanel.swift */,
-				100000000000000000000C04 /* WorkspacePreviews.swift */,
-				100000000000000000000C05 /* DiagnosticLog.swift */,
-				100000000000000000000C06 /* WorkspaceSearch.swift */,
-				300000000000000000000B0E /* Motion.swift */,
-				300000000000000000000B0C /* ErrorExplainer.swift */,
-				300000000000000000000B0A /* MenuBarExtraScene.swift */,
-				300000000000000000000B08 /* SettingsSync.swift */,
-				300000000000000000000B06 /* SystemTextSupport.swift */,
-				300000000000000000000B04 /* DocumentIntents.swift */,
-				300000000000000000000B02 /* DocumentOutput.swift */,
-				200000000000000000000003 /* PackagesSettingsView.swift */,
-				100000000000000000000C07 /* FileSidebar.swift */,
-				100000000000000000000C08 /* FileTreeDragDrop.swift */,
-				100000000000000000000C09 /* FileTreeModel.swift */,
-				100000000000000000000C0A /* WorkspaceConfigurators.swift */,
-				10000000000000000000010F /* PDFPreviewView.swift */,
-				1000000000000000000001D1 /* DirectoryWatcher.swift */,
-				1000000000000000000001DA /* FolderAccessStore.swift */,
-			);
-			path = TypesetApp;
-			sourceTree = "<group>";
-		};
 		100000000000000000000605 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
 				100000000000000000000606 /* TypesetCoreTests */,
 			);
 			path = Tests;
-			sourceTree = "<group>";
-		};
-		100000000000000000000606 /* TypesetCoreTests */ = {
-			isa = PBXGroup;
-			children = (
-				100000000000000000000108 /* DocumentPackageTests.swift */,
-				1000000000000000000001E0 /* TextSearchTests.swift */,
-				1000000000000000000A0F12 /* PreviewSourceLocatorTests.swift */,
-				1000000000000000000001E1 /* TypstLanguageServiceTests.swift */,
-				1000000000000000000001E2 /* TypstBundledFontsTests.swift */,
-				200000000000000000000002 /* TypstPackageLibraryTests.swift */,
-			);
-			path = TypesetCoreTests;
 			sourceTree = "<group>";
 		};
 		100000000000000000000607 /* Config */ = {
@@ -470,30 +341,6 @@
 			name = Resources;
 			sourceTree = "<group>";
 		};
-		300000000000000000000601 /* TypesetQuickLook */ = {
-			isa = PBXGroup;
-			children = (
-				300000000000000000000101 /* PreviewViewController.swift */,
-			);
-			path = TypesetQuickLook;
-			sourceTree = "<group>";
-		};
-		500000000000000000000601 /* TypesetSpotlight */ = {
-			isa = PBXGroup;
-			children = (
-				500000000000000000000101 /* ImportExtension.swift */,
-			);
-			path = TypesetSpotlight;
-			sourceTree = "<group>";
-		};
-		400000000000000000000601 /* TypesetThumbnail */ = {
-			isa = PBXGroup;
-			children = (
-				400000000000000000000101 /* ThumbnailProvider.swift */,
-			);
-			path = TypesetThumbnail;
-			sourceTree = "<group>";
-		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -509,6 +356,9 @@
 			buildRules = (
 			);
 			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				100000000000000000000603 /* TypesetCore */,
 			);
 			name = TypesetCore;
 			productName = TypesetCore;
@@ -533,6 +383,9 @@
 				500000000000000000000304 /* PBXTargetDependency */,
 				400000000000000000000304 /* PBXTargetDependency */,
 			);
+			fileSystemSynchronizedGroups = (
+				100000000000000000000604 /* TypesetApp */,
+			);
 			name = Typeset;
 			productName = Typeset;
 			productReference = 100000000000000000000202 /* Typeset.app */;
@@ -551,6 +404,9 @@
 				100000000000000000000304 /* PBXTargetDependency */,
 				8FF558832FE38487001E1051 /* PBXTargetDependency */,
 			);
+			fileSystemSynchronizedGroups = (
+				100000000000000000000606 /* TypesetCoreTests */,
+			);
 			name = TypesetCoreTests;
 			productName = TypesetCoreTests;
 			productReference = 100000000000000000000203 /* TypesetCoreTests.xctest */;
@@ -567,6 +423,9 @@
 			);
 			dependencies = (
 				300000000000000000000303 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				300000000000000000000601 /* TypesetQuickLook */,
 			);
 			name = TypesetQuickLook;
 			productName = TypesetQuickLook;
@@ -585,6 +444,9 @@
 			dependencies = (
 				500000000000000000000303 /* PBXTargetDependency */,
 			);
+			fileSystemSynchronizedGroups = (
+				500000000000000000000601 /* TypesetSpotlight */,
+			);
 			name = TypesetSpotlight;
 			productName = TypesetSpotlight;
 			productReference = 500000000000000000000201 /* TypesetSpotlight.appex */;
@@ -601,6 +463,9 @@
 			);
 			dependencies = (
 				400000000000000000000303 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				400000000000000000000601 /* TypesetThumbnail */,
 			);
 			name = TypesetThumbnail;
 			productName = TypesetThumbnail;
@@ -639,7 +504,7 @@
 				};
 			};
 			buildConfigurationList = 100000000000000000000A00 /* Build configuration list for PBXProject "Typeset" */;
-			compatibilityVersion = "Xcode 14.0";
+			preferredProjectObjectVersion = 77;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -733,16 +598,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				100000000000000000000001 /* DocumentPackage.swift in Sources */,
-				100000000000000000000002 /* PreviewHTMLBuilder.swift in Sources */,
-				100000000000000000000003 /* TypstRenderer.swift in Sources */,
-				100000000000000000000007 /* TypstVersion.swift in Sources */,
-				10000000000000000000000C /* TypstLanguageService.swift in Sources */,
-				10000000000000000000000D /* LanguageWorkspaceStore.swift in Sources */,
-				10000000000000000000000F /* TextSearch.swift in Sources */,
-				1000000000000000000A0F01 /* PreviewSourceLocator.swift in Sources */,
-				100000000000000000000010 /* TypstBundledFonts.swift in Sources */,
-				200000000000000000000011 /* TypstPackageLibrary.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -750,35 +605,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				100000000000000000000004 /* TypesetApp.swift in Sources */,
-				1000000000000000000000F1 /* Intents.swift in Sources */,
-				100000000000000000000005 /* TypesetWorkspaceView.swift in Sources */,
-				100000000000000000000006 /* SourceEditor.swift in Sources */,
-				100000000000000000000F01 /* PlatformTextView+macOS.swift in Sources */,
-				100000000000000000000F02 /* PlatformTextView+iOS.swift in Sources */,
-				100000000000000000000F03 /* TypstSyntaxHighlighter.swift in Sources */,
-				100000000000000000000F90 /* EditorTextGeometry.swift in Sources */,
-				100000000000000000000D01 /* WorkspaceModels.swift in Sources */,
-				100000000000000000000D02 /* WorkspaceSettingsPane.swift in Sources */,
-				100000000000000000000D03 /* FindReplacePanel.swift in Sources */,
-				100000000000000000000D04 /* WorkspacePreviews.swift in Sources */,
-				100000000000000000000D05 /* DiagnosticLog.swift in Sources */,
-				100000000000000000000D06 /* WorkspaceSearch.swift in Sources */,
-				300000000000000000000B0F /* Motion.swift in Sources */,
-				300000000000000000000B0D /* ErrorExplainer.swift in Sources */,
-				300000000000000000000B0B /* MenuBarExtraScene.swift in Sources */,
-				300000000000000000000B09 /* SettingsSync.swift in Sources */,
-				300000000000000000000B07 /* SystemTextSupport.swift in Sources */,
-				300000000000000000000B05 /* DocumentIntents.swift in Sources */,
-				300000000000000000000B03 /* DocumentOutput.swift in Sources */,
-				200000000000000000000013 /* PackagesSettingsView.swift in Sources */,
-				100000000000000000000D07 /* FileSidebar.swift in Sources */,
-				100000000000000000000D08 /* FileTreeDragDrop.swift in Sources */,
-				100000000000000000000D09 /* FileTreeModel.swift in Sources */,
-				100000000000000000000D0A /* WorkspaceConfigurators.swift in Sources */,
-				10000000000000000000002C /* PDFPreviewView.swift in Sources */,
-				1000000000000000000000D1 /* DirectoryWatcher.swift in Sources */,
-				1000000000000000000000DA /* FolderAccessStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -786,12 +612,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				10000000000000000000000A /* DocumentPackageTests.swift in Sources */,
-				100000000000000000000E1 /* TextSearchTests.swift in Sources */,
-				1000000000000000000A0F02 /* PreviewSourceLocatorTests.swift in Sources */,
-				100000000000000000000E2 /* TypstLanguageServiceTests.swift in Sources */,
-				100000000000000000000E3 /* TypstBundledFontsTests.swift in Sources */,
-				200000000000000000000012 /* TypstPackageLibraryTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -799,7 +619,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				300000000000000000000001 /* PreviewViewController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -807,7 +626,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				500000000000000000000001 /* ImportExtension.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -815,7 +633,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				400000000000000000000001 /* ThumbnailProvider.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
