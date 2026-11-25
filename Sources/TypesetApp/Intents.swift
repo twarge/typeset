@@ -116,7 +116,6 @@ final class CompileService: NSObject {
 final class TypesetAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.servicesProvider = CompileService()
-        MenuBarItemController.shared.start()
     }
 }
 #endif
