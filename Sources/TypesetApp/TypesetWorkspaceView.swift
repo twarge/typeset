@@ -439,16 +439,6 @@ struct TypesetWorkspaceView: View {
             // while distraction-free has auto-hidden, and leave it `.automatic`
             // (the system default) otherwise.
             .toolbarBackgroundVisibility(macOSChromeHidden ? .hidden : .automatic, for: .windowToolbar)
-            // The Mac's Settings live in the app menu, so there is no toolbar
-            // button for the tip to point at (as it does on iOS); it sits in
-            // the corner of the window instead.
-            .overlay(alignment: .bottomTrailing) {
-                if isUntouchedSampleDocument {
-                    TipView(sampleContentTip, action: handleSampleContentTipAction)
-                        .frame(maxWidth: 360)
-                        .padding(16)
-                }
-            }
             #endif
             .sheet(isPresented: $isSettingsPresented) {
                 WorkspaceSettingsPane(
@@ -1429,6 +1419,19 @@ struct TypesetWorkspaceView: View {
             }
         }
         .accessibleAnimation(.snappy(duration: 0.18), value: isFindReplacePresented)
+        #if os(macOS)
+        // The Mac's Settings live in the app menu, so there is no toolbar
+        // button for the tip to point at (as it does on iOS). It sits at the
+        // foot of the source pane: over the preview's white page its glass
+        // and light text can't be read.
+        .overlay(alignment: .bottom) {
+            if isUntouchedSampleDocument {
+                TipView(sampleContentTip, action: handleSampleContentTipAction)
+                    .frame(maxWidth: 360)
+                    .padding(16)
+            }
+        }
+        #endif
         // Carry the top-edge extension directly (like the preview does), so
         // StableSourcePane's clip reaches into the title-bar region in
         // distraction-free mode instead of cutting the editor there and leaving
