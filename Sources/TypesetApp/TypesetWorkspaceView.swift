@@ -347,11 +347,23 @@ struct TypesetWorkspaceView: View {
     /// anything derived from the package would make them share a mirror.
     @State private var untitledLanguageDocumentID = "untitled-\(UUID().uuidString)"
     #if os(macOS)
-    // Title-bar + toolbar height. The editor pane reaches the top of the window
-    // (it ignores the top safe area), so this pins how far down the code starts:
-    // it clears the toolbar in normal mode and is used identically in
-    // distraction-free, so the code never shifts as the toolbar auto-hides.
-    private static let macOSEditorTopInset: CGFloat = 52
+    // Title-bar + toolbar height. In distraction-free the editor pane reaches
+    // the top of the window (it ignores the top safe area), so this pins how
+    // far down the code starts: the code never shifts as the toolbar
+    // auto-hides. Outside distraction-free the panes start below the standard
+    // toolbar and need no inset.
+    private static let macOSDistractionFreeEditorTopInset: CGFloat = 52
+
+    private var macOSEditorTopInset: CGFloat {
+        isDistractionFreeWindowChrome ? Self.macOSDistractionFreeEditorTopInset : 0
+    }
+
+    /// The edges on which the panes run past the safe area: under the title
+    /// bar in distraction-free, nowhere at the top otherwise. A value rather
+    /// than an `if`, so switching modes doesn't rebuild the editor.
+    private func macOSPaneBleedEdges(_ edges: Edge.Set) -> Edge.Set {
+        isDistractionFreeWindowChrome ? edges : edges.subtracting(.top)
+    }
     #endif
     #if os(iOS) || os(visionOS)
     private static let iosDistractionFreeHideDelay: UInt64 = 220_000_000
@@ -629,7 +641,10 @@ struct TypesetWorkspaceView: View {
                     Label("Find", systemImage: "magnifyingglass")
                 }
             }
-            .background(DocumentProxyConfigurator(fileURL: fileURL))
+            .background(DocumentProxyConfigurator(
+                fileURL: fileURL,
+                isDistractionFree: isDistractionFreeWindowChrome
+            ))
             #endif
             .alert(
                 "“\(pendingConflict?.fileName ?? "")” was changed on disk",
@@ -691,12 +706,8 @@ struct TypesetWorkspaceView: View {
     @ViewBuilder
     private var contentPane: some View {
         #if os(macOS)
-        if isDistractionFreeWindowChrome {
-            contentView
-                .ignoresSafeArea(.container, edges: .top)
-        } else {
-            contentView
-        }
+        contentView
+            .ignoresSafeArea(.container, edges: macOSPaneBleedEdges(.top))
         #else
         contentView
         #endif
@@ -1436,8 +1447,13 @@ struct TypesetWorkspaceView: View {
         // Carry the top-edge extension directly (like the preview does), so
         // StableSourcePane's clip reaches into the title-bar region in
         // distraction-free mode instead of cutting the editor there and leaving
-        // the surface behind it showing as an opaque strip.
+        // the surface behind it showing as an opaque strip. Outside
+        // distraction-free the Mac's pane starts below the toolbar.
+        #if os(macOS)
+        .ignoresSafeArea(.container, edges: macOSPaneBleedEdges(.top))
+        #else
         .ignoresSafeArea(.container, edges: .top)
+        #endif
     }
 
     @ViewBuilder
@@ -1510,14 +1526,15 @@ struct TypesetWorkspaceView: View {
                     )
                 )
                 #if os(macOS)
-                // The source pane ignores the top safe area (so its surface
-                // reaches the top edge), which makes SwiftUI disable the scroll
-                // view's automatic toolbar inset, so the code would otherwise
-                // sit under the toolbar. Pin it to the chrome height instead.
+                // In distraction-free the source pane ignores the top safe
+                // area (so its surface reaches the top edge), which makes
+                // SwiftUI disable the scroll view's automatic toolbar inset,
+                // so the code would otherwise sit under the toolbar. Pin it to
+                // the chrome height instead; below the standard toolbar, to 0.
                 // iOS needs nothing here: its editor takes the corner-adapted
                 // safe area, which clears the windowed-app controls even once
                 // distraction-free hides the navigation bar.
-                .environment(\.sourceEditorFixedTopInset, Self.macOSEditorTopInset)
+                .environment(\.sourceEditorFixedTopInset, macOSEditorTopInset)
                 #endif
                 .id(selectedPath)
             } else {
@@ -1528,14 +1545,14 @@ struct TypesetWorkspaceView: View {
         }
     }
 
-    /// Where the chrome ends, measured from the top of the source pane, which
-    /// reaches the window's top edge. The find panel sits below it in both
-    /// modes, so it neither slips under a revealed toolbar nor moves as
+    /// Where the chrome ends, measured from the top of the source pane (the
+    /// window's top edge, or on the Mac outside distraction-free the foot of
+    /// the toolbar). The find panel sits below it in both modes, so it neither slips under a revealed toolbar nor moves as
     /// distraction-free hides it. On iOS that also keeps it below the reveal
     /// band, so reaching for the panel doesn't bring the bar back.
     private var findPanelTopInset: CGFloat {
         #if os(macOS)
-        Self.macOSEditorTopInset
+        macOSEditorTopInset
         #else
         iosChromeBottomEdge
         #endif
@@ -1552,7 +1569,11 @@ struct TypesetWorkspaceView: View {
         ) { range in
             seek(to: range)
         }
+        #if os(macOS)
+        .ignoresSafeArea(.container, edges: macOSPaneBleedEdges(.vertical))
+        #else
         .ignoresSafeArea(.container, edges: .vertical)
+        #endif
     }
 
     private var selectedFile: PackageFile? {

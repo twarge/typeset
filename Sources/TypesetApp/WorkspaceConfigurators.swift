@@ -65,14 +65,19 @@ struct AppAppearanceConfigurator: NSViewRepresentable {
 
 struct DocumentProxyConfigurator: NSViewRepresentable {
     var fileURL: URL?
+    /// Distraction-free runs the panes up under a see-through title bar. The
+    /// rest of the time the window keeps the standard one, with the panes
+    /// starting beneath it.
+    var isDistractionFree: Bool
 
     func makeNSView(context: Context) -> NSView {
-        ProxyView(fileURL: fileURL)
+        ProxyView(fileURL: fileURL, isDistractionFree: isDistractionFree)
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         guard let proxyView = nsView as? ProxyView else { return }
         proxyView.fileURL = fileURL
+        proxyView.isDistractionFree = isDistractionFree
     }
 
     final class ProxyView: NSView {
@@ -82,8 +87,16 @@ struct DocumentProxyConfigurator: NSViewRepresentable {
             }
         }
 
-        init(fileURL: URL?) {
+        var isDistractionFree: Bool {
+            didSet {
+                guard oldValue != isDistractionFree else { return }
+                configureWindow()
+            }
+        }
+
+        init(fileURL: URL?, isDistractionFree: Bool) {
             self.fileURL = fileURL
+            self.isDistractionFree = isDistractionFree
             super.init(frame: .zero)
         }
 
@@ -100,7 +113,9 @@ struct DocumentProxyConfigurator: NSViewRepresentable {
         private func configureWindow() {
             guard let window else { return }
             window.styleMask.insert(.fullSizeContentView)
-            window.titlebarAppearsTransparent = true
+            if window.titlebarAppearsTransparent != isDistractionFree {
+                window.titlebarAppearsTransparent = isDistractionFree
+            }
             if UserDefaults.standard.object(forKey: "NSWindow Frame Typeset.MainWindow") == nil {
                 window.setContentSize(NSSize(width: 1280, height: 860))
                 window.center()
